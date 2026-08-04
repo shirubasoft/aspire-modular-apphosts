@@ -39,6 +39,9 @@ jobs:
       - name: Test testing package
         run: dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj --configuration Release --no-build --no-restore
 
+      - name: Test packed package contracts
+        run: dotnet test tests/Aspire.Hosting.ModularAppHosts.PackageTests/Aspire.Hosting.ModularAppHosts.PackageTests.csproj --configuration Release --no-build --no-restore
+
       - name: Test E2E through the AppHost
         env:
           ESHOP_E2E_MODE: apphost
