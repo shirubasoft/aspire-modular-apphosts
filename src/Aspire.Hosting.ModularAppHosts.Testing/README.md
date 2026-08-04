@@ -1,26 +1,32 @@
 # Shirubasoft.Aspire.ModularAppHosts.Testing
 
-`Shirubasoft.Aspire.ModularAppHosts.Testing` adds Docker Compose deployment support to Aspire E2E tests without adding `Aspire.Hosting.Testing` or Docker hosting dependencies to regular modular AppHosts.
+Run the same Aspire E2E test suite against an in-process AppHost or an Aspire-managed Docker Compose deployment. The package implements Compose mode through `IDistributedApplicationTestingBuilder` and keeps testing and Docker dependencies out of regular AppHosts.
 
 ```bash
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
-The package uses the same `Aspire.Hosting.ModularAppHosts` namespace as the core package. In the E2E AppHost, export the endpoints and values that external tests need:
+Export the endpoints and values an external deployment test needs:
 
 ```csharp
 compose
-    .WithTestEndpoint("catalog-api", catalog.Api.GetEndpoint("http"), healthCheckPath: "/health")
+    .WithTestEndpoint(
+        "catalog-api",
+        catalog.Api.GetEndpoint("http"),
+        healthCheckPath: "/health")
     .WithTestValue("Parameters:api-key", apiKey.Resource);
 ```
 
-Then choose either Aspire's in-process testing builder or a builder-owned Compose deployment in the test project:
+Then select either testing builder while keeping the application lifecycle and assertions shared:
 
 ```csharp
 await using IDistributedApplicationTestingBuilder builder = mode switch
 {
-    "apphost" => await DistributedApplicationTestingBuilder.CreateAsync<Projects.EShop_E2E_AppHost>(),
-    "compose" => await DockerComposeDeploymentTestingBuilder.DeployAsync<Projects.EShop_E2E_AppHost>()
+    "apphost" => await DistributedApplicationTestingBuilder
+        .CreateAsync<Projects.EShop_E2E_AppHost>(),
+    "compose" => await DockerComposeDeploymentTestingBuilder
+        .DeployAsync<Projects.EShop_E2E_AppHost>(),
+    _ => throw new InvalidOperationException($"Unknown E2E mode '{mode}'.")
 };
 
 await using var app = await builder.BuildAsync();
@@ -28,6 +34,6 @@ await app.StartAsync();
 await app.ResourceNotifications.WaitForResourceHealthyAsync("catalog-api");
 ```
 
-`DeployAsync` runs `aspire deploy`, imports the generated environment-specific configuration, and returns the standard Aspire testing-builder contract. Disposing the builder runs `aspire destroy`. `Create` and `CreateFromEnvironment` remain available when another system owns the deployment lifecycle.
+`DeployAsync` deploys through Aspire, imports the resolved endpoints and configuration, and destroys the deployment when the builder is disposed. `Create` and `CreateFromEnvironment` import a deployment owned by another system.
 
-See the repository's [E2E testing sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting) for the complete catalog-and-orders example and CI workflow.
+Read the [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md) for endpoint requirements, lifecycle options, and CI configuration. The repository also includes a complete [catalog-and-orders sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting).

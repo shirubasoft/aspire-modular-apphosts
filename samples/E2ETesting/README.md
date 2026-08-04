@@ -36,10 +36,8 @@ dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj --no-build
 
 `DockerComposeDeploymentTestingBuilder.DeployAsync` runs `aspire deploy`, imports the generated `.env.<environment>` file, and returns the same testing-builder contract used by AppHost mode. Disposing the builder runs `aspire destroy` and removes its temporary output directory.
 
-CI sets `ASPIRE_TEST_DEPLOYMENT_ENVIRONMENT=CI` and `ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH` to a known workspace path so an `if: always()` fallback can tear down a deployment if the test process is interrupted before disposal. Local runs omit the output setting and use an automatically cleaned temporary directory.
-
-`WithTestEndpoint` requires an external endpoint with an explicit host port, because an external test process needs a stable address after Compose deployment. Its optional `healthCheckPath` is imported into Aspire resource health, so the same `WaitForResourceHealthyAsync` calls work in both modes. `WithTestValue` resolves any Aspire `IValueProvider`, including secret parameters, into the supplied configuration key during deployment preparation. Both are written into `.env.<environment>` and loaded by `DockerComposeDeploymentTestingBuilder`; CI does not parse generated YAML or copy individual values into the test command.
-
-The Compose builder represents deployed services as already allocated Aspire endpoint resources. `BuildAsync` remains build-only, and starting its `DistributedApplication` starts only the local testing model and health monitoring. `DeployAsync` and builder disposal own the external Compose lifecycle.
+CI uses a known output path so its fallback teardown can locate deployment state if the test process is interrupted. Local runs use an automatically cleaned temporary directory.
 
 Environment-specific files can contain resolved secrets. `aspire-output` is ignored by Git and should not be retained as a CI artifact.
+
+For endpoint requirements, externally owned deployments, and CI options, see the [E2E testing guide](../../docs/e2e-testing.md).
