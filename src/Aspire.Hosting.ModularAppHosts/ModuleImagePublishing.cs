@@ -73,6 +73,24 @@ internal static class ModuleImageTag
     private const string FallbackTag = "latest";
     private const string DirtySuffix = "-dirty";
 
+    public static string FromRepository(string? branchName, string? commit)
+    {
+        var branchTag = FromBranch(branchName);
+        var commitTag = NormalizeCommit(commit);
+        if (commitTag is null)
+        {
+            return branchTag;
+        }
+
+        var prefix = branchTag == FallbackTag && string.IsNullOrWhiteSpace(branchName)
+            ? "sha"
+            : branchTag;
+        var suffix = $"-{commitTag}";
+        var availableLength = MaximumLength - suffix.Length;
+        prefix = prefix[..Math.Min(prefix.Length, availableLength)].TrimEnd('.', '-');
+        return $"{prefix}{suffix}";
+    }
+
     public static string FromBranch(string? branchName)
     {
         if (string.IsNullOrWhiteSpace(branchName))
@@ -121,6 +139,21 @@ internal static class ModuleImageTag
         var availableLength = MaximumLength - DirtySuffix.Length;
         var cleanTag = imageTag[..Math.Min(imageTag.Length, availableLength)].TrimEnd('.', '-');
         return $"{cleanTag}{DirtySuffix}";
+    }
+
+    private static string? NormalizeCommit(string? commit)
+    {
+        if (string.IsNullOrWhiteSpace(commit))
+        {
+            return null;
+        }
+
+        var value = new string(commit.Trim()
+            .Where(char.IsAsciiHexDigit)
+            .Select(char.ToLowerInvariant)
+            .Take(12)
+            .ToArray());
+        return value.Length >= 7 ? value : null;
     }
 }
 

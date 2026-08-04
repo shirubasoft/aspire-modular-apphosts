@@ -27,6 +27,8 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
 
     internal string? Repository { get; set; }
 
+    internal string? RepositoryRevision { get; set; }
+
     internal void AddProject(DistributedApplicationModuleProject project)
     {
         ThrowIfNameIsAlreadyUsed(project.Name);

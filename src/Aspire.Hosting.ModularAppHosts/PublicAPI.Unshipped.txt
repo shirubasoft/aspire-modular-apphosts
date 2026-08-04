@@ -28,6 +28,8 @@ Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.PublishImages
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.PublishImages.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.Repository.get -> string?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RepositoryRevision.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RepositoryRevision.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RunProjectsAsContainers.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RunProjectsAsContainers.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.UpdateRepository.get -> bool?
@@ -64,6 +66,7 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddProject(s
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddProject<TProject>(string! name) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddResource<TResource>(string! name, System.Func<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext!, Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource>!>! resourceFactory) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.WithRepository(string! repository) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
+Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.WithRepository(string! repository, string! revision) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleCatalog
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleCatalog.Modules.get -> System.Collections.Generic.IReadOnlyCollection<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!>!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleCatalog.TryGetModule(string! name, out Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule? exportedModule) -> bool

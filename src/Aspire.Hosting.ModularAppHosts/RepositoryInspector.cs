@@ -62,6 +62,20 @@ internal static class RepositoryInspector
             : null;
     }
 
+    public static string? TryGetCommit(string repositoryPath)
+    {
+        return TryRunGit(repositoryPath, ["rev-parse", "--short=12", "HEAD"], out var commit)
+            ? commit.Trim() is { Length: > 0 } value ? value : null
+            : null;
+    }
+
+    public static string? TryResolveCommit(string repositoryPath, string revision = "HEAD")
+    {
+        return TryRunGit(repositoryPath, ["rev-parse", $"{revision}^{{commit}}"], out var commit)
+            ? commit.Trim() is { Length: > 0 } value ? value : null
+            : null;
+    }
+
     private static string GetWorkingDirectory(string path)
     {
         var candidate = Path.GetFullPath(path);
@@ -283,7 +297,7 @@ internal static class ModuleRepositoryDiscovery
         var projectRepositoryRoot = module.ProjectDefinitions.Count == 0
             ? null
             : module.ProjectDefinitions[0].SourceRepositoryRoot;
-        if (PathsEqual(projectRepositoryRoot, appHostRepositoryRoot))
+        if (PathSafety.AreEqual(projectRepositoryRoot, appHostRepositoryRoot))
         {
             return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
         }
@@ -323,6 +337,8 @@ internal static class ModuleRepositoryDiscovery
                     $"Discovered module '{module.Name}' at '{siblingPath}', but that directory is not a Git repository.");
             }
 
+            EnsureExpectedOrigin(siblingPath, repository, appHostDirectory, module.Name);
+
             return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
         }
 
@@ -335,6 +351,7 @@ internal static class ModuleRepositoryDiscovery
         }
 
         GitHubRepositoryCloner.Clone(githubCliPath, repository, siblingPath);
+        EnsureExpectedOrigin(siblingPath, repository, appHostDirectory, module.Name);
         return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
     }
 
@@ -345,7 +362,7 @@ internal static class ModuleRepositoryDiscovery
         string? repository)
     {
         if (!string.IsNullOrWhiteSpace(projectRepositoryRoot) &&
-            PathsEqual(Path.GetDirectoryName(projectRepositoryRoot), siblingParent))
+            PathSafety.AreEqual(Path.GetDirectoryName(projectRepositoryRoot), siblingParent))
         {
             return Path.GetFullPath(projectRepositoryRoot);
         }
@@ -372,7 +389,7 @@ internal static class ModuleRepositoryDiscovery
         string moduleName)
     {
         var actualParent = Path.GetDirectoryName(Path.GetFullPath(siblingPath));
-        if (PathsEqual(siblingPath, appHostRepositoryRoot) || !PathsEqual(actualParent, siblingParent))
+        if (PathSafety.AreEqual(siblingPath, appHostRepositoryRoot) || !PathSafety.AreEqual(actualParent, siblingParent))
         {
             throw new InvalidOperationException(
                 $"Module '{moduleName}' resolved to '{siblingPath}'. Automatic discovery only accepts the AppHost " +
@@ -394,7 +411,7 @@ internal static class ModuleRepositoryDiscovery
 
         localPath = Path.GetFullPath(repository, appHostDirectory);
         return RepositoryInspector.TryFindRepositoryRoot(localPath, out var repositoryRoot) &&
-            PathsEqual(repositoryRoot, expectedRepositoryRoot);
+            PathSafety.AreEqual(repositoryRoot, expectedRepositoryRoot);
     }
 
     private static bool IsLocalRepository(string repository, string appHostDirectory)
@@ -402,13 +419,26 @@ internal static class ModuleRepositoryDiscovery
         return !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory);
     }
 
-    private static bool PathsEqual(string? first, string? second)
+    private static void EnsureExpectedOrigin(
+        string repositoryPath,
+        string? expectedRepository,
+        string baseDirectory,
+        string moduleName)
     {
-        return first is not null && second is not null &&
-            string.Equals(
-                Path.GetFullPath(first).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                Path.GetFullPath(second).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
-                StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(expectedRepository) ||
+            !GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory))
+        {
+            return;
+        }
+
+        var actualRepository = RepositoryInspector.TryGetRemote(repositoryPath);
+        if (string.IsNullOrWhiteSpace(actualRepository) ||
+            !GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Module '{moduleName}' resolved to '{repositoryPath}', but its origin '{actualRepository ?? "(missing)"}' " +
+                $"does not match configured repository '{expectedRepository}'.");
+        }
     }
 }
 
@@ -419,13 +449,24 @@ internal static class RepositorySynchronizer
     public static RepositorySyncCommand? CreateCommand(
         string repositoryPath,
         string? repository,
-        bool updateRepository)
+        bool updateRepository,
+        string? revision = null)
+    {
+        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision);
+        return commands.Count == 0 ? null : commands[0];
+    }
+
+    public static IReadOnlyList<RepositorySyncCommand> CreateCommands(
+        string repositoryPath,
+        string? repository,
+        bool updateRepository,
+        string? revision = null)
     {
         if (!RepositoryInspector.IsGitRepository(repositoryPath))
         {
             if (Directory.Exists(repositoryPath))
             {
-                return null;
+                return [];
             }
 
             if (string.IsNullOrWhiteSpace(repository))
@@ -437,47 +478,133 @@ internal static class RepositorySynchronizer
             Directory.CreateDirectory(Path.GetDirectoryName(repositoryPath)
                 ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."));
 
-            return new RepositorySyncCommand(
-                "git",
-                ["clone", "--recurse-submodules", "--", repository, repositoryPath]);
+            var commands = new List<RepositorySyncCommand>
+            {
+                new("git", ["clone", "--recurse-submodules", "--", repository, repositoryPath])
+            };
+            AddRevisionCommands(commands, repositoryPath, revision);
+            return commands;
         }
 
-        if (!updateRepository || RepositoryInspector.IsDirty(repositoryPath))
+        EnsureExpectedOrigin(repositoryPath, repository);
+
+        if (RepositoryInspector.IsDirty(repositoryPath))
         {
-            return null;
+            EnsureDirtyCheckoutMatchesRevision(repositoryPath, revision);
+            return [];
         }
 
-        return new RepositorySyncCommand(
-            "git",
-            ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"]);
+        if (!string.IsNullOrWhiteSpace(revision))
+        {
+            var commands = new List<RepositorySyncCommand>();
+            AddRevisionCommands(commands, repositoryPath, revision);
+            return commands;
+        }
+
+        return updateRepository
+            ? [new RepositorySyncCommand(
+                "git",
+                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])]
+            : [];
     }
 
     public static async Task SynchronizeAsync(
         string repositoryPath,
         string? repository,
         bool updateRepository,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? revision = null)
     {
-        var command = CreateCommand(repositoryPath, repository, updateRepository);
-        if (command is null)
+        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision);
+        foreach (var command in commands)
+        {
+            var result = await CliCommand.Wrap(command.Executable)
+                .WithArguments(command.Arguments)
+                .WithWorkingDirectory(Path.GetDirectoryName(repositoryPath)
+                    ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."))
+                .WithValidation(CommandResultValidation.None)
+                .ExecuteBufferedAsync(cancellationToken);
+
+            if (!result.IsSuccess)
+            {
+                var error = string.IsNullOrWhiteSpace(result.StandardError)
+                    ? result.StandardOutput
+                    : result.StandardError;
+                throw new InvalidOperationException(
+                    $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
+            }
+        }
+    }
+
+    private static void AddRevisionCommands(
+        List<RepositorySyncCommand> commands,
+        string repositoryPath,
+        string? revision)
+    {
+        if (string.IsNullOrWhiteSpace(revision))
         {
             return;
         }
 
-        var result = await CliCommand.Wrap(command.Executable)
-            .WithArguments(command.Arguments)
-            .WithWorkingDirectory(Path.GetDirectoryName(repositoryPath)
-                ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."))
-            .WithValidation(CommandResultValidation.None)
-            .ExecuteBufferedAsync(cancellationToken);
+        commands.Add(new RepositorySyncCommand(
+            "git",
+            ["-C", repositoryPath, "fetch", "--tags", "origin", revision]));
+        commands.Add(new RepositorySyncCommand(
+            "git",
+            ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"]));
+        commands.Add(new RepositorySyncCommand(
+            "git",
+            ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"]));
+    }
 
-        if (!result.IsSuccess)
+    private static void EnsureExpectedOrigin(string repositoryPath, string? expectedRepository)
+    {
+        if (string.IsNullOrWhiteSpace(expectedRepository))
         {
-            var error = string.IsNullOrWhiteSpace(result.StandardError)
-                ? result.StandardOutput
-                : result.StandardError;
+            return;
+        }
+
+        var actualRepository = RepositoryInspector.TryGetRemote(repositoryPath);
+        var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
+        var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
+            (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
+             LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
+        if (!matches)
+        {
             throw new InvalidOperationException(
-                $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
+                $"Repository '{repositoryPath}' has origin '{actualRepository ?? "(missing)"}', which does not match " +
+                $"configured repository '{expectedRepository}'. Move the checkout or correct the module configuration.");
+        }
+    }
+
+    private static bool LocalRepositoriesMatch(string first, string second, string baseDirectory)
+    {
+        if (GitHubRepositoryCloner.IsRemoteRepository(first, baseDirectory) ||
+            GitHubRepositoryCloner.IsRemoteRepository(second, baseDirectory))
+        {
+            return false;
+        }
+
+        return PathSafety.AreEqual(
+            Path.GetFullPath(first, baseDirectory),
+            Path.GetFullPath(second, baseDirectory));
+    }
+
+    private static void EnsureDirtyCheckoutMatchesRevision(string repositoryPath, string? revision)
+    {
+        if (string.IsNullOrWhiteSpace(revision))
+        {
+            return;
+        }
+
+        var currentCommit = RepositoryInspector.TryResolveCommit(repositoryPath);
+        var expectedCommit = RepositoryInspector.TryResolveCommit(repositoryPath, revision);
+        if (currentCommit is null || expectedCommit is null ||
+            !string.Equals(currentCommit, expectedCommit, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Repository '{repositoryPath}' has local changes and is not at configured revision '{revision}'. " +
+                "Commit or stash the changes before switching revisions.");
         }
     }
 }

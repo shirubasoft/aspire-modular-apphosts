@@ -33,4 +33,25 @@ public sealed class ModuleImageTagTests
         Assert.Equal(128, dirtyTag.Length);
         Assert.EndsWith("-dirty", dirtyTag, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("feature/orders", "ABCDEF0123456789", "feature-orders-abcdef012345")]
+    [InlineData(null, "ABCDEF0123456789", "sha-abcdef012345")]
+    [InlineData("feature/orders", null, "feature-orders")]
+    public void Repository_tag_includes_the_short_commit_when_available(
+        string? branch,
+        string? commit,
+        string expected)
+    {
+        Assert.Equal(expected, ModuleImageTag.FromRepository(branch, commit));
+    }
+
+    [Fact]
+    public void Commit_suffix_preserves_the_distribution_tag_length_limit()
+    {
+        var tag = ModuleImageTag.FromRepository(new string('a', 200), "abcdef0123456789");
+
+        Assert.Equal(128, tag.Length);
+        Assert.EndsWith("-abcdef012345", tag, StringComparison.Ordinal);
+    }
 }

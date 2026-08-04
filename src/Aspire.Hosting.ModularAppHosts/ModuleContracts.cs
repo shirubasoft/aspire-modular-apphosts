@@ -53,6 +53,9 @@ public interface IDistributedApplicationModuleBuilder
     /// from the projects' common Git worktree.
     /// </summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository);
+
+    /// <summary>Overrides the Git repository and pins its imported branch, tag, or commit.</summary>
+    IDistributedApplicationModuleBuilder WithRepository(string repository, string revision);
 }
 
 /// <summary>Describes a resource exported by a distributed application module.</summary>

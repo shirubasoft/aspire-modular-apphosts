@@ -42,7 +42,7 @@ internal sealed class DistributedApplicationModuleBuilder(
             repositoryRoot = configuredRepositoryRoot;
         }
         else if (!RepositoryInspector.IsGitRepository(repositoryRoot) &&
-            IsContainedBy(appHostDirectory, absoluteProjectPath))
+            PathSafety.IsContainedBy(appHostDirectory, absoluteProjectPath))
         {
             repositoryRoot = appHostDirectory;
         }
@@ -68,8 +68,20 @@ internal sealed class DistributedApplicationModuleBuilder(
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository)
     {
+        return SetRepository(repository, revision: null);
+    }
+
+    public IDistributedApplicationModuleBuilder WithRepository(string repository, string revision)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(revision);
+        return SetRepository(repository, revision);
+    }
+
+    private DistributedApplicationModuleBuilder SetRepository(string repository, string? revision)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         module.Repository = repository;
+        module.RepositoryRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
         return this;
     }
 
@@ -106,16 +118,9 @@ internal sealed class DistributedApplicationModuleBuilder(
             candidate = Path.GetFullPath(repository, appHostDirectory);
         }
 
-        return IsContainedBy(candidate, projectPath)
+        return PathSafety.IsContainedBy(candidate, projectPath)
             ? candidate
             : null;
-    }
-
-    private static bool IsContainedBy(string root, string path)
-    {
-        var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var normalizedPath = Path.GetFullPath(path);
-        return normalizedPath.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
     }
 }
 

@@ -60,12 +60,14 @@ public sealed class ModuleRepositoryDiscoveryTests
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] = "configured-gh";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:AutoCloneRepository"] = "false";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:RepositoryRevision"] = "v2.1.0";
 
         var configured = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
 
         Assert.True(configured.AutoCloneRepositories);
         Assert.Equal("configured-gh", configured.GitHubCliPath);
         Assert.False(configured.Modules["orders"].AutoCloneRepository);
+        Assert.Equal("v2.1.0", configured.Modules["orders"].RepositoryRevision);
     }
 
     [Fact]
@@ -98,7 +100,7 @@ public sealed class ModuleRepositoryDiscoveryTests
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(moduleRoot, annotation.RepositoryPath);
-        Assert.Equal("feature-same-repository", image.Tag);
+        Assert.Equal(ExpectedTag(workspace.Path, "feature/same-repository"), image.Tag);
     }
 
     [Fact]
@@ -125,7 +127,7 @@ public sealed class ModuleRepositoryDiscoveryTests
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal("feature-dirty-image-dirty", image.Tag);
+        Assert.Equal($"{ExpectedTag(workspace.Path, "feature/dirty-image")}-dirty", image.Tag);
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         Assert.True(installer.RepositoryDirty);
     }
@@ -228,6 +230,7 @@ public sealed class ModuleRepositoryDiscoveryTests
         Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
         File.WriteAllText(projectPath, ProjectContents);
         InitializeGit(moduleRoot, "feature/orders-service");
+        RunGit(moduleRoot, "remote", "add", "origin", "https://github.com/acme/orders.git");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
@@ -242,7 +245,7 @@ public sealed class ModuleRepositoryDiscoveryTests
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(moduleRoot, annotation.RepositoryPath);
-        Assert.Equal("feature-orders-service", image.Tag);
+        Assert.Equal(ExpectedTag(moduleRoot, "feature/orders-service"), image.Tag);
     }
 
     [Fact]
@@ -259,6 +262,7 @@ public sealed class ModuleRepositoryDiscoveryTests
         Directory.CreateDirectory(Path.GetDirectoryName(sourceProject)!);
         File.WriteAllText(sourceProject, ProjectContents);
         InitializeGit(source.Path, "feature/cloned-service");
+        RunGit(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
 
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "src", "AppHost");
@@ -288,7 +292,7 @@ public sealed class ModuleRepositoryDiscoveryTests
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(clonePath, annotation.RepositoryPath);
-        Assert.Equal("feature-cloned-service", image.Tag);
+        Assert.Equal(ExpectedTag(clonePath, "feature/cloned-service"), image.Tag);
     }
 
     [Fact]
@@ -392,7 +396,7 @@ public sealed class ModuleRepositoryDiscoveryTests
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal("feature-container-publisher", image.Tag);
+        Assert.Equal(ExpectedTag(repository.Path, "feature/container-publisher"), image.Tag);
     }
 
     [Fact]
@@ -430,6 +434,7 @@ public sealed class ModuleRepositoryDiscoveryTests
         using var source = TemporaryDirectory.Create();
         File.WriteAllText(Path.Combine(source.Path, "README.md"), "no project");
         InitializeGit(source.Path, "main");
+        RunGit(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
@@ -527,7 +532,9 @@ public sealed class ModuleRepositoryDiscoveryTests
         var escapedSource = sourceRepository.Replace("'", "'\"'\"'", StringComparison.Ordinal);
         File.WriteAllText(
             path,
-            $"#!/bin/sh{Environment.NewLine}exec git clone --recurse-submodules -- '{escapedSource}' \"$4\"{Environment.NewLine}");
+            $"#!/bin/sh{Environment.NewLine}" +
+            $"git clone --recurse-submodules -- '{escapedSource}' \"$4\" || exit $?{Environment.NewLine}" +
+            $"exec git -C \"$4\" remote set-url origin https://github.com/acme/orders.git{Environment.NewLine}");
         File.SetUnixFileMode(
             path,
             UnixFileMode.UserRead |
@@ -558,6 +565,11 @@ public sealed class ModuleRepositoryDiscoveryTests
         {
             throw new InvalidOperationException(result.StandardError);
         }
+    }
+
+    private static string ExpectedTag(string repositoryPath, string branch)
+    {
+        return ModuleImageTag.FromRepository(branch, RepositoryInspector.TryGetCommit(repositoryPath));
     }
 
     private const string ProjectContents =

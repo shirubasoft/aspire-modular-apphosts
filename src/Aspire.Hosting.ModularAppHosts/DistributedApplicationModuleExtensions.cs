@@ -131,6 +131,7 @@ public static class DistributedApplicationModuleExtensions
         var repositoryConfigurationKey = GetRepositoryConfigurationKey(module.Name);
         var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
         var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
+        var repositoryRevision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ?? module.RepositoryRevision;
         var requiresRepository = module.ProjectDefinitions.Count > 0;
         ValidateModuleConfiguration(module, moduleOptions);
 
@@ -157,10 +158,31 @@ public static class DistributedApplicationModuleExtensions
                 (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
                 ? GetImportedRepositoryPath(builder, options, module.Name)
                 : GetLocalRepositoryPath(builder, module, repository));
-        var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
         var updateRepository =
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
             repositoryResolution?.UsesSiblingLayout is not false;
+
+        var synchronizedRepository =
+            ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
+             (builder.ExecutionContext.IsRunMode && imported)) &&
+            repositoryResolution?.UsesSiblingLayout is not false &&
+            !string.IsNullOrWhiteSpace(repository) &&
+            RepositoryInspector.IsGitRepository(repositoryPath);
+        if (synchronizedRepository)
+        {
+            registry.SynchronizeRepositoryAsync(
+                    repositoryPath,
+                    () => RepositorySynchronizer.SynchronizeAsync(
+                        repositoryPath,
+                        repository,
+                        updateRepository,
+                        CancellationToken.None,
+                        repositoryRevision))
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
         var defaultImageTag = GetDefaultImageTag(builder, repositoryPath);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions);
@@ -177,7 +199,9 @@ public static class DistributedApplicationModuleExtensions
             repositoryParameter is null ? repository : null,
             repositoryParameter,
             imported,
-            updateRepository);
+            updateRepository,
+            repositoryRevision,
+            deferSynchronization: !synchronizedRepository);
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -265,14 +289,14 @@ public static class DistributedApplicationModuleExtensions
         var effectiveExportOptions = ApplyImageOptions(export.Options, projectOptions, defaultImageTag);
         var publishImage = projectOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
         var workingDirectoryRelativePath = effectiveExportOptions.WorkingDirectory ?? projectDirectoryRelativePath;
-        var sourceWorkingDirectory = GetContainedPath(
+        var sourceWorkingDirectory = PathSafety.GetContainedPath(
             project.SourceRepositoryRoot,
             workingDirectoryRelativePath,
             nameof(ModuleContainerExportOptions.WorkingDirectory));
         var normalizedWorkingDirectoryRelativePath = Path.GetRelativePath(
             project.SourceRepositoryRoot,
             sourceWorkingDirectory);
-        var publishWorkingDirectory = GetContainedPath(
+        var publishWorkingDirectory = PathSafety.GetContainedPath(
             repositoryPath,
             normalizedWorkingDirectoryRelativePath,
             nameof(ModuleContainerExportOptions.WorkingDirectory));
@@ -358,7 +382,7 @@ public static class DistributedApplicationModuleExtensions
 
         if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan is { ShouldPublish: true })
         {
-            var publishWorkingDirectory = GetContainedPath(
+            var publishWorkingDirectory = PathSafety.GetContainedPath(
                 repositoryPath,
                 publishOptions!.WorkingDirectory ?? ".",
                 nameof(ModuleContainerExportOptions.WorkingDirectory));
@@ -390,7 +414,7 @@ public static class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry)
     {
         var projectRelativePath = Path.GetRelativePath(project.SourceRepositoryRoot, project.ProjectPath);
-        var materializedProjectPath = GetContainedPath(repositoryPath, projectRelativePath, nameof(project.ProjectPath));
+        var materializedProjectPath = PathSafety.GetContainedPath(repositoryPath, projectRelativePath, nameof(project.ProjectPath));
         if (!File.Exists(materializedProjectPath))
         {
             throw new InvalidOperationException(
@@ -568,9 +592,12 @@ public static class DistributedApplicationModuleExtensions
         string? repository,
         IResourceBuilder<ParameterResource>? repositoryParameter,
         bool imported,
-        bool updateRepository)
+        bool updateRepository,
+        string? repositoryRevision,
+        bool deferSynchronization)
     {
         if (!builder.ExecutionContext.IsRunMode || !imported ||
+            !deferSynchronization ||
             (string.IsNullOrWhiteSpace(repository) && repositoryParameter is null))
         {
             return;
@@ -592,7 +619,8 @@ public static class DistributedApplicationModuleExtensions
                     repositoryPath,
                     resolvedRepository,
                     updateRepository,
-                    cancellationToken)).ConfigureAwait(false);
+                    cancellationToken,
+                    repositoryRevision)).ConfigureAwait(false);
 
             ValidateProjectFiles(module, repositoryPath);
         });
@@ -756,7 +784,7 @@ public static class DistributedApplicationModuleExtensions
         foreach (var project in module.ProjectDefinitions)
         {
             var relativePath = Path.GetRelativePath(project.SourceRepositoryRoot, project.ProjectPath);
-            var materializedPath = GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
+            var materializedPath = PathSafety.GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
             if (!File.Exists(materializedPath))
             {
                 throw new InvalidOperationException(
@@ -771,15 +799,17 @@ public static class DistributedApplicationModuleExtensions
         string repositoryPath)
     {
         var branch = RepositoryInspector.TryGetBranch(repositoryPath);
-        if (branch is null &&
+        var commit = RepositoryInspector.TryGetCommit(repositoryPath);
+        if ((branch is null || commit is null) &&
             RepositoryInspector.TryFindRepositoryRoot(builder.AppHostDirectory, out var appHostRepositoryRoot))
         {
-            branch = RepositoryInspector.TryGetBranch(appHostRepositoryRoot);
+            branch ??= RepositoryInspector.TryGetBranch(appHostRepositoryRoot);
+            commit ??= RepositoryInspector.TryGetCommit(appHostRepositoryRoot);
         }
 
         branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF"));
         branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
-        return ModuleImageTag.FromBranch(branch);
+        return ModuleImageTag.FromRepository(branch, commit);
     }
 
     private static string FormatNames(IEnumerable<string> names)
@@ -813,19 +843,6 @@ public static class DistributedApplicationModuleExtensions
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
-
-    private static string GetContainedPath(string root, string path, string parameterName)
-    {
-        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        var candidate = Path.GetFullPath(path, root);
-        if (!candidate.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(candidate.TrimEnd(Path.DirectorySeparatorChar), root.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentOutOfRangeException(parameterName, path, "The path must remain inside the module repository.");
-        }
-
-        return candidate;
-    }
 
     private static string GetInstallerName(string projectName) => $"{projectName}-installer";
 

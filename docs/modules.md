@@ -146,7 +146,7 @@ module.AddContainer("orders-static", "orders-static")
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 
-- When `ImageTag` is omitted, the module repository branch is lowercased and sanitized as a container tag (`feature/orders` becomes `feature-orders`). If that repository has no attached branch, the AppHost branch is used, then CI branch variables, then `latest`.
+- When `ImageTag` is omitted, the module repository branch is lowercased and sanitized and its 12-character commit is appended (`feature/orders` becomes `feature-orders-a1b2c3d4e5f6`). Detached checkouts use `sha-a1b2c3d4e5f6`. If the repository is not available yet, the AppHost branch and commit are used, then CI branch variables, then `latest`.
 - A clean repository uses `ImageName:ImageTag` and reuses that image when it already exists locally.
 - A dirty repository uses `ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
 - The container waits for its installer to complete successfully.
@@ -173,6 +173,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
       "Modules": {
         "orders": {
           "Repository": "https://github.com/example/orders.git",
+          "RepositoryRevision": "release/2026-08",
           "AutoCloneRepository": true,
           "UpdateRepository": false,
           "RunProjectsAsContainers": true,
@@ -228,7 +229,9 @@ builder.ConfigureModularAppHosts(options =>
 
 ## Repository imports
 
-When an imported module needs repository content, the library clones or fast-forward-pulls its configured Git repository before Aspire starts the resources. A dirty imported checkout is never pulled or reset.
+When an imported module needs repository content, the library clones or fast-forward-pulls its configured Git repository before Aspire starts the resources. Existing managed checkouts are synchronized before image tags and build decisions are selected, preventing a locally cached image from masking a newer checkout. A dirty imported checkout is never pulled or reset.
+
+Pin a branch, tag, or commit with `WithRepository(repository, revision)` or `Modules:<name>:RepositoryRevision`. A pinned clean checkout fetches that revision, checks out the resolved commit in detached-head mode, and updates submodules. A dirty checkout must already be at the requested commit. Existing managed and sibling checkouts must have an `origin` matching the configured repository; a mismatched or missing origin fails instead of running unrelated source.
 
 Managed repositories default to:
 
@@ -254,6 +257,8 @@ Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repo
 
 Repository synchronization is shared by resources in the same module. Repeated export, add, and import calls are deduplicated by the AppHost's module registry.
 
+Repository-relative project and publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
+
 ### Optional sibling discovery and cloning
 
 Set `AutoCloneRepositories` to `true` globally, or `Modules:<name>:AutoCloneRepository` for one module, to use the local sibling convention:
@@ -263,7 +268,7 @@ Set `AutoCloneRepositories` to `true` globally, or `Modules:<name>:AutoCloneRepo
 <workspace>/orders/     # module repository inferred from …/orders.git or owner/orders
 ```
 
-The library first resolves the AppHost Git root. A module whose configured local root belongs to that same worktree is reused as-is, including a nested logical module root, and GitHub CLI is not invoked. Otherwise, the only accepted location is one direct sibling named from the module repository. An existing sibling must be a Git worktree. A missing sibling is cloned during model construction with:
+The library first resolves the AppHost Git root. A module whose configured local root belongs to that same worktree is reused as-is, including a nested logical module root, and GitHub CLI is not invoked. Otherwise, the only accepted location is one direct sibling named from the module repository. An existing sibling must be a Git worktree with the configured origin. A missing sibling is cloned during model construction with:
 
 ```text
 gh repo clone <repository> <sibling-path> -- --recurse-submodules

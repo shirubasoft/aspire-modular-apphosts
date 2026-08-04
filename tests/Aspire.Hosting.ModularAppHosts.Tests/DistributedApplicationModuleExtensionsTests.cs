@@ -1012,7 +1012,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         var dirty = RepositorySynchronizer.CreateCommand(
             repository.Path,
-            "https://example.test/acme/orders.git",
+            repository: null,
             updateRepository: true);
 
         Assert.Null(dirty);
@@ -1026,7 +1026,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         var pull = RepositorySynchronizer.CreateCommand(
             repository.Path,
-            "https://example.test/acme/orders.git",
+            repository: null,
             updateRepository: true);
 
         Assert.NotNull(pull);
@@ -1036,7 +1036,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
             pull.Arguments);
         Assert.Null(RepositorySynchronizer.CreateCommand(
             repository.Path,
-            "https://example.test/acme/orders.git",
+            repository: null,
             updateRepository: false));
 
         using var imports = TemporaryDirectory.Create();
@@ -1079,6 +1079,82 @@ public sealed class DistributedApplicationModuleExtensionsTests
                 source.Path,
                 updateRepository: true,
                 cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Repository_synchronizer_checks_out_the_configured_revision()
+    {
+        using var source = TestRepository.Create(initializeGit: true);
+        var firstCommit = Assert.IsType<string>(RepositoryInspector.TryResolveCommit(source.Path));
+        File.AppendAllText(source.ProjectPath, Environment.NewLine + "<!-- second -->");
+        TestRepository.RunGit(source.Path, "add", ".");
+        TestRepository.RunGit(source.Path, "commit", "-m", "second");
+        using var imports = TemporaryDirectory.Create();
+        var clonePath = Path.Combine(imports.Path, "orders");
+
+        await RepositorySynchronizer.SynchronizeAsync(
+            clonePath,
+            source.Path,
+            updateRepository: true,
+            TestContext.Current.CancellationToken,
+            firstCommit);
+
+        Assert.Equal(firstCommit, RepositoryInspector.TryResolveCommit(clonePath));
+        Assert.Null(RepositoryInspector.TryGetBranch(clonePath));
+    }
+
+    [Fact]
+    public void Repository_synchronizer_rejects_a_checkout_with_the_wrong_origin()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        TestRepository.RunGit(
+            repository.Path,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/catalog.git");
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            RepositorySynchronizer.CreateCommands(
+                repository.Path,
+                "https://github.com/acme/orders.git",
+                updateRepository: true));
+
+        Assert.Contains("does not match", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("catalog", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("orders", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Existing_managed_checkout_is_updated_before_commit_tag_is_selected()
+    {
+        using var source = TestRepository.Create(initializeGit: true);
+        using var imports = TemporaryDirectory.Create();
+        var checkout = Path.Combine(imports.Path, "orders");
+        TestRepository.RunGit(imports.Path, "clone", "--", source.Path, checkout);
+        File.AppendAllText(source.ProjectPath, Environment.NewLine + "<!-- current -->");
+        TestRepository.RunGit(source.Path, "add", ".");
+        TestRepository.RunGit(source.Path, "commit", "-m", "current");
+        var currentCommit = Assert.IsType<string>(RepositoryInspector.TryResolveCommit(source.Path));
+        var builder = CreateBuilder(source.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(source.Path);
+            definition.AddProject("orders-api", source.ProjectPath)
+                .ExportAsContainer(
+                    $"module-test-orders-{Guid.NewGuid():N}",
+                    "dotnet",
+                    ["publish"]);
+        });
+
+        builder.ImportModule(module.Name);
+
+        var image = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal(currentCommit, RepositoryInspector.TryResolveCommit(checkout));
+        Assert.EndsWith($"-{currentCommit[..12]}", image.Tag, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1169,7 +1245,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         public void Dispose() => _directory.Dispose();
 
-        private static void RunGit(string workingDirectory, params string[] arguments)
+        public static void RunGit(string workingDirectory, params string[] arguments)
         {
             var result = CliCommand.Wrap("git")
                 .WithArguments(arguments)

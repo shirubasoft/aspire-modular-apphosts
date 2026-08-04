@@ -64,6 +64,9 @@ public sealed class DistributedApplicationModuleOptions
     /// </summary>
     public string? Repository { get; set; }
 
+    /// <summary>Gets or sets the branch, tag, or commit checked out for this module.</summary>
+    public string? RepositoryRevision { get; set; }
+
     /// <summary>
     /// Gets or sets whether a missing repository for this module is cloned beside the AppHost repository.
     /// </summary>
