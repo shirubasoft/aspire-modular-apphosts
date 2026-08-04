@@ -177,7 +177,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         var exception = Assert.Throws<InvalidOperationException>(() => builder.ImportModule("orders"));
 
-        Assert.Contains("does not have a Git remote", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("does not have a repository location", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -405,6 +405,38 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Contains("expected", exception.Message, StringComparison.Ordinal);
         Assert.Contains("actual", exception.Message, StringComparison.Ordinal);
         Assert.Contains("context.ResourceName", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generic_resource_factory_must_not_return_null()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var module = builder.ExportModule("invalid", definition =>
+            definition.AddResource<TestResource>("clock", _ => null!));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+
+        Assert.Contains("clock", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("returned null", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generic_resource_names_collide_case_insensitively_with_other_exports()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ExportModule("invalid", definition =>
+            {
+                definition.AddContainer("shared", "nginx", "alpine");
+                definition.AddResource<TestResource>("SHARED", context =>
+                    context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName)));
+            }));
+
+        Assert.Contains("SHARED", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("already contains a resource", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
