@@ -94,15 +94,49 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// </param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
-    public static async Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
+    public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         string environmentName,
         string? outputPath = null,
         CancellationToken cancellationToken = default)
         where TEntryPoint : class
     {
         ValidateEnvironmentName(environmentName);
-
         var appHostPath = ResolveAppHostPath(typeof(TEntryPoint).Assembly);
+        return DeployCoreAsync<TEntryPoint>(
+            environmentName,
+            outputPath,
+            appHostPath,
+            ProcessAspireCommandRunner.Instance,
+            cancellationToken);
+    }
+
+    internal static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
+        string environmentName,
+        string? outputPath,
+        string appHostPath,
+        IAspireCommandRunner commandRunner,
+        CancellationToken cancellationToken = default)
+        where TEntryPoint : class
+    {
+        ValidateEnvironmentName(environmentName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostPath);
+        ArgumentNullException.ThrowIfNull(commandRunner);
+        return DeployCoreAsync<TEntryPoint>(
+            environmentName,
+            outputPath,
+            Path.GetFullPath(appHostPath),
+            commandRunner,
+            cancellationToken);
+    }
+
+    private static async Task<DockerComposeDeploymentTestingBuilder> DeployCoreAsync<TEntryPoint>(
+        string environmentName,
+        string? outputPath,
+        string appHostPath,
+        IAspireCommandRunner commandRunner,
+        CancellationToken cancellationToken)
+        where TEntryPoint : class
+    {
         var deleteOutputDirectory = string.IsNullOrWhiteSpace(outputPath);
         var absoluteOutputPath = deleteOutputDirectory
             ? CreateTemporaryOutputPath(appHostPath)
@@ -113,7 +147,8 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             appHostPath,
             absoluteOutputPath,
             environmentName,
-            deleteOutputDirectory);
+            deleteOutputDirectory,
+            commandRunner);
 
         try
         {
@@ -393,9 +428,22 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    private static async Task RunAspireCommandAsync(
+    private static Task RunAspireCommandAsync(
         string command,
         OwnedDeployment deployment,
+        CancellationToken cancellationToken) =>
+        deployment.CommandRunner.RunAsync(
+            command,
+            deployment.AppHostPath,
+            deployment.OutputPath,
+            deployment.EnvironmentName,
+            cancellationToken);
+
+    private static async Task RunAspireProcessAsync(
+        string command,
+        string appHostPath,
+        string outputPath,
+        string environmentName,
         CancellationToken cancellationToken)
     {
         using var process = new Process
@@ -406,16 +454,16 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(deployment.AppHostPath)!
+                WorkingDirectory = Path.GetDirectoryName(appHostPath)!
             }
         };
         process.StartInfo.ArgumentList.Add(command);
         process.StartInfo.ArgumentList.Add("--apphost");
-        process.StartInfo.ArgumentList.Add(deployment.AppHostPath);
+        process.StartInfo.ArgumentList.Add(appHostPath);
         process.StartInfo.ArgumentList.Add("--output-path");
-        process.StartInfo.ArgumentList.Add(deployment.OutputPath);
+        process.StartInfo.ArgumentList.Add(outputPath);
         process.StartInfo.ArgumentList.Add("--environment");
-        process.StartInfo.ArgumentList.Add(deployment.EnvironmentName);
+        process.StartInfo.ArgumentList.Add(environmentName);
         if (string.Equals(command, "destroy", StringComparison.Ordinal))
         {
             process.StartInfo.ArgumentList.Add("--yes");
@@ -458,7 +506,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"'aspire {command}' exited with code {process.ExitCode} for AppHost '{deployment.AppHostPath}'.");
+                $"'aspire {command}' exited with code {process.ExitCode} for AppHost '{appHostPath}'.");
         }
     }
 
@@ -657,9 +705,38 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
     private sealed class DeployedEndpointResource(string name) : Resource(name), IResourceWithEndpoints;
 
+    private sealed class ProcessAspireCommandRunner : IAspireCommandRunner
+    {
+        public static ProcessAspireCommandRunner Instance { get; } = new();
+
+        public Task RunAsync(
+            string command,
+            string appHostPath,
+            string outputPath,
+            string environmentName,
+            CancellationToken cancellationToken) =>
+            RunAspireProcessAsync(
+                command,
+                appHostPath,
+                outputPath,
+                environmentName,
+                cancellationToken);
+    }
+
     private sealed record OwnedDeployment(
         string AppHostPath,
         string OutputPath,
         string EnvironmentName,
-        bool DeleteOutputDirectory);
+        bool DeleteOutputDirectory,
+        IAspireCommandRunner CommandRunner);
+}
+
+internal interface IAspireCommandRunner
+{
+    Task RunAsync(
+        string command,
+        string appHostPath,
+        string outputPath,
+        string environmentName,
+        CancellationToken cancellationToken);
 }

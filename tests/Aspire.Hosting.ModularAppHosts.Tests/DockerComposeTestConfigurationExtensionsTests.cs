@@ -1,0 +1,142 @@
+using System.Reflection;
+using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Docker;
+using Aspire.Hosting.ModularAppHosts;
+using Xunit;
+
+namespace Aspire.Hosting.ModularAppHosts.Tests;
+
+public sealed class DockerComposeTestConfigurationExtensionsTests
+{
+    [Fact]
+    public void WithTestEndpoint_exports_an_encoded_endpoint_and_health_path()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("catalog", "nginx")
+            .WithHttpEndpoint(targetPort: 80, port: 5101, name: "http")
+            .WithExternalHttpEndpoints();
+
+        var result = environment.WithTestEndpoint(
+            "catalog-api",
+            api.GetEndpoint("http"),
+            healthCheckPath: "/health/ready");
+        var values = CaptureEnvironmentVariables(environment.Resource);
+
+        Assert.Same(environment, result);
+        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog-api");
+        var healthName = DockerComposeDeploymentTestingBuilder
+            .GetEndpointHealthPathVariableName("catalog-api");
+        Assert.Equal("http://localhost:5101/", values[endpointName].DefaultValue);
+        Assert.Equal("/health/ready", values[healthName].DefaultValue);
+        Assert.Same(api.Resource, values[endpointName].Resource);
+        Assert.Same(api.Resource, values[healthName].Resource);
+    }
+
+    [Fact]
+    public void WithTestEndpoint_supports_https_and_a_custom_host()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("orders", "nginx")
+            .WithHttpsEndpoint(targetPort: 443, port: 5443, name: "https")
+            .WithExternalHttpEndpoints();
+
+        environment.WithTestEndpoint("orders-api", api.GetEndpoint("https"), host: "test-host");
+        var values = CaptureEnvironmentVariables(environment.Resource);
+
+        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("orders-api");
+        Assert.Equal("https://test-host:5443/", values[endpointName].DefaultValue);
+        Assert.DoesNotContain(
+            DockerComposeDeploymentTestingBuilder.GetEndpointHealthPathVariableName("orders-api"),
+            values.Keys);
+    }
+
+    [Fact]
+    public void WithTestValue_exports_an_encoded_configuration_key_and_source()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var parameter = builder.AddParameter("api-key", secret: true);
+        const string configurationKey = "Parameters:api key/ü";
+
+        var result = environment.WithTestValue(configurationKey, parameter.Resource);
+        var values = CaptureEnvironmentVariables(environment.Resource);
+
+        Assert.Same(environment, result);
+        var variableName = DockerComposeDeploymentTestingBuilder.GetValueVariableName(configurationKey);
+        var captured = Assert.Single(values);
+        Assert.Equal(variableName, captured.Key);
+        Assert.Equal(variableName, captured.Value.Name);
+        Assert.Same(parameter.Resource, captured.Value.Source);
+        Assert.Same(parameter.Resource, captured.Value.Resource);
+    }
+
+    [Fact]
+    public void WithTestEndpoint_rejects_an_internal_endpoint()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("catalog", "nginx")
+            .WithHttpEndpoint(targetPort: 80, port: 5101, name: "http");
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            environment.WithTestEndpoint("catalog", api.GetEndpoint("http")));
+
+        Assert.Contains("must be external", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithTestEndpoint_requires_an_explicit_host_port()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("catalog", "nginx")
+            .WithHttpEndpoint(targetPort: 80, name: "http")
+            .WithExternalHttpEndpoints();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            environment.WithTestEndpoint("catalog", api.GetEndpoint("http")));
+
+        Assert.Contains("explicit host port", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithTestEndpoint_rejects_an_absolute_health_check_uri()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("catalog", "nginx")
+            .WithHttpEndpoint(targetPort: 80, port: 5101, name: "http")
+            .WithExternalHttpEndpoints();
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            environment.WithTestEndpoint(
+                "catalog",
+                api.GetEndpoint("http"),
+                healthCheckPath: "https://example.test/health"));
+
+        Assert.Equal("healthCheckPath", exception.ParamName);
+    }
+
+    private static IDistributedApplicationBuilder CreateBuilder() =>
+        DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = [],
+            DisableDashboard = true,
+            ProjectDirectory = AppContext.BaseDirectory
+        });
+
+    private static Dictionary<string, CapturedEnvironmentVariable> CaptureEnvironmentVariables(
+        DockerComposeEnvironmentResource environment)
+    {
+        var configureProperty = typeof(DockerComposeEnvironmentResource).GetProperty(
+            "ConfigureEnvFile",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var configure = Assert.IsType<Action<IDictionary<string, CapturedEnvironmentVariable>>>(
+            configureProperty?.GetValue(environment));
+        var values = new Dictionary<string, CapturedEnvironmentVariable>(StringComparer.Ordinal);
+        configure(values);
+        return values;
+    }
+}
