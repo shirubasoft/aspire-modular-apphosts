@@ -2,8 +2,11 @@
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREUSERSECRETS001
 
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
@@ -17,22 +20,37 @@ using Microsoft.Extensions.Hosting;
 namespace Aspire.Hosting.ModularAppHosts;
 
 /// <summary>
-/// Builds an Aspire testing application that represents services already deployed through Docker Compose.
+/// Deploys or imports a Docker Compose environment and represents its services as an Aspire testing application.
 /// </summary>
 public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicationTestingBuilder
 {
     /// <summary>The environment variable that identifies the deployment environment file to load.</summary>
     public const string FilePathEnvironmentVariableName = "ASPIRE_TEST_CONFIGURATION_FILE";
 
+    /// <summary>The environment variable that selects the Aspire deployment environment used by <see cref="DeployAsync{TEntryPoint}(CancellationToken)"/>.</summary>
+    public const string DeploymentEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_ENVIRONMENT";
+
+    /// <summary>The environment variable that selects the Aspire deployment output path used by <see cref="DeployAsync{TEntryPoint}(CancellationToken)"/>.</summary>
+    public const string DeploymentOutputPathEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH";
+
+    /// <summary>The default Aspire deployment environment name.</summary>
+    public const string DefaultDeploymentEnvironmentName = "Tests";
+
     private const string EndpointPrefix = "ASPIRE_TEST_ENDPOINT__";
     private const string EndpointHealthPathPrefix = "ASPIRE_TEST_ENDPOINT_HEALTH_PATH__";
     private const string ValuePrefix = "ASPIRE_TEST_VALUE__";
+    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(2);
     private readonly IDistributedApplicationBuilder _innerBuilder;
+    private readonly OwnedDeployment? _ownedDeployment;
     private DistributedApplication? _application;
+    private int _disposeState;
 
-    private DockerComposeDeploymentTestingBuilder(IDistributedApplicationBuilder innerBuilder)
+    private DockerComposeDeploymentTestingBuilder(
+        IDistributedApplicationBuilder innerBuilder,
+        OwnedDeployment? ownedDeployment)
     {
         _innerBuilder = innerBuilder;
+        _ownedDeployment = ownedDeployment;
     }
 
     /// <summary>
@@ -41,6 +59,79 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <typeparam name="TEntryPoint">A type in the AppHost assembly used by the deployment.</typeparam>
     /// <param name="filePath">The path to the environment-specific deployment file.</param>
     public static DockerComposeDeploymentTestingBuilder Create<TEntryPoint>(string filePath)
+        where TEntryPoint : class
+        => Create<TEntryPoint>(filePath, ownedDeployment: null);
+
+    /// <summary>
+    /// Deploys the AppHost to Docker Compose and creates a testing builder that owns the deployment.
+    /// </summary>
+    /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <remarks>
+    /// The deployment environment defaults to <see cref="DefaultDeploymentEnvironmentName"/> and can be overridden with
+    /// <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary directory and can be
+    /// overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Disposing the builder destroys the deployment.
+    /// </remarks>
+    public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
+        CancellationToken cancellationToken = default)
+        where TEntryPoint : class
+    {
+        var environmentName = System.Environment.GetEnvironmentVariable(DeploymentEnvironmentVariableName);
+        var outputPath = System.Environment.GetEnvironmentVariable(DeploymentOutputPathEnvironmentVariableName);
+        return DeployAsync<TEntryPoint>(
+            environmentName ?? DefaultDeploymentEnvironmentName,
+            outputPath,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Deploys the AppHost to Docker Compose and creates a testing builder that owns the deployment.
+    /// </summary>
+    /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
+    /// <param name="environmentName">The Aspire deployment environment name.</param>
+    /// <param name="outputPath">
+    /// The deployment output path. When omitted, a temporary directory is created and removed with the deployment.
+    /// </param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    public static async Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
+        string environmentName,
+        string? outputPath = null,
+        CancellationToken cancellationToken = default)
+        where TEntryPoint : class
+    {
+        ValidateEnvironmentName(environmentName);
+
+        var appHostPath = ResolveAppHostPath(typeof(TEntryPoint).Assembly);
+        var deleteOutputDirectory = string.IsNullOrWhiteSpace(outputPath);
+        var absoluteOutputPath = deleteOutputDirectory
+            ? CreateTemporaryOutputPath(appHostPath)
+            : Path.GetFullPath(outputPath!);
+        Directory.CreateDirectory(absoluteOutputPath);
+
+        var deployment = new OwnedDeployment(
+            appHostPath,
+            absoluteOutputPath,
+            environmentName,
+            deleteOutputDirectory);
+
+        try
+        {
+            await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
+            var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{environmentName}");
+            return Create<TEntryPoint>(configurationFilePath, deployment);
+        }
+        catch
+        {
+            await TryDestroyDeploymentAsync(deployment).ConfigureAwait(false);
+            TryDeleteOwnedOutputDirectory(deployment);
+            throw;
+        }
+    }
+
+    private static DockerComposeDeploymentTestingBuilder Create<TEntryPoint>(
+        string filePath,
+        OwnedDeployment? ownedDeployment)
         where TEntryPoint : class
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -67,7 +158,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         ImportConfiguration(innerBuilder, values);
         ImportEndpoints(innerBuilder, values);
 
-        return new DockerComposeDeploymentTestingBuilder(innerBuilder);
+        return new DockerComposeDeploymentTestingBuilder(innerBuilder, ownedDeployment);
     }
 
     /// <summary>
@@ -149,17 +240,64 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <inheritdoc />
     public void Dispose()
     {
-        EnsureApplicationBuiltForDisposal();
-        _application?.Dispose();
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "All cleanup paths must run before disposal propagates failures.")]
     public async ValueTask DisposeAsync()
     {
-        EnsureApplicationBuiltForDisposal();
-        if (_application is not null)
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
         {
-            await _application.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        Exception? failure = null;
+        try
+        {
+            EnsureApplicationBuiltForDisposal();
+            if (_application is not null)
+            {
+                await _application.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        if (_ownedDeployment is not null)
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(CleanupTimeout);
+                await RunAspireCommandAsync("destroy", _ownedDeployment, timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure = failure is null
+                    ? exception
+                    : new AggregateException(failure, exception);
+            }
+
+            try
+            {
+                DeleteOwnedOutputDirectory(_ownedDeployment);
+            }
+            catch (Exception exception)
+            {
+                failure = failure is null
+                    ? exception
+                    : new AggregateException(failure, exception);
+            }
+        }
+
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
 
@@ -182,9 +320,206 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 StringComparison.OrdinalIgnoreCase))
             ?.Value;
 
-        return string.IsNullOrWhiteSpace(projectPath)
-            ? Path.GetDirectoryName(appHostAssembly.Location)!
-            : Path.GetFullPath(projectPath);
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            return Path.GetDirectoryName(appHostAssembly.Location)!;
+        }
+
+        var absolutePath = Path.GetFullPath(projectPath);
+        return string.Equals(Path.GetExtension(absolutePath), ".csproj", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetDirectoryName(absolutePath)!
+            : absolutePath;
+    }
+
+    private static string ResolveAppHostPath(Assembly appHostAssembly)
+    {
+        var metadata = appHostAssembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToArray();
+        var projectPath = metadata
+            .FirstOrDefault(attribute => string.Equals(
+                attribute.Key,
+                "AppHostProjectPath",
+                StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+        var projectName = metadata
+            .FirstOrDefault(attribute => string.Equals(
+                attribute.Key,
+                "AppHostProjectName",
+                StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            throw new InvalidOperationException(
+                $"Assembly '{appHostAssembly.GetName().Name}' does not identify an Aspire AppHost project path.");
+        }
+
+        var absoluteProjectPath = Path.GetFullPath(projectPath);
+        if (string.Equals(Path.GetExtension(absoluteProjectPath), ".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return absoluteProjectPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            throw new InvalidOperationException(
+                $"Assembly '{appHostAssembly.GetName().Name}' does not identify an Aspire AppHost project name.");
+        }
+
+        var projectFileName = string.Equals(Path.GetExtension(projectName), ".csproj", StringComparison.OrdinalIgnoreCase)
+            ? projectName
+            : $"{projectName}.csproj";
+        return Path.Combine(absoluteProjectPath, projectFileName);
+    }
+
+    private static string CreateTemporaryOutputPath(string appHostPath)
+    {
+        var appHostName = Path.GetFileNameWithoutExtension(appHostPath);
+        return Path.Combine(
+            Path.GetTempPath(),
+            "aspire-compose-tests",
+            appHostName,
+            Guid.NewGuid().ToString("N"));
+    }
+
+    private static void ValidateEnvironmentName(string environmentName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
+        if (environmentName is "." or ".."
+            || environmentName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException(
+                $"The deployment environment name '{environmentName}' is not valid as an environment file suffix.",
+                nameof(environmentName));
+        }
+    }
+
+    private static async Task RunAspireCommandAsync(
+        string command,
+        OwnedDeployment deployment,
+        CancellationToken cancellationToken)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "aspire",
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(deployment.AppHostPath)!
+            }
+        };
+        process.StartInfo.ArgumentList.Add(command);
+        process.StartInfo.ArgumentList.Add("--apphost");
+        process.StartInfo.ArgumentList.Add(deployment.AppHostPath);
+        process.StartInfo.ArgumentList.Add("--output-path");
+        process.StartInfo.ArgumentList.Add(deployment.OutputPath);
+        process.StartInfo.ArgumentList.Add("--environment");
+        process.StartInfo.ArgumentList.Add(deployment.EnvironmentName);
+        if (string.Equals(command, "destroy", StringComparison.Ordinal))
+        {
+            process.StartInfo.ArgumentList.Add("--yes");
+        }
+
+        process.StartInfo.ArgumentList.Add("--non-interactive");
+
+        if (!process.Start())
+        {
+            throw new InvalidOperationException($"Failed to start 'aspire {command}'.");
+        }
+
+        var standardOutput = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var standardError = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillProcess(process);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            var output = await standardOutput.ConfigureAwait(false);
+            var error = await standardError.ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(output))
+            {
+                await Console.Out.WriteAsync(output).ConfigureAwait(false);
+            }
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                await Console.Error.WriteAsync(error).ConfigureAwait(false);
+            }
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"'aspire {command}' exited with code {process.ExitCode} for AppHost '{deployment.AppHostPath}'.");
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Cancellation must preserve the original exception even if process termination races with exit.")]
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Preserve the cancellation exception.
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Best-effort cleanup must preserve the deployment failure.")]
+    private static async Task TryDestroyDeploymentAsync(OwnedDeployment deployment)
+    {
+        try
+        {
+            using var timeout = new CancellationTokenSource(CleanupTimeout);
+            await RunAspireCommandAsync("destroy", deployment, timeout.Token).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Preserve the deployment failure.
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Best-effort cleanup must preserve the deployment failure.")]
+    private static void TryDeleteOwnedOutputDirectory(OwnedDeployment deployment)
+    {
+        try
+        {
+            DeleteOwnedOutputDirectory(deployment);
+        }
+        catch
+        {
+            // Preserve the deployment failure.
+        }
+    }
+
+    private static void DeleteOwnedOutputDirectory(OwnedDeployment deployment)
+    {
+        if (deployment.DeleteOutputDirectory && Directory.Exists(deployment.OutputPath))
+        {
+            Directory.Delete(deployment.OutputPath, recursive: true);
+        }
     }
 
     private static Dictionary<string, string> LoadValues(string filePath)
@@ -299,7 +634,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+    [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "Disposal matches Aspire's testing builder and must not hide the original test failure.")]
@@ -321,4 +656,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     }
 
     private sealed class DeployedEndpointResource(string name) : Resource(name), IResourceWithEndpoints;
+
+    private sealed record OwnedDeployment(
+        string AppHostPath,
+        string OutputPath,
+        string EnvironmentName,
+        bool DeleteOutputDirectory);
 }

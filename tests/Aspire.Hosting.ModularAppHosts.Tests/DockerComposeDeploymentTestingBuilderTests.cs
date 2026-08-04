@@ -90,5 +90,16 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         }
     }
 
+    [Fact]
+    public async Task DeployAsync_rejects_an_environment_name_that_cannot_be_an_env_file_suffix()
+    {
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            DockerComposeDeploymentTestingBuilder.DeployAsync<DockerComposeDeploymentTestingBuilderTests>(
+                "../CI",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("environmentName", exception.ParamName);
+    }
+
     private static string Encode(string value) => Convert.ToHexString(Encoding.UTF8.GetBytes(value));
 }

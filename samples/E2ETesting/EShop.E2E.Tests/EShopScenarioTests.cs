@@ -23,7 +23,8 @@ public sealed class EShopScenarioTests
     public async Task Customer_can_order_a_product_from_the_catalog()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var application = await CreateApplicationAsync(cancellationToken);
+        await using var builder = await CreateBuilderAsync(cancellationToken);
+        var application = await StartApplicationAsync(builder, cancellationToken);
         using var catalog = application.CreateHttpClient(CatalogModule.ApiResourceName, "http");
         using var orders = application.CreateHttpClient(OrdersModule.ApiResourceName, "http");
 
@@ -49,20 +50,28 @@ public sealed class EShopScenarioTests
         Assert.Equal(37.00m, order.Total);
     }
 
-    private static async Task<DistributedApplication> CreateApplicationAsync(CancellationToken cancellationToken)
+    private static async Task<IDistributedApplicationTestingBuilder> CreateBuilderAsync(
+        CancellationToken cancellationToken)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TestTimeout);
         var mode = Environment.GetEnvironmentVariable(ModeEnvironmentVariableName) ?? AppHostMode;
-        IDistributedApplicationTestingBuilder builder = mode switch
+        return mode switch
         {
             AppHostMode => await DistributedApplicationTestingBuilder.CreateAsync<Projects.EShop_E2E_AppHost>(
                 [$"Parameters:orders-api-key={OrdersApiKey}"],
-                cancellationToken),
-            ComposeMode => DockerComposeDeploymentTestingBuilder
-                .CreateFromEnvironment<Projects.EShop_E2E_AppHost>(),
+                timeout.Token),
+            ComposeMode => await DockerComposeDeploymentTestingBuilder
+                .DeployAsync<Projects.EShop_E2E_AppHost>(timeout.Token),
             _ => throw new InvalidOperationException(
                 $"Unsupported {ModeEnvironmentVariableName} value '{mode}'. Use '{AppHostMode}' or '{ComposeMode}'.")
         };
+    }
 
+    private static async Task<DistributedApplication> StartApplicationAsync(
+        IDistributedApplicationTestingBuilder builder,
+        CancellationToken cancellationToken)
+    {
         var application = await builder.BuildAsync(cancellationToken)
             .WaitAsync(TestTimeout, cancellationToken);
 

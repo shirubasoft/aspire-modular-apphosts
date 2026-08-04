@@ -9,7 +9,7 @@ catalog module ──> catalog-api <── orders-api <── scenario tests
                                orders module
 ```
 
-`EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or an already deployed Compose environment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
+`EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
 
 ## Run through the AppHost
 
@@ -24,38 +24,20 @@ Aspire allocates the runtime addresses, waits for both project resources to beco
 
 ## Run through Docker Compose
 
-Deploy the same AppHost model through Aspire:
+Install the Aspire CLI, ensure Docker or Podman is running, and run the test:
 
 ```bash
 Parameters__orders_api_key=e2e-orders-key \
-aspire deploy \
-  --apphost EShop.E2E.AppHost/EShop.E2E.AppHost.csproj \
-  --output-path EShop.E2E.AppHost/aspire-output \
-  --environment CI \
-  --non-interactive
-```
-
-Run the same test against the deployment:
-
-```bash
 ESHOP_E2E_MODE=compose \
-ASPIRE_TEST_CONFIGURATION_FILE="$PWD/EShop.E2E.AppHost/aspire-output/.env.CI" \
 dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj --no-build
 ```
 
-Finally, remove the temporary deployment:
+`DockerComposeDeploymentTestingBuilder.DeployAsync` runs `aspire deploy`, imports the generated `.env.<environment>` file, and returns the same testing-builder contract used by AppHost mode. Disposing the builder runs `aspire destroy` and removes its temporary output directory.
 
-```bash
-aspire destroy \
-  --apphost EShop.E2E.AppHost/EShop.E2E.AppHost.csproj \
-  --output-path EShop.E2E.AppHost/aspire-output \
-  --environment CI \
-  --yes \
-  --non-interactive
-```
+CI sets `ASPIRE_TEST_DEPLOYMENT_ENVIRONMENT=CI` and `ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH` to a known workspace path so an `if: always()` fallback can tear down a deployment if the test process is interrupted before disposal. Local runs omit the output setting and use an automatically cleaned temporary directory.
 
 `WithTestEndpoint` requires an external endpoint with an explicit host port, because an external test process needs a stable address after Compose deployment. Its optional `healthCheckPath` is imported into Aspire resource health, so the same `WaitForResourceHealthyAsync` calls work in both modes. `WithTestValue` resolves any Aspire `IValueProvider`, including secret parameters, into the supplied configuration key during deployment preparation. Both are written into `.env.<environment>` and loaded by `DockerComposeDeploymentTestingBuilder`; CI does not parse generated YAML or copy individual values into the test command.
 
-The Compose builder represents deployed services as already allocated Aspire endpoint resources. Starting its `DistributedApplication` starts only the local testing model and health monitoring; the Compose deployment continues to own the service processes.
+The Compose builder represents deployed services as already allocated Aspire endpoint resources. `BuildAsync` remains build-only, and starting its `DistributedApplication` starts only the local testing model and health monitoring. `DeployAsync` and builder disposal own the external Compose lifecycle.
 
 Environment-specific files can contain resolved secrets. `aspire-output` is ignored by Git and should not be retained as a CI artifact.
