@@ -4,7 +4,8 @@ using Aspire.Hosting.ModularAppHosts;
 
 namespace ModularSample.ModuleContract;
 
-public static class AppHostAModule
+[GenerateDistributedApplicationModule(Name)]
+public static partial class AppHostAModule
 {
     public const string Name = "AppHostA";
     public const string ApiResourceName = "sample-api";

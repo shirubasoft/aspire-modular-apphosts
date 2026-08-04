@@ -1,4 +1,3 @@
-using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
 using ModularSample.ModuleContract;
 
@@ -9,11 +8,11 @@ var appHostASource = Path.Combine(samplesRoot, "AppHostA");
 builder.Configuration[$"Parameters:{DistributedApplicationModuleExtensions.RepositoryBaseLocationParameterName}"] = samplesRoot;
 
 AppHostAModule.Register(builder, appHostASource);
-var imported = builder.ImportModule(AppHostAModule.Name);
+var imported = AppHostAModule.ImportModule(builder);
 
-var api = imported.GetResource<ContainerResource>(AppHostAModule.ApiResourceName);
-var staticSite = imported.GetResource<ContainerResource>(AppHostAModule.StaticResourceName);
-var message = imported.GetResource<ParameterResource>(AppHostAModule.MessageResourceName);
+var api = imported.Api;
+var staticSite = imported.Static;
+var message = imported.Message;
 
 builder.AddDockerfile("dependency-gateway", "Gateway")
     .WithHttpEndpoint(targetPort: 8080, name: "http")

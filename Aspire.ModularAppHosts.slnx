@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
+    <Project Path="src/Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />

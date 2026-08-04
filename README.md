@@ -57,7 +57,55 @@ builder.Add(orders);
 builder.Build().Run();
 ```
 
-An importing AppHost can retrieve materialized resources for ordinary Aspire wiring:
+## Strongly typed generated modules
+
+Annotate a static partial module class to generate named properties for every resource it declares:
+
+```csharp
+[GenerateDistributedApplicationModule(Name)]
+public static partial class OrdersModule
+{
+    public const string Name = "orders";
+    public const string ApiResourceName = "orders-api";
+    public const string CacheResourceName = "orders-cache";
+
+    public static IDistributedApplicationModule Register(
+        IDistributedApplicationBuilder builder) =>
+        builder.ExportModule(Name, module =>
+        {
+            module.AddContainer(ApiResourceName, "example/orders-api")
+                .Configure(container => container.WithHttpEndpoint(targetPort: 8080, name: "http"));
+            module.AddContainer(CacheResourceName, "redis", "8-alpine");
+        });
+}
+```
+
+The generator adds a typed `Module`, plus `AddModule` and `ImportModule` methods. A resource name constant ending in `ResourceName` becomes a property with that suffix removed, so consumers discover resources through IntelliSense without repeating their names or types:
+
+```csharp
+// In an AppHost using the current worktree:
+var exported = OrdersModule.Register(builder);
+var orders = OrdersModule.AddModule(builder, exported);
+```
+
+```csharp
+// In an importing AppHost:
+OrdersModule.Register(builder);
+var orders = OrdersModule.ImportModule(builder);
+```
+
+Either path returns the same generated API for ordinary Aspire wiring:
+
+```csharp
+builder.AddContainer("consumer", "example/consumer")
+    .WithReference(orders.Api.GetEndpoint("http"))
+    .WaitFor(orders.Api)
+    .WaitFor(orders.Cache);
+```
+
+The annotated class must be a top-level, non-generic, static partial class. Supported resource declarations are `AddProject`, `AddContainer`, and `AddResource<TResource>` calls inside that class, and their names must be compile-time string constants. Literal names are converted to PascalCase property names. Generator diagnostics report invalid declarations and property-name collisions at build time.
+
+The untyped API remains available when a generated contract is not appropriate:
 
 ```csharp
 var orders = builder.ImportModule("orders");

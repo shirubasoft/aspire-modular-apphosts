@@ -34,6 +34,8 @@ podman build --tag modular-sample-api:dev .
 
 The extension does not generate or alter this command.
 
+`AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
+
 ## Prerequisites
 
 - .NET 10 SDK
