@@ -108,8 +108,8 @@ Repository synchronization is shared across services in the same module, while e
 
 [`samples`](samples/README.md) contains a complete runnable example:
 
-- AppHost A exports a .NET project as `modular-sample-api:dev` using an explicit Podman command and also exports an existing `nginx:alpine` container.
-- AppHost B imports both resources and adds a gateway container with references and health dependencies on both.
+- AppHost A exports a .NET project as `modular-sample-api:dev` using an explicit Podman command and includes one of every public core top-level Aspire resource type.
+- AppHost B imports the complete module and adds a gateway container with references and health dependencies on the two running containers.
 - The gateway's `/health` endpoint probes both imported services, so it becomes healthy only when both dependencies respond successfully.
 
 ## Repository base location parameter

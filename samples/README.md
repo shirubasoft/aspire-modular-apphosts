@@ -5,20 +5,28 @@ This sample demonstrates one AppHost exporting a mixed module and another AppHos
 ```text
 AppHost A
 ├── sample-api project ── podman build ──> modular-sample-api:dev
-├── sample-static container (nginx:alpine)
-└── sample-message parameter (generic IResource export)
+├── sample-project (ProjectResource, explicit start)
+├── sample-csharp-app (CSharpAppResource, explicit start)
+├── sample-static (ContainerResource, nginx:alpine)
+├── sample-executable (ExecutableResource, explicit start)
+├── sample-dotnet-tool (DotnetToolResource, explicit start)
+├── sample-message (ParameterResource)
+├── sample-connection-string (ConnectionStringResource)
+├── sample-external-service (ExternalServiceResource)
+├── sample-container-registry (ContainerRegistryResource)
+└── sample-custom (custom Resource)
              │
              └── exported module "AppHostA"
                          │
                          ▼
-AppHost B imports all three resources
+AppHost B imports every resource
 └── dependency-gateway container
     ├── references both HTTP endpoints
     ├── waits for both resources to be healthy
     └── reports healthy only after probing both upstreams
 ```
 
-The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates specialized project/container exports alongside the generic `AddResource<TResource>` API. Its project export supplies the exact command that must produce the configured image:
+The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project export supplies the exact command that must produce the configured image:
 
 ```text
 podman build --tag modular-sample-api:dev .
@@ -39,7 +47,7 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module. `sample-api-installer` builds the project image before `sample-api` starts, while `sample-static` runs directly from `nginx:alpine`.
+AppHost A materializes its local module. `sample-api-installer` builds the project image before `sample-api` starts, while `sample-static` runs directly from `nginx:alpine`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
@@ -50,7 +58,7 @@ cd samples/AppHostB
 aspire run
 ```
 
-AppHost B points `module-repository-base-location` at the sample source directory, imports the `AppHostA` module, injects the exported parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B points `module-repository-base-location` at the sample source directory, imports the complete `AppHostA` module, injects the exported parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api
