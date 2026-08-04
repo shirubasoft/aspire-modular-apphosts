@@ -72,4 +72,6 @@ When squash-merging, ensure the resulting commit message still follows this conv
 
 ## Releases
 
-After changes reach `main`, the release workflow calculates the next version, publishes both NuGet packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually.
+After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes both NuGet packages and symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually.
+
+Publishing remains disarmed until the repository variable `NUGET_PUBLISH_ENABLED` is explicitly set to `true`. When no release tag exists, the workflow creates a local `v0.0.0` baseline so the first feature release stays in the `0.x` range. A breaking conventional commit advances the package to `1.0.0` when the public API is ready for that stability promise.

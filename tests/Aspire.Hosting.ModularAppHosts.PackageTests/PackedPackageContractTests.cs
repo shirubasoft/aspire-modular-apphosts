@@ -45,6 +45,23 @@ public sealed class PackedPackageContractTests
     }
 
     [Fact]
+    public async Task Packages_publish_license_repository_and_debugging_metadata()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+
+        foreach (var packagePath in new[] { packages.CorePackagePath, packages.TestingPackagePath })
+        {
+            var metadata = ReadMetadata(packagePath);
+            Assert.Equal("MIT", metadata.LicenseExpression);
+            Assert.Equal("https://github.com/Shirubasoft/aspire-modular-apphosts.git", metadata.RepositoryUrl);
+            Assert.False(string.IsNullOrWhiteSpace(metadata.RepositoryCommit));
+        }
+
+        Assert.True(File.Exists(packages.CoreSymbolPackagePath));
+        Assert.True(File.Exists(packages.TestingSymbolPackagePath));
+    }
+
+    [Fact]
     public async Task Packed_core_package_compiles_a_source_generator_consumer()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
@@ -176,7 +193,9 @@ public sealed class PackedPackageContractTests
                 outputPath,
                 version,
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.nupkg"),
-                Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"));
+                Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"),
+                Path.Combine(outputPath, $"{CorePackageId}.{version}.snupkg"),
+                Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"));
         }
         finally
         {
@@ -200,6 +219,24 @@ public sealed class PackedPackageContractTests
                 (string?)element.Attribute("id") ?? string.Empty,
                 (string?)element.Attribute("version") ?? string.Empty))
             .ToArray();
+    }
+
+    private static PackageMetadata ReadMetadata(string packagePath)
+    {
+        Assert.True(File.Exists(packagePath), $"Package '{packagePath}' was not created.");
+        using var archive = ZipFile.OpenRead(packagePath);
+        var nuspec = Assert.Single(
+            archive.Entries,
+            entry => entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase));
+        using var stream = nuspec.Open();
+        var document = XDocument.Load(stream);
+        var metadata = Assert.Single(document.Descendants(), element => element.Name.LocalName == "metadata");
+        var license = Assert.Single(metadata.Elements(), element => element.Name.LocalName == "license");
+        var repository = Assert.Single(metadata.Elements(), element => element.Name.LocalName == "repository");
+        return new PackageMetadata(
+            license.Value,
+            (string?)repository.Attribute("url") ?? string.Empty,
+            (string?)repository.Attribute("commit") ?? string.Empty);
     }
 
     private static async Task BuildConsumerAsync(
@@ -292,7 +329,14 @@ public sealed class PackedPackageContractTests
         string OutputPath,
         string Version,
         string CorePackagePath,
-        string TestingPackagePath);
+        string TestingPackagePath,
+        string CoreSymbolPackagePath,
+        string TestingSymbolPackagePath);
 
     private sealed record PackageDependency(string Id, string Version);
+
+    private sealed record PackageMetadata(
+        string LicenseExpression,
+        string RepositoryUrl,
+        string RepositoryCommit);
 }

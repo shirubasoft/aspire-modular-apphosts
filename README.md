@@ -22,6 +22,7 @@ dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
 Both packages target .NET 10 and Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
+They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/LICENSE).
 
 ## Quick start
 
