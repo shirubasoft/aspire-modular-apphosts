@@ -15,6 +15,7 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" />
     <PackageReference Include="Aspire.Hosting.Docker" />
+    <PackageReference Include="Aspire.Hosting.Testing" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj"

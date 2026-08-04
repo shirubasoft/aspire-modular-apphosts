@@ -9,7 +9,7 @@ catalog module ──> catalog-api <── orders-api <── scenario tests
                                orders module
 ```
 
-`EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or an already deployed Compose environment.
+`EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or an already deployed Compose environment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
 
 ## Run through the AppHost
 
@@ -54,6 +54,8 @@ aspire destroy \
   --non-interactive
 ```
 
-`WithTestEndpoint` requires an external endpoint with an explicit host port, because an external test process needs a stable address after Compose deployment. `WithTestValue` resolves any Aspire `IValueProvider`, including secret parameters, during the deployment prepare phase. Both are written into `.env.<environment>` and loaded by `AspireDeploymentTestConfiguration`; CI does not parse generated YAML or copy individual values into the test command.
+`WithTestEndpoint` requires an external endpoint with an explicit host port, because an external test process needs a stable address after Compose deployment. Its optional `healthCheckPath` is imported into Aspire resource health, so the same `WaitForResourceHealthyAsync` calls work in both modes. `WithTestValue` resolves any Aspire `IValueProvider`, including secret parameters, into the supplied configuration key during deployment preparation. Both are written into `.env.<environment>` and loaded by `DockerComposeDeploymentTestingBuilder`; CI does not parse generated YAML or copy individual values into the test command.
+
+The Compose builder represents deployed services as already allocated Aspire endpoint resources. Starting its `DistributedApplication` starts only the local testing model and health monitoring; the Compose deployment continues to own the service processes.
 
 Environment-specific files can contain resolved secrets. `aspire-output` is ignored by Git and should not be retained as a CI artifact.

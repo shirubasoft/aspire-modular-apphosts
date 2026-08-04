@@ -21,8 +21,14 @@ orders.Api
     .WaitFor(catalog.Api);
 
 compose
-    .WithTestEndpoint(CatalogModule.ApiResourceName, catalog.Api.GetEndpoint("http"))
-    .WithTestEndpoint(OrdersModule.ApiResourceName, orders.Api.GetEndpoint("http"))
-    .WithTestValue("orders-api-key", ordersApiKey.Resource);
+    .WithTestEndpoint(
+        CatalogModule.ApiResourceName,
+        catalog.Api.GetEndpoint("http"),
+        healthCheckPath: "/health")
+    .WithTestEndpoint(
+        OrdersModule.ApiResourceName,
+        orders.Api.GetEndpoint("http"),
+        healthCheckPath: "/health")
+    .WithTestValue("Parameters:orders-api-key", ordersApiKey.Resource);
 
 builder.Build().Run();

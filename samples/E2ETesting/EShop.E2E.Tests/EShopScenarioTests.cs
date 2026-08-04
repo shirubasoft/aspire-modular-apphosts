@@ -3,6 +3,8 @@ using Aspire.Hosting;
 using Aspire.Hosting.ModularAppHosts;
 using Aspire.Hosting.Testing;
 using EShop.Modules;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace EShop.E2E.Tests;
@@ -21,9 +23,9 @@ public sealed class EShopScenarioTests
     public async Task Customer_can_order_a_product_from_the_catalog()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var environment = await CreateEnvironmentAsync(cancellationToken);
-        using var catalog = environment.CreateHttpClient(CatalogModule.ApiResourceName);
-        using var orders = environment.CreateHttpClient(OrdersModule.ApiResourceName);
+        await using var application = await CreateApplicationAsync(cancellationToken);
+        using var catalog = application.CreateHttpClient(CatalogModule.ApiResourceName, "http");
+        using var orders = application.CreateHttpClient(OrdersModule.ApiResourceName, "http");
 
         var product = await catalog.GetFromJsonAsync<Product>("/products/coffee-mug", cancellationToken);
         Assert.NotNull(product);
@@ -32,7 +34,10 @@ public sealed class EShopScenarioTests
         {
             Content = JsonContent.Create(new CreateOrderRequest(product.Id, Quantity: 2))
         };
-        request.Headers.Add("X-Orders-Api-Key", environment.OrdersApiKey);
+        var configuration = application.Services.GetRequiredService<IConfiguration>();
+        request.Headers.Add(
+            "X-Orders-Api-Key",
+            configuration.GetRequiredSection("Parameters:orders-api-key").Value);
 
         using var response = await orders.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -44,120 +49,41 @@ public sealed class EShopScenarioTests
         Assert.Equal(37.00m, order.Total);
     }
 
-    private static async Task<ITestEnvironment> CreateEnvironmentAsync(CancellationToken cancellationToken)
+    private static async Task<DistributedApplication> CreateApplicationAsync(CancellationToken cancellationToken)
     {
         var mode = Environment.GetEnvironmentVariable(ModeEnvironmentVariableName) ?? AppHostMode;
-        return mode switch
+        IDistributedApplicationTestingBuilder builder = mode switch
         {
-            AppHostMode => await RunningAppHostEnvironment.CreateAsync(cancellationToken),
-            ComposeMode => await DeployedComposeEnvironment.CreateAsync(cancellationToken),
+            AppHostMode => await DistributedApplicationTestingBuilder.CreateAsync<Projects.EShop_E2E_AppHost>(
+                [$"Parameters:orders-api-key={OrdersApiKey}"],
+                cancellationToken),
+            ComposeMode => DockerComposeDeploymentTestingBuilder
+                .CreateFromEnvironment<Projects.EShop_E2E_AppHost>(),
             _ => throw new InvalidOperationException(
                 $"Unsupported {ModeEnvironmentVariableName} value '{mode}'. Use '{AppHostMode}' or '{ComposeMode}'.")
         };
-    }
 
-    private interface ITestEnvironment : IAsyncDisposable
-    {
-        string OrdersApiKey { get; }
+        var application = await builder.BuildAsync(cancellationToken)
+            .WaitAsync(TestTimeout, cancellationToken);
 
-        HttpClient CreateHttpClient(string resourceName);
-    }
-
-    private sealed class RunningAppHostEnvironment : ITestEnvironment
-    {
-        private readonly DistributedApplication _application;
-
-        private RunningAppHostEnvironment(DistributedApplication application)
+        try
         {
-            _application = application;
-        }
-
-        public string OrdersApiKey => EShopScenarioTests.OrdersApiKey;
-
-        public static async Task<RunningAppHostEnvironment> CreateAsync(CancellationToken cancellationToken)
-        {
-            var appHost = await DistributedApplicationTestingBuilder.CreateAsync<Projects.EShop_E2E_AppHost>(
-                [$"Parameters:orders-api-key={EShopScenarioTests.OrdersApiKey}"]);
-            var application = await appHost.BuildAsync(cancellationToken)
+            await application.StartAsync(cancellationToken)
                 .WaitAsync(TestTimeout, cancellationToken);
-
-            try
-            {
-                await application.StartAsync(cancellationToken)
-                    .WaitAsync(TestTimeout, cancellationToken);
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(TestTimeout);
-                await application.ResourceNotifications.WaitForResourceHealthyAsync(
-                    CatalogModule.ApiResourceName,
-                    timeout.Token);
-                await application.ResourceNotifications.WaitForResourceHealthyAsync(
-                    OrdersModule.ApiResourceName,
-                    timeout.Token);
-                return new RunningAppHostEnvironment(application);
-            }
-            catch
-            {
-                await application.DisposeAsync();
-                throw;
-            }
-        }
-
-        public HttpClient CreateHttpClient(string resourceName) =>
-            _application.CreateHttpClient(resourceName, "http");
-
-        public ValueTask DisposeAsync() => _application.DisposeAsync();
-    }
-
-    private sealed class DeployedComposeEnvironment : ITestEnvironment
-    {
-        private readonly AspireDeploymentTestConfiguration _configuration;
-
-        private DeployedComposeEnvironment(AspireDeploymentTestConfiguration configuration)
-        {
-            _configuration = configuration;
-        }
-
-        public string OrdersApiKey => _configuration.GetValue("orders-api-key");
-
-        public static async Task<DeployedComposeEnvironment> CreateAsync(CancellationToken cancellationToken)
-        {
-            var configuration = AspireDeploymentTestConfiguration.LoadFromEnvironment();
-            await WaitForHealthyAsync(configuration, CatalogModule.ApiResourceName, cancellationToken);
-            await WaitForHealthyAsync(configuration, OrdersModule.ApiResourceName, cancellationToken);
-            return new DeployedComposeEnvironment(configuration);
-        }
-
-        public HttpClient CreateHttpClient(string resourceName) =>
-            _configuration.CreateHttpClient(resourceName);
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        private static async Task WaitForHealthyAsync(
-            AspireDeploymentTestConfiguration configuration,
-            string resourceName,
-            CancellationToken cancellationToken)
-        {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TestTimeout);
-            using var client = configuration.CreateHttpClient(resourceName);
-
-            while (true)
-            {
-                try
-                {
-                    using var response = await client.GetAsync("/health", timeout.Token);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        return;
-                    }
-                }
-                catch (HttpRequestException)
-                {
-                    // The Compose service may still be starting.
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(250), timeout.Token);
-            }
+            await application.ResourceNotifications.WaitForResourceHealthyAsync(
+                CatalogModule.ApiResourceName,
+                timeout.Token);
+            await application.ResourceNotifications.WaitForResourceHealthyAsync(
+                OrdersModule.ApiResourceName,
+                timeout.Token);
+            return application;
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
         }
     }
 
