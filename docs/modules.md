@@ -248,7 +248,9 @@ Override the base directory through the options section:
 }
 ```
 
-When an imported project has no repository in its module definition or options, the library adds a required Aspire parameter such as `module-orders-repository`. Aspire's interaction service asks for it in interactive development environments; non-interactive runs and deployment pipelines supply it through the normal `Parameters:<name>` configuration key. Use `DistributedApplicationModuleExtensions.GetRepositoryParameterName(moduleName)` when code needs the exact parameter name.
+Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repository` are modeled with `AddParameterFromConfiguration`. If that key, the module definition, and programmatic options are all missing, the same required parameter uses Aspire's interaction service to ask for the repository in interactive environments. Non-interactive runs and deployment pipelines provide the options key through normal configuration, such as `Aspire__ModularAppHosts__Modules__orders__Repository`. Use `DistributedApplicationModuleExtensions.GetRepositoryParameterName(moduleName)` and `GetRepositoryConfigurationKey(moduleName)` when code needs the exact names.
+
+`RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
 Repository synchronization is shared by resources in the same module. Repeated export, add, and import calls are deduplicated by the AppHost's module registry.
 

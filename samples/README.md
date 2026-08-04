@@ -62,7 +62,7 @@ cd samples/AppHostB
 aspire run
 ```
 
-AppHost B sets `Aspire:ModularAppHosts:RepositoryBasePath` to the sample source directory, imports the complete `AppHostA` module, injects the exported parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B sets `Aspire:ModularAppHosts:RepositoryBasePath` to the sample source directory and supplies the AppHost A repository through its configuration-backed Aspire parameter. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api

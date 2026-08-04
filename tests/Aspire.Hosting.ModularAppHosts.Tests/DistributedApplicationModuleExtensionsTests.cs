@@ -255,14 +255,17 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public void Configuration_overrides_project_image_publishing_and_repository_policy()
+    public async Task Configuration_overrides_project_image_publishing_and_repository_policy()
     {
         using var repository = TestRepository.Create();
         using var imports = TemporaryDirectory.Create();
         var builder = CreateBuilder(repository.Path);
         var section = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders";
+        var repositoryConfigurationKey =
+            DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey("orders");
+        Assert.Equal($"{section}:Repository", repositoryConfigurationKey);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
-        builder.Configuration[$"{section}:Repository"] = "https://example.test/configured/orders.git";
+        builder.Configuration[repositoryConfigurationKey] = "https://example.test/configured/orders.git";
         builder.Configuration[$"{section}:UpdateRepository"] = "false";
         builder.Configuration[$"{section}:Projects:orders-api:ImageName"] = "configured/orders-api";
         builder.Configuration[$"{section}:Projects:orders-api:ImageTag"] = "debug";
@@ -282,7 +285,13 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         var pullPolicy = Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>());
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
-        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        var repositoryParameter = Assert.Single(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal(
+            DistributedApplicationModuleExtensions.GetRepositoryParameterName("orders"),
+            repositoryParameter.Name);
+        Assert.Equal(
+            "https://example.test/configured/orders.git",
+            await repositoryParameter.GetValueAsync(TestContext.Current.CancellationToken));
         Assert.Equal("configured/orders-api", image.Image);
         Assert.Equal("debug", image.Tag);
         Assert.Equal(ImagePullPolicy.Missing, pullPolicy.ImagePullPolicy);
@@ -292,6 +301,28 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal("https://example.test/configured/orders.git", installer.Repository);
         Assert.False(installer.UpdatesRepository);
         Assert.Same(container, imported.GetResource<IResourceWithEndpoints>("orders-api").Resource);
+    }
+
+    [Fact]
+    public void Programmatic_repository_option_is_used_directly_without_a_parameter()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var imageName = $"module-test-orders-api-{Guid.NewGuid():N}";
+        builder.ConfigureModularAppHosts(options =>
+            options.Modules["orders"] = new DistributedApplicationModuleOptions
+            {
+                Repository = "https://example.test/programmatic/orders.git"
+            });
+        builder.ExportModule("orders", definition =>
+            definition.AddProject("orders-api", repository.ProjectPath)
+                .ExportAsContainer(imageName, "dotnet", ["publish"]));
+
+        builder.ImportModule("orders");
+
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal("https://example.test/programmatic/orders.git", installer.Repository);
     }
 
     [Fact]

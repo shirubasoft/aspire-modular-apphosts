@@ -49,7 +49,10 @@ public sealed class ModularAppHostsOptions
 /// <summary>Overrides materialization behavior for one distributed application module.</summary>
 public sealed class DistributedApplicationModuleOptions
 {
-    /// <summary>Gets or sets the Git repository used when the module is imported.</summary>
+    /// <summary>
+    /// Gets or sets the Git repository used when the module is imported. Configuration values are
+    /// represented by an Aspire parameter; values set in code are used directly.
+    /// </summary>
     public string? Repository { get; set; }
 
     /// <summary>Gets or sets whether an existing clean checkout is fast-forwarded before startup.</summary>

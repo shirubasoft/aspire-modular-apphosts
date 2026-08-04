@@ -41,6 +41,13 @@ public static class DistributedApplicationModuleExtensions
         return slug.Length == 0 ? "module-repository" : $"module-{slug}-repository";
     }
 
+    /// <summary>Gets the configuration key used to resolve an imported module's Git repository.</summary>
+    public static string GetRepositoryConfigurationKey(string moduleName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        return $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:{moduleName}:Repository";
+    }
+
     /// <summary>Exports a named module definition without adding its services to the application model.</summary>
     public static IDistributedApplicationModule ExportModule(
         this IDistributedApplicationBuilder builder,
@@ -120,12 +127,20 @@ public static class DistributedApplicationModuleExtensions
 
         var options = registry.Options;
         var moduleOptions = options.FindModule(module.Name);
-        var repository = GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
+        var repositoryConfigurationKey = GetRepositoryConfigurationKey(module.Name);
+        var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
+        var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
         var requiresRepository = module.ProjectDefinitions.Count > 0;
-        var repositoryParameter = imported && requiresRepository && string.IsNullOrWhiteSpace(repository)
-            ? GetOrCreateRepositoryParameter(builder, registry, module.Name)
+        var repositoryParameter = imported &&
+            (configuredRepository is not null || (requiresRepository && string.IsNullOrWhiteSpace(repository)))
+            ? GetOrCreateRepositoryParameter(
+                builder,
+                registry,
+                module.Name,
+                repositoryConfigurationKey)
             : null;
-        var repositoryPath = imported && (requiresRepository || !string.IsNullOrWhiteSpace(repository))
+        var repositoryPath = imported &&
+            (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
             ? GetImportedRepositoryPath(builder, options, module.Name)
             : GetLocalRepositoryPath(builder, module, repository);
         var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
@@ -136,7 +151,7 @@ public static class DistributedApplicationModuleExtensions
             builder,
             registry,
             repositoryPath,
-            repository,
+            repositoryParameter is null ? repository : null,
             repositoryParameter,
             imported,
             updateRepository);
@@ -584,13 +599,14 @@ public static class DistributedApplicationModuleExtensions
     private static IResourceBuilder<ParameterResource> GetOrCreateRepositoryParameter(
         IDistributedApplicationBuilder builder,
         ModuleApplicationRegistry registry,
-        string moduleName)
+        string moduleName,
+        string configurationKey)
     {
         var parameterName = GetRepositoryParameterName(moduleName);
         if (!builder.TryCreateResourceBuilder<ParameterResource>(parameterName, out var parameter))
         {
             parameter = builder
-                .AddParameter(parameterName)
+                .AddParameterFromConfiguration(parameterName, configurationKey)
                 .WithDescription($"Git repository used to import module '{moduleName}'.");
 
 #pragma warning disable ASPIREINTERACTION001
