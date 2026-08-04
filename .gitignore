@@ -1,6 +1,7 @@
 bin/
 obj/
 .aspire/
+aspire-output/
 TestResults/
 artifacts/
 *.user

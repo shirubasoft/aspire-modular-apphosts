@@ -74,3 +74,7 @@ aspire describe --include-hidden
 ```
 
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
+
+## E2E testing sample
+
+[`E2ETesting`](E2ETesting/README.md) contains a separate eShop example with `catalog` and `orders` modules. Its E2E AppHost supports both Aspire's in-process testing builder and an Aspire-deployed Docker Compose environment. The same test scenario runs against both modes in CI.

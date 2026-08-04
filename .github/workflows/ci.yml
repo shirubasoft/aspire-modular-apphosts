@@ -13,6 +13,7 @@ permissions:
 jobs:
   build-test-pack:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -32,8 +33,13 @@ jobs:
       - name: Build
         run: dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
 
-      - name: Test
-        run: dotnet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
+      - name: Test library
+        run: dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Test E2E through the AppHost
+        env:
+          ESHOP_E2E_MODE: apphost
+        run: dotnet test samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj --configuration Release --no-build --no-restore
 
       - name: Pack
         run: dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj --configuration Release --no-build --no-restore --output artifacts
@@ -44,3 +50,52 @@ jobs:
           name: nuget-package
           path: artifacts/*.nupkg
           if-no-files-found: error
+
+  e2e-docker-compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Install Aspire CLI
+        id: install-aspire
+        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+
+      - name: Restore
+        run: dotnet restore samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj
+
+      - name: Build E2E sample
+        run: dotnet build samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj --configuration Release --no-restore
+
+      - name: Deploy E2E AppHost to Docker Compose
+        env:
+          Parameters__orders_api_key: e2e-orders-key
+        run: >-
+          aspire deploy
+          --apphost samples/E2ETesting/EShop.E2E.AppHost/EShop.E2E.AppHost.csproj
+          --output-path samples/E2ETesting/EShop.E2E.AppHost/aspire-output
+          --environment CI
+          --non-interactive
+
+      - name: Test E2E through Docker Compose
+        env:
+          ASPIRE_TEST_CONFIGURATION_FILE: ${{ github.workspace }}/samples/E2ETesting/EShop.E2E.AppHost/aspire-output/.env.CI
+          ESHOP_E2E_MODE: compose
+        run: dotnet test samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj --configuration Release --no-build --no-restore
+
+      - name: Destroy Docker Compose deployment
+        if: ${{ always() && steps.install-aspire.outcome == 'success' }}
+        run: >-
+          aspire destroy
+          --apphost samples/E2ETesting/EShop.E2E.AppHost/EShop.E2E.AppHost.csproj
+          --output-path samples/E2ETesting/EShop.E2E.AppHost/aspire-output
+          --environment CI
+          --yes
+          --non-interactive
