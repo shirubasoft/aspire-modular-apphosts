@@ -170,9 +170,10 @@ public sealed class ModuleContainerExportOptions(
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
 
     /// <summary>
-    /// Gets or sets the clean image tag. The effective tag has <c>-dirty</c> appended for a dirty repository.
+    /// Gets or sets the clean image tag. When omitted, the current repository branch is sanitized and used.
+    /// The effective tag has <c>-dirty</c> appended for a dirty repository.
     /// </summary>
-    public string ImageTag { get; set; } = "latest";
+    public string? ImageTag { get; set; }
 
     /// <summary>
     /// Gets or sets the publish working directory relative to the repository root. The project directory is used

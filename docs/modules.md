@@ -108,10 +108,7 @@ module.AddProject<Projects.Orders_Api>("orders-api")
             "-t:PublishContainer",
             $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
             $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"
-        ])
-    {
-        ImageTag = "dev"
-    });
+        ]));
 ```
 
 `ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing `ExportAsContainer` callback applies to its container representation.
@@ -134,7 +131,7 @@ Modules containing only repository-independent resources, such as existing image
 The library does not infer how an image is built. `ExportAsContainer` publishes a project image, while `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource:
 
 ```csharp
-module.AddContainer("orders-static", "orders-static", "dev")
+module.AddContainer("orders-static", "orders-static")
     .WithImagePublishCommand(new ModuleContainerExportOptions(
         imageName: "orders-static",
         publishCommand: "podman",
@@ -144,16 +141,14 @@ module.AddContainer("orders-static", "orders-static", "dev")
             "--tag",
             ModuleContainerExportOptions.ImageReferencePlaceholder,
             "."
-        ])
-    {
-        ImageTag = "dev"
-    });
+        ]));
 ```
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 
+- When `ImageTag` is omitted, the module repository branch is lowercased and sanitized as a container tag (`feature/orders` becomes `feature-orders`). If that repository has no attached branch, the AppHost branch is used, then CI branch variables, then `latest`.
 - A clean repository uses `ImageName:ImageTag` and reuses that image when it already exists locally.
-- A dirty repository uses `ImageName:ImageTag-dirty` and rebuilds it for every AppHost session.
+- A dirty repository uses `ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
 - The container waits for its installer to complete successfully.
 - Installers are run-only resources and are excluded from deployment manifests.
 
@@ -170,12 +165,15 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
   "Aspire": {
     "ModularAppHosts": {
       "RepositoryBasePath": "/work/aspire-repositories",
+      "AutoCloneRepositories": false,
+      "GitHubCliPath": "gh",
       "UpdateImportedRepositories": true,
       "RunProjectsAsContainers": true,
       "PublishImages": true,
       "Modules": {
         "orders": {
           "Repository": "https://github.com/example/orders.git",
+          "AutoCloneRepository": true,
           "UpdateRepository": false,
           "RunProjectsAsContainers": true,
           "PublishImages": true,
@@ -219,6 +217,8 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
 
+Configured module, project, and container names are validated against exported definitions. A typo fails with the missing name and the available names instead of being silently ignored. With sibling discovery enabled, every specialized `AddProject` path is also checked after discovery or cloning; an absent service project fails with its module name, resource name, and expected path.
+
 The same options can be changed in code before materializing a module:
 
 ```csharp
@@ -253,5 +253,24 @@ Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repo
 `RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
 Repository synchronization is shared by resources in the same module. Repeated export, add, and import calls are deduplicated by the AppHost's module registry.
+
+### Optional sibling discovery and cloning
+
+Set `AutoCloneRepositories` to `true` globally, or `Modules:<name>:AutoCloneRepository` for one module, to use the local sibling convention:
+
+```text
+<workspace>/consumer/   # current AppHost Git root
+<workspace>/orders/     # module repository inferred from …/orders.git or owner/orders
+```
+
+The library first resolves the AppHost Git root. A module whose configured local root belongs to that same worktree is reused as-is, including a nested logical module root, and GitHub CLI is not invoked. Otherwise, the only accepted location is one direct sibling named from the module repository. An existing sibling must be a Git worktree. A missing sibling is cloned during model construction with:
+
+```text
+gh repo clone <repository> <sibling-path> -- --recurse-submodules
+```
+
+This feature is off by default, so `gh` is only a runtime dependency when it is enabled and a sibling is missing. `GitHubCliPath` can select another executable path. Authentication, host selection, and credentials remain GitHub CLI concerns; clone failures retain its diagnostic output.
+
+Because sibling cloning must finish before repository-backed Aspire resources are added to the model, an enabled missing sibling needs `Repository` from configuration, programmatic options, or `WithRepository`. It cannot wait for an interactive parameter response. Existing managed imports continue to use `RepositoryBasePath` and before-start synchronization when sibling discovery is disabled.
 
 See the [Two-AppHost sample](../samples/README.md) for a complete local and imported module.

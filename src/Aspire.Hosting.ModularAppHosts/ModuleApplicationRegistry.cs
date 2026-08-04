@@ -67,4 +67,22 @@ internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options 
             repositoryPath,
             _ => new Lazy<Task>(synchronize, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
+
+    internal void ValidateConfiguredModules()
+    {
+        var missingModule = Options.Modules.Keys.FirstOrDefault(name => !_modules.ContainsKey(name));
+        if (missingModule is null)
+        {
+            return;
+        }
+
+        var availableModules = _modules.Count == 0
+            ? "(none)"
+            : string.Join(", ", _modules.Keys
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .Select(name => $"'{name}'"));
+        throw new InvalidOperationException(
+            $"Configuration references module '{missingModule}', but no exported module with that name was found. " +
+            $"Available modules: {availableModules}.");
+    }
 }

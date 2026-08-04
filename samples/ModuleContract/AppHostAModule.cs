@@ -41,10 +41,13 @@ public static partial class AppHostAModule
                     new ModuleContainerExportOptions(
                         imageName: "modular-sample-api",
                         publishCommand: "podman",
-                        publishArguments: ["build", "--tag", "modular-sample-api:dev", "."])
-                    {
-                        ImageTag = "dev"
-                    },
+                        publishArguments:
+                        [
+                            "build",
+                            "--tag",
+                            ModuleContainerExportOptions.ImageReferencePlaceholder,
+                            "."
+                        ]),
                     container => container
                         .WithHttpEndpoint(targetPort: 8080, name: "http")
                         .WithHttpHealthCheck("/health"));
@@ -70,14 +73,17 @@ public static partial class AppHostAModule
                     .WithHttpEndpoint(targetPort: 80, name: "http")
                     .WithHttpHealthCheck("/"));
 
-            module.AddContainer(GeneratedStaticResourceName, "modular-sample-static", "dev")
+            module.AddContainer(GeneratedStaticResourceName, "modular-sample-static")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     imageName: "modular-sample-static",
                     publishCommand: "podman",
-                    publishArguments: ["build", "--tag", "modular-sample-static:dev", "."])
-                {
-                    ImageTag = "dev"
-                })
+                    publishArguments:
+                    [
+                        "build",
+                        "--tag",
+                        ModuleContainerExportOptions.ImageReferencePlaceholder,
+                        "."
+                    ]))
                 .Configure(container => container
                     .WithHttpEndpoint(targetPort: 80, name: "http")
                     .WithHttpHealthCheck("/"));

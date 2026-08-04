@@ -67,6 +67,7 @@ public static class DistributedApplicationModuleExtensions
         var module = new DistributedApplicationModule(name);
         moduleBuilder(new DistributedApplicationModuleBuilder(builder, module));
         module.Validate();
+        ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
         registry.AddModule(module);
         return module;
     }
@@ -131,25 +132,47 @@ public static class DistributedApplicationModuleExtensions
         var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
         var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
         var requiresRepository = module.ProjectDefinitions.Count > 0;
+        ValidateModuleConfiguration(module, moduleOptions);
+
+        var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
+        var repositoryResolution = autoCloneRepository &&
+            (requiresRepository || !string.IsNullOrWhiteSpace(repository))
+            ? ModuleRepositoryDiscovery.Resolve(
+                builder.AppHostDirectory,
+                module,
+                repository,
+                GetConfiguredValue(options.GitHubCliPath) ?? "gh")
+            : null;
         var repositoryParameter = imported &&
-            (configuredRepository is not null || (requiresRepository && string.IsNullOrWhiteSpace(repository)))
+            (configuredRepository is not null ||
+                (!autoCloneRepository && requiresRepository && string.IsNullOrWhiteSpace(repository)))
             ? GetOrCreateRepositoryParameter(
                 builder,
                 registry,
                 module.Name,
                 repositoryConfigurationKey)
             : null;
-        var repositoryPath = imported &&
-            (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
-            ? GetImportedRepositoryPath(builder, options, module.Name)
-            : GetLocalRepositoryPath(builder, module, repository);
+        var repositoryPath = repositoryResolution?.RepositoryPath ??
+            (imported &&
+                (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
+                ? GetImportedRepositoryPath(builder, options, module.Name)
+                : GetLocalRepositoryPath(builder, module, repository));
         var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
-        var updateRepository = moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories;
+        var updateRepository =
+            (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
+            repositoryResolution?.UsesSiblingLayout is not false;
+        var defaultImageTag = GetDefaultImageTag(builder, repositoryPath);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions);
+        if (repositoryResolution is not null || !imported)
+        {
+            ValidateProjectFiles(module, repositoryPath);
+        }
+
         ConfigureRepositorySynchronization(
             builder,
             registry,
+            module,
             repositoryPath,
             repositoryParameter is null ? repository : null,
             repositoryParameter,
@@ -167,6 +190,7 @@ public static class DistributedApplicationModuleExtensions
                         project,
                         repositoryPath,
                         repositoryDirty,
+                        defaultImageTag,
                         imported,
                         registry,
                         options,
@@ -181,6 +205,7 @@ public static class DistributedApplicationModuleExtensions
                         container,
                         repositoryPath,
                         repositoryDirty,
+                        defaultImageTag,
                         imported,
                         registry,
                         options,
@@ -206,6 +231,7 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModuleProject project,
         string repositoryPath,
         bool repositoryDirty,
+        string defaultImageTag,
         bool imported,
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
@@ -236,7 +262,7 @@ public static class DistributedApplicationModuleExtensions
             return;
         }
 
-        var effectiveExportOptions = ApplyImageOptions(export.Options, projectOptions);
+        var effectiveExportOptions = ApplyImageOptions(export.Options, projectOptions, defaultImageTag);
         var publishImage = projectOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
         var workingDirectoryRelativePath = effectiveExportOptions.WorkingDirectory ?? projectDirectoryRelativePath;
         var sourceWorkingDirectory = GetContainedPath(
@@ -295,6 +321,7 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModuleContainer definition,
         string repositoryPath,
         bool repositoryDirty,
+        string defaultImageTag,
         bool imported,
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
@@ -305,7 +332,7 @@ public static class DistributedApplicationModuleExtensions
         var containerOptions = moduleOptions?.FindContainer(definition.Name);
         var publishOptions = definition.ImagePublishOptions is null
             ? null
-            : ApplyImageOptions(definition.ImagePublishOptions, containerOptions);
+            : ApplyImageOptions(definition.ImagePublishOptions, containerOptions, defaultImageTag);
         ValidatePublishOverrides(definition, containerOptions);
         var publishImage = publishOptions is not null &&
             (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
@@ -441,10 +468,13 @@ public static class DistributedApplicationModuleExtensions
 
     private static ModuleContainerExportOptions ApplyImageOptions(
         ModuleContainerExportOptions declared,
-        DistributedApplicationModuleImageOptions? configured)
+        DistributedApplicationModuleImageOptions? configured,
+        string defaultImageTag)
     {
         var imageName = GetConfiguredValue(configured?.ImageName) ?? declared.ImageName;
-        var imageTag = GetConfiguredValue(configured?.ImageTag) ?? declared.ImageTag;
+        var imageTag = GetConfiguredValue(configured?.ImageTag) ??
+            GetConfiguredValue(declared.ImageTag) ??
+            defaultImageTag;
         var publishCommand = GetConfiguredValue(configured?.PublishCommand) ?? declared.PublishCommand;
         var publishArguments = configured?.PublishArguments?.ToArray() ?? declared.PublishArguments.ToArray();
 
@@ -533,6 +563,7 @@ public static class DistributedApplicationModuleExtensions
     private static void ConfigureRepositorySynchronization(
         IDistributedApplicationBuilder builder,
         ModuleApplicationRegistry registry,
+        DistributedApplicationModule module,
         string repositoryPath,
         string? repository,
         IResourceBuilder<ParameterResource>? repositoryParameter,
@@ -562,6 +593,8 @@ public static class DistributedApplicationModuleExtensions
                     resolvedRepository,
                     updateRepository,
                     cancellationToken)).ConfigureAwait(false);
+
+            ValidateProjectFiles(module, repositoryPath);
         });
     }
 
@@ -580,6 +613,11 @@ public static class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(options);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
+        builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
+        {
+            registry.ValidateConfiguredModules();
+            return Task.CompletedTask;
+        });
         return registry;
     }
 
@@ -676,6 +714,78 @@ public static class DistributedApplicationModuleExtensions
                     $"Cannot materialize module '{module.Name}' because resource '{resourceName}' already exists{tracked}.");
             }
         }
+    }
+
+    private static void ValidateModuleConfiguration(
+        DistributedApplicationModule module,
+        DistributedApplicationModuleOptions? configured)
+    {
+        if (configured is null)
+        {
+            return;
+        }
+
+        var projectNames = module.ProjectDefinitions
+            .Select(project => project.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var containerNames = module.ContainerDefinitions
+            .Select(container => container.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var missingProject = configured.Projects.Keys.FirstOrDefault(name => !projectNames.Contains(name));
+        if (missingProject is not null)
+        {
+            throw new InvalidOperationException(
+                $"Configuration for module '{module.Name}' references project service '{missingProject}', but no " +
+                $"exported project with that name was found. Available projects: {FormatNames(projectNames)}.");
+        }
+
+        var missingContainer = configured.Containers.Keys.FirstOrDefault(name => !containerNames.Contains(name));
+        if (missingContainer is not null)
+        {
+            throw new InvalidOperationException(
+                $"Configuration for module '{module.Name}' references container service '{missingContainer}', but no " +
+                $"exported container with that name was found. Available containers: {FormatNames(containerNames)}.");
+        }
+    }
+
+    private static void ValidateProjectFiles(
+        DistributedApplicationModule module,
+        string repositoryPath)
+    {
+        foreach (var project in module.ProjectDefinitions)
+        {
+            var relativePath = Path.GetRelativePath(project.SourceRepositoryRoot, project.ProjectPath);
+            var materializedPath = GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
+            if (!File.Exists(materializedPath))
+            {
+                throw new InvalidOperationException(
+                    $"Module '{module.Name}' declares project service '{project.Name}', but its project file was not " +
+                    $"found at '{materializedPath}' in discovered repository '{repositoryPath}'.");
+            }
+        }
+    }
+
+    private static string GetDefaultImageTag(
+        IDistributedApplicationBuilder builder,
+        string repositoryPath)
+    {
+        var branch = RepositoryInspector.TryGetBranch(repositoryPath);
+        if (branch is null &&
+            RepositoryInspector.TryFindRepositoryRoot(builder.AppHostDirectory, out var appHostRepositoryRoot))
+        {
+            branch = RepositoryInspector.TryGetBranch(appHostRepositoryRoot);
+        }
+
+        branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF"));
+        branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
+        return ModuleImageTag.FromBranch(branch);
+    }
+
+    private static string FormatNames(IEnumerable<string> names)
+    {
+        var values = names.Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        return values.Length == 0 ? "(none)" : string.Join(", ", values.Select(name => $"'{name}'"));
     }
 
     private static bool RequiresImagePublishInstaller(

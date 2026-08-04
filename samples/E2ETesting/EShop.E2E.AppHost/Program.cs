@@ -3,6 +3,9 @@ using EShop.Modules;
 
 var builder = DistributedApplication.CreateBuilder(args);
 var sampleRoot = Path.GetFullPath("..", builder.AppHostDirectory);
+builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
+    "gh-is-not-needed-for-same-repository-modules";
 
 var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);

@@ -8,18 +8,30 @@ internal static class RepositoryInspector
 {
     public static string FindRepositoryRoot(string projectPath)
     {
+        if (TryFindRepositoryRoot(projectPath, out var root))
+        {
+            return root;
+        }
+
         var startDirectory = Directory.Exists(projectPath)
             ? projectPath
             : Path.GetDirectoryName(projectPath)
                 ?? throw new InvalidOperationException($"Unable to determine the directory for '{projectPath}'.");
+        return Path.GetFullPath(startDirectory);
+    }
 
+    public static bool TryFindRepositoryRoot(string path, out string repositoryRoot)
+    {
+        var startDirectory = GetWorkingDirectory(path);
         if (TryRunGit(startDirectory, ["rev-parse", "--show-toplevel"], out var root) &&
             !string.IsNullOrWhiteSpace(root))
         {
-            return Path.GetFullPath(root.Trim());
+            repositoryRoot = Path.GetFullPath(root.Trim());
+            return true;
         }
 
-        return Path.GetFullPath(startDirectory);
+        repositoryRoot = string.Empty;
+        return false;
     }
 
     public static string? TryGetRemote(string repositoryPath)
@@ -41,6 +53,30 @@ internal static class RepositoryInspector
         return IsGitRepository(repositoryPath) &&
                TryRunGit(repositoryPath, ["status", "--porcelain", "--untracked-files=normal"], out var status) &&
                !string.IsNullOrWhiteSpace(status);
+    }
+
+    public static string? TryGetBranch(string repositoryPath)
+    {
+        return TryRunGit(repositoryPath, ["branch", "--show-current"], out var branch)
+            ? branch.Trim() is { Length: > 0 } value ? value : null
+            : null;
+    }
+
+    private static string GetWorkingDirectory(string path)
+    {
+        var candidate = Path.GetFullPath(path);
+        while (!Directory.Exists(candidate))
+        {
+            var parent = Path.GetDirectoryName(candidate);
+            if (parent is null || string.Equals(parent, candidate, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Unable to determine an existing directory for '{path}'.");
+            }
+
+            candidate = parent;
+        }
+
+        return candidate;
     }
 
     private static bool TryRunGit(string workingDirectory, IReadOnlyList<string> arguments, out string output)
@@ -71,6 +107,308 @@ internal static class RepositoryInspector
         {
             return false;
         }
+    }
+}
+
+internal sealed record RepositoryCloneCommand(
+    string Executable,
+    IReadOnlyList<string> Arguments,
+    string WorkingDirectory);
+
+internal static class GitHubRepositoryCloner
+{
+    public static bool RefersToSameRepository(string first, string second, string baseDirectory)
+    {
+        var firstIdentity = GetRemoteIdentity(first, baseDirectory);
+        var secondIdentity = GetRemoteIdentity(second, baseDirectory);
+        return firstIdentity is not null && secondIdentity is not null &&
+            string.Equals(firstIdentity, secondIdentity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsRemoteRepository(string repository, string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+
+        if (Uri.TryCreate(repository, UriKind.Absolute, out var uri))
+        {
+            return !uri.IsFile;
+        }
+
+        if (Path.IsPathRooted(repository) || repository.StartsWith('.') ||
+            Directory.Exists(Path.GetFullPath(repository, baseDirectory)))
+        {
+            return false;
+        }
+
+        return repository.Contains('/', StringComparison.Ordinal) ||
+            repository.Contains(':', StringComparison.Ordinal);
+    }
+
+    public static RepositoryCloneCommand CreateCommand(
+        string executable,
+        string repository,
+        string repositoryPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+
+        var workingDirectory = Path.GetDirectoryName(repositoryPath)
+            ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'.");
+        return new RepositoryCloneCommand(
+            executable,
+            ["repo", "clone", repository, repositoryPath, "--", "--recurse-submodules"],
+            workingDirectory);
+    }
+
+    public static void Clone(string executable, string repository, string repositoryPath)
+    {
+        var command = CreateCommand(executable, repository, repositoryPath);
+        Directory.CreateDirectory(command.WorkingDirectory);
+
+        BufferedCommandResult result;
+        try
+        {
+            result = CliCommand.Wrap(command.Executable)
+                .WithArguments(command.Arguments)
+                .WithWorkingDirectory(command.WorkingDirectory)
+                .WithValidation(CommandResultValidation.None)
+                .ExecuteBufferedAsync()
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or IOException)
+        {
+            throw new InvalidOperationException(
+                $"Automatic module cloning requires the GitHub CLI executable '{executable}'. " +
+                $"Install GitHub CLI or disable {nameof(ModularAppHostsOptions.AutoCloneRepositories)}.",
+                exception);
+        }
+
+        if (!result.IsSuccess)
+        {
+            var error = string.IsNullOrWhiteSpace(result.StandardError)
+                ? result.StandardOutput
+                : result.StandardError;
+            throw new InvalidOperationException(
+                $"GitHub CLI failed to clone module repository '{repository}' to '{repositoryPath}' " +
+                $"with exit code {result.ExitCode}: {error.Trim()}");
+        }
+
+        if (!RepositoryInspector.IsGitRepository(repositoryPath))
+        {
+            throw new InvalidOperationException(
+                $"GitHub CLI reported success, but '{repositoryPath}' is not a Git repository.");
+        }
+    }
+
+    public static string GetRepositoryDirectoryName(string repository)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        var value = repository.Trim().TrimEnd('/');
+        var separator = value.LastIndexOfAny(['/', ':']);
+        var name = separator >= 0 ? value[(separator + 1)..] : value;
+        if (name.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            name = name[..^4];
+        }
+
+        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+            name.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            name.Contains(Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Unable to infer a sibling directory name from module repository '{repository}'.");
+        }
+
+        return name;
+    }
+
+    private static string? GetRemoteIdentity(string repository, string baseDirectory)
+    {
+        if (!IsRemoteRepository(repository, baseDirectory))
+        {
+            return null;
+        }
+
+        var value = repository.Trim().TrimEnd('/');
+        string identity;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            identity = $"{uri.Host}/{uri.AbsolutePath.Trim('/')}";
+        }
+        else if (value.IndexOf(':', StringComparison.Ordinal) is var colon && colon >= 0)
+        {
+            var hostStart = value.LastIndexOf('@', colon);
+            var host = value[(hostStart >= 0 ? hostStart + 1 : 0)..colon];
+            identity = $"{host}/{value[(colon + 1)..].Trim('/')}";
+        }
+        else
+        {
+            identity = $"github.com/{value.Trim('/')}";
+        }
+
+        return identity.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? identity[..^4]
+            : identity;
+    }
+}
+
+internal sealed record ModuleRepositoryResolution(
+    string RepositoryPath,
+    bool UsesSiblingLayout);
+
+internal static class ModuleRepositoryDiscovery
+{
+    public static ModuleRepositoryResolution Resolve(
+        string appHostDirectory,
+        DistributedApplicationModule module,
+        string? repository,
+        string githubCliPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
+        ArgumentNullException.ThrowIfNull(module);
+
+        if (!RepositoryInspector.TryFindRepositoryRoot(appHostDirectory, out var appHostRepositoryRoot))
+        {
+            throw new InvalidOperationException(
+                $"Automatic module discovery requires AppHost directory '{appHostDirectory}' to be inside a Git repository.");
+        }
+
+        var projectRepositoryRoot = module.ProjectDefinitions.Count == 0
+            ? null
+            : module.ProjectDefinitions[0].SourceRepositoryRoot;
+        if (PathsEqual(projectRepositoryRoot, appHostRepositoryRoot))
+        {
+            return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
+        }
+
+        if (TryGetSameRepositoryLocalPath(
+            repository,
+            appHostDirectory,
+            appHostRepositoryRoot,
+            out var sameRepositoryPath))
+        {
+            return new ModuleRepositoryResolution(sameRepositoryPath, UsesSiblingLayout: false);
+        }
+
+        var appHostRemote = RepositoryInspector.TryGetRemote(appHostRepositoryRoot);
+        if (!string.IsNullOrWhiteSpace(repository) && !string.IsNullOrWhiteSpace(appHostRemote) &&
+            GitHubRepositoryCloner.RefersToSameRepository(repository, appHostRemote, appHostDirectory))
+        {
+            return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
+        }
+
+        var siblingParent = Path.GetDirectoryName(appHostRepositoryRoot)
+            ?? throw new InvalidOperationException(
+                $"Unable to determine the parent of AppHost repository '{appHostRepositoryRoot}'.");
+        var siblingPath = GetSiblingPath(
+            appHostDirectory,
+            siblingParent,
+            projectRepositoryRoot,
+            repository);
+
+        EnsureSiblingPath(appHostRepositoryRoot, siblingParent, siblingPath, module.Name);
+
+        if (Directory.Exists(siblingPath))
+        {
+            if (!RepositoryInspector.IsGitRepository(siblingPath))
+            {
+                throw new InvalidOperationException(
+                    $"Discovered module '{module.Name}' at '{siblingPath}', but that directory is not a Git repository.");
+            }
+
+            return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
+        }
+
+        if (string.IsNullOrWhiteSpace(repository) || IsLocalRepository(repository, appHostDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Module '{module.Name}' was not found at sibling path '{siblingPath}'. " +
+                $"Automatic cloning requires a GitHub repository configured through " +
+                $"{DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(module.Name)} or WithRepository().");
+        }
+
+        GitHubRepositoryCloner.Clone(githubCliPath, repository, siblingPath);
+        return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
+    }
+
+    private static string GetSiblingPath(
+        string appHostDirectory,
+        string siblingParent,
+        string? projectRepositoryRoot,
+        string? repository)
+    {
+        if (!string.IsNullOrWhiteSpace(projectRepositoryRoot) &&
+            PathsEqual(Path.GetDirectoryName(projectRepositoryRoot), siblingParent))
+        {
+            return Path.GetFullPath(projectRepositoryRoot);
+        }
+
+        if (!string.IsNullOrWhiteSpace(repository) && IsLocalRepository(repository, appHostDirectory))
+        {
+            return Path.GetFullPath(repository, appHostDirectory);
+        }
+
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            return projectRepositoryRoot is null
+                ? Path.Combine(siblingParent, "module")
+                : Path.GetFullPath(projectRepositoryRoot);
+        }
+
+        return Path.Combine(siblingParent, GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
+    }
+
+    private static void EnsureSiblingPath(
+        string appHostRepositoryRoot,
+        string siblingParent,
+        string siblingPath,
+        string moduleName)
+    {
+        var actualParent = Path.GetDirectoryName(Path.GetFullPath(siblingPath));
+        if (PathsEqual(siblingPath, appHostRepositoryRoot) || !PathsEqual(actualParent, siblingParent))
+        {
+            throw new InvalidOperationException(
+                $"Module '{moduleName}' resolved to '{siblingPath}'. Automatic discovery only accepts the AppHost " +
+                $"Git repository '{appHostRepositoryRoot}' or one direct sibling under '{siblingParent}'.");
+        }
+    }
+
+    private static bool TryGetSameRepositoryLocalPath(
+        string? repository,
+        string appHostDirectory,
+        string expectedRepositoryRoot,
+        out string localPath)
+    {
+        localPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(repository) || !IsLocalRepository(repository, appHostDirectory))
+        {
+            return false;
+        }
+
+        localPath = Path.GetFullPath(repository, appHostDirectory);
+        return RepositoryInspector.TryFindRepositoryRoot(localPath, out var repositoryRoot) &&
+            PathsEqual(repositoryRoot, expectedRepositoryRoot);
+    }
+
+    private static bool IsLocalRepository(string repository, string appHostDirectory)
+    {
+        return !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory);
+    }
+
+    private static bool PathsEqual(string? first, string? second)
+    {
+        return first is not null && second is not null &&
+            string.Equals(
+                Path.GetFullPath(first).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(second).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
     }
 }
 

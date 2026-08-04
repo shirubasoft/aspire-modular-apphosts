@@ -63,6 +63,8 @@ builder.Build().Run();
 
 For a repository-backed module, use `WithRepository(...)` in its contract and materialize it with `CatalogModule.ImportModule(builder)`. The module guide covers repository-aware factories, projects, managed checkouts, and image publishing.
 
+For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered without a clone; a missing direct sibling is cloned with GitHub CLI. Published module images default to a sanitized branch tag and add `-dirty` when their source worktree has changes. The module guide documents the layout, configuration, and validation behavior.
+
 Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
 
 ```json

@@ -83,13 +83,30 @@ internal sealed class DistributedApplicationModuleBuilder(
             return null;
         }
 
-        if (Uri.TryCreate(repository, UriKind.Absolute, out var repositoryUri) && !repositoryUri.IsFile)
+        string candidate;
+        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
         {
-            return null;
+            if (!RepositoryInspector.TryFindRepositoryRoot(appHostDirectory, out var appHostRepositoryRoot))
+            {
+                return null;
+            }
+
+            var repositoryParent = Path.GetDirectoryName(appHostRepositoryRoot);
+            if (repositoryParent is null)
+            {
+                return null;
+            }
+
+            candidate = Path.Combine(
+                repositoryParent,
+                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
+        }
+        else
+        {
+            candidate = Path.GetFullPath(repository, appHostDirectory);
         }
 
-        var candidate = Path.GetFullPath(repository, appHostDirectory);
-        return Directory.Exists(candidate) && IsContainedBy(candidate, projectPath)
+        return IsContainedBy(candidate, projectPath)
             ? candidate
             : null;
     }
@@ -140,7 +157,6 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.PublishCommand);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageTag);
 
         return new ModuleContainerExportOptions(
             options.ImageName,
@@ -171,10 +187,11 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
     {
         var copiedOptions = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
         if (!string.Equals(container.Image, copiedOptions.ImageName, StringComparison.Ordinal) ||
-            !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal))
+            (!string.IsNullOrWhiteSpace(copiedOptions.ImageTag) &&
+                !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal)))
         {
             throw new ArgumentException(
-                $"The publish image '{copiedOptions.ImageName}:{copiedOptions.ImageTag}' must match " +
+                $"The explicitly configured publish image '{copiedOptions.ImageName}:{copiedOptions.ImageTag}' must match " +
                 $"the container image '{container.Image}:{container.Tag}'.",
                 nameof(options));
         }

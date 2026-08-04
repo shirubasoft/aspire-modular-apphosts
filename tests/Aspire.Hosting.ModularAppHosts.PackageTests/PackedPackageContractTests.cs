@@ -68,6 +68,17 @@ public sealed class PackedPackageContractTests
             {
                 public static System.Type GeneratedModuleType => typeof(OrdersModule.Module);
 
+                public static ModularAppHostsOptions AutoCloneOptions => new()
+                {
+                    AutoCloneRepositories = true,
+                    GitHubCliPath = "gh"
+                };
+
+                public static DistributedApplicationModuleOptions ModuleOptions => new()
+                {
+                    AutoCloneRepository = true
+                };
+
                 public static IResourceBuilder<IResourceWithEndpoints> GetApi(OrdersModule.Module module) =>
                     module.OrdersApi;
             }

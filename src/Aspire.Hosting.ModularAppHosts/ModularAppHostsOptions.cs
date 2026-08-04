@@ -19,6 +19,15 @@ public sealed class ModularAppHostsOptions
     /// </summary>
     public string? RepositoryBasePath { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether missing module repositories are cloned beside the current AppHost Git repository.
+    /// This opt-in convention uses the GitHub CLI and does not apply to modules in the AppHost repository.
+    /// </summary>
+    public bool AutoCloneRepositories { get; set; }
+
+    /// <summary>Gets or sets the GitHub CLI executable used by automatic sibling clones.</summary>
+    public string GitHubCliPath { get; set; } = "gh";
+
     /// <summary>Gets or sets whether existing clean imported repositories are fast-forwarded before startup.</summary>
     public bool UpdateImportedRepositories { get; set; } = true;
 
@@ -54,6 +63,11 @@ public sealed class DistributedApplicationModuleOptions
     /// represented by an Aspire parameter; values set in code are used directly.
     /// </summary>
     public string? Repository { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether a missing repository for this module is cloned beside the AppHost repository.
+    /// </summary>
+    public bool? AutoCloneRepository { get; set; }
 
     /// <summary>Gets or sets whether an existing clean checkout is fast-forwarded before startup.</summary>
     public bool? UpdateRepository { get; set; }
