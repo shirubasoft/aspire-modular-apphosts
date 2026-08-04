@@ -10,7 +10,7 @@ public interface IDistributedApplicationModuleCatalog
     IReadOnlyCollection<IDistributedApplicationModule> Modules { get; }
 
     /// <summary>Looks up an exported module by name.</summary>
-    bool TryGetModule(string name, out IDistributedApplicationModule? module);
+    bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule);
 }
 
 internal sealed class ModuleApplicationRegistry : IDistributedApplicationModuleCatalog
@@ -29,10 +29,10 @@ internal sealed class ModuleApplicationRegistry : IDistributedApplicationModuleC
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 
-    public bool TryGetModule(string name, out IDistributedApplicationModule? module)
+    public bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule)
     {
         var found = _modules.TryGetValue(name, out var typedModule);
-        module = typedModule;
+        exportedModule = typedModule;
         return found;
     }
 

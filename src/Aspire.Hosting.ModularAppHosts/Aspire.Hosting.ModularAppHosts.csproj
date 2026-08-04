@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Title>Shirubasoft Aspire Modular AppHosts</Title>
+    <Authors>Shirubasoft</Authors>
     <Description>Composable module import and export support for Aspire AppHosts.</Description>
     <AssemblyName>Shirubasoft.Aspire.ModularAppHosts</AssemblyName>
     <PackageId>Shirubasoft.Aspire.ModularAppHosts</PackageId>
@@ -8,7 +10,7 @@
     <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Shirubasoft/aspire-modular-apphosts.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting" />

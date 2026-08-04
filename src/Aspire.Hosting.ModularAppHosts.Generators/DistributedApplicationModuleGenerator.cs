@@ -12,6 +12,9 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Aspire.Hosting.ModularAppHosts.Generators;
 
+/// <summary>
+/// Generates strongly typed accessors for resources declared by distributed application modules.
+/// </summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerator
 {
@@ -78,6 +81,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         "GetResource"
     };
 
+    /// <summary>Registers the incremental pipeline that discovers and generates module accessors.</summary>
+    /// <param name="context">The initialization context used to register generator inputs and outputs.</param>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var modules = context.SyntaxProvider.ForAttributeWithMetadataName(
