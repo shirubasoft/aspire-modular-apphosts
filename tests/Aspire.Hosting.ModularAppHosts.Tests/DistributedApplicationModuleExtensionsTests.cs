@@ -299,6 +299,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         publishArguments[0] = "mutated";
         options.ImageTag = "changed";
         options.WorkingDirectory = "missing";
+
         builder.Add(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
@@ -307,6 +308,134 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal("dev", image.Tag);
         Assert.Equal(["publish", "Orders.Api.csproj"], installer.PublishArguments);
         Assert.Equal(repository.Path, installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public void Container_image_publish_command_uses_a_dirty_tag_and_always_adds_an_installer()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+
+        var module = builder.ExportModule("generated", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("generated-static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "podman",
+                    "build",
+                    "--tag",
+                    "modular-static:dev",
+                    ".")
+                {
+                    ImageTag = "dev"
+                });
+        });
+
+        builder.Add(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var wait = Assert.Single(container.Annotations.OfType<WaitAnnotation>());
+
+        Assert.Equal("modular-static", image.Image);
+        Assert.Equal("dev-dirty", image.Tag);
+        Assert.Equal("modular-static:dev-dirty", installer.ImageReference);
+        Assert.True(installer.RepositoryDirty);
+        Assert.Equal(
+            ["build", "--tag", "modular-static:dev-dirty", "."],
+            installer.PublishArguments);
+        Assert.Equal(repository.Path, installer.WorkingDirectory);
+        Assert.Same(installer, wait.Resource);
+    }
+
+    [Fact]
+    public void Container_image_publish_command_must_match_the_declared_container_image()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            builder.ExportModule("invalid", definition =>
+                definition.AddContainer("static", "declared", "dev")
+                    .WithImagePublishCommand(new ModuleContainerExportOptions(
+                        "published",
+                        "podman",
+                        "build")
+                    {
+                        ImageTag = "dev"
+                    })));
+
+        Assert.Contains("published:dev", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("declared:dev", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Clean_image_publish_plan_skips_a_tag_that_already_exists()
+    {
+        var options = new ModuleContainerExportOptions(
+            "modular-static",
+            "podman",
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
+        {
+            ImageTag = "dev"
+        };
+
+        var plan = ModuleImagePublishPlan.Create(options, repositoryDirty: false, imageReference =>
+        {
+            Assert.Equal("modular-static:dev", imageReference);
+            return true;
+        });
+
+        Assert.False(plan.ShouldPublish);
+        Assert.False(plan.RepositoryDirty);
+        Assert.Equal("dev", plan.ImageTag);
+        Assert.Equal("modular-static:dev", plan.ImageReference);
+        Assert.Equal(["build", "--tag", "modular-static:dev", "."], plan.PublishArguments);
+    }
+
+    [Fact]
+    public void Dirty_image_publish_plan_always_publishes_and_resolves_image_placeholders()
+    {
+        var options = new ModuleContainerExportOptions(
+            "modular-static",
+            "podman",
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            "--label",
+            $"name={ModuleContainerExportOptions.ImageNamePlaceholder}",
+            "--label",
+            $"tag={ModuleContainerExportOptions.ImageTagPlaceholder}")
+        {
+            ImageTag = "dev"
+        };
+
+        var plan = ModuleImagePublishPlan.Create(
+            options,
+            repositoryDirty: true,
+            _ => throw new InvalidOperationException("Dirty images must not be checked before publishing."));
+
+        Assert.True(plan.ShouldPublish);
+        Assert.True(plan.RepositoryDirty);
+        Assert.Equal("dev-dirty", plan.ImageTag);
+        Assert.Equal("modular-static:dev-dirty", plan.ImageReference);
+        Assert.Equal(
+            [
+                "build",
+                "--tag",
+                "modular-static:dev-dirty",
+                "--label",
+                "name=modular-static",
+                "--label",
+                "tag=dev-dirty"
+            ],
+            plan.PublishArguments);
     }
 
     [Fact]
@@ -462,6 +591,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Directory.CreateDirectory(projectDirectory);
         Directory.CreateDirectory(consumerDirectory);
         var projectPath = Path.Combine(projectDirectory, "Api.csproj");
+        var imageName = $"module-test-api-{Guid.NewGuid():N}";
         File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
 
         var builder = CreateBuilder(consumerDirectory);
@@ -470,7 +600,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         {
             module.WithRepository(sourceRoot);
             module.AddProject("api", projectPath)
-                .ExportAsContainer("api", "podman", ["build", "."]);
+                .ExportAsContainer(imageName, "podman", ["build", "."]);
         });
 
         builder.ImportModule("AppHostA");

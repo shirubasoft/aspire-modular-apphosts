@@ -6,7 +6,7 @@
 dotnet add package Shirubasoft.Aspire.ModularAppHosts
 ```
 
-The extension deliberately does not infer how an application image should be produced. Every `ExportAsContainer` call supplies the image name and the exact publish executable and arguments. The one-shot installer runs that command before the corresponding container starts.
+The extension deliberately does not infer how an application image should be produced. Every image export supplies the image name and the exact publish executable and arguments. A one-shot installer runs that command before the corresponding container starts when the repository is dirty or the clean image tag does not exist locally.
 
 ## Usage
 
@@ -30,8 +30,8 @@ var orders = builder.ExportModule("orders", module =>
                     "publish",
                     "Orders.Api.csproj",
                     "-t:PublishContainer",
-                    "-p:ContainerRepository=orders-api",
-                    "-p:ContainerImageTag=dev"
+                    $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
+                    $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"
                 ])
             {
                 ImageTag = "dev"
@@ -40,6 +40,16 @@ var orders = builder.ExportModule("orders", module =>
 
     module.AddContainer("orders-cache", "redis", "8-alpine")
         .Configure(container => container.WithEndpoint(targetPort: 6379, name: "tcp"));
+
+    module.AddContainer("orders-static", "orders-static", "dev")
+        .WithImagePublishCommand(new ModuleContainerExportOptions(
+            imageName: "orders-static",
+            publishCommand: "podman",
+            publishArguments: ["build", "--tag", "orders-static:dev", "."])
+        {
+            ImageTag = "dev"
+        })
+        .Configure(container => container.WithHttpEndpoint(targetPort: 80, name: "http"));
 
     module.AddResource<ParameterResource>("orders-region", context =>
         context.ApplicationBuilder.AddParameter(
@@ -136,17 +146,21 @@ Factories run in declaration order only when the module is added or imported. `I
 
 Modules made entirely from repository-independent generic resources or existing images can be imported without `WithRepository`. Configure a repository when factories use source files or when the module exports projects.
 
-The publish command must create the exact `ImageName:ImageTag` configured on `ModuleContainerExportOptions`. `ASPIRE_MODULE_IMAGE` is also provided to the command as an environment variable for scripts that prefer to consume the image identity that way.
+`ExportAsContainer` publishes project images, while `WithImagePublishCommand` adds the same behavior to an `AddContainer` resource. In both cases, clean repositories use `ImageName:ImageTag`; dirty repositories use `ImageName:ImageTag-dirty` and always rebuild.
 
-`WorkingDirectory` is relative to the repository root and defaults to the project directory. Arguments are passed directly to the executable; the extension does not invoke a shell or parse a command line string.
+Publish arguments can use `{image}`, `{image-name}`, and `{image-tag}` through the constants on `ModuleContainerExportOptions`. The extension resolves those placeholders to the effective clean or dirty image identity. For compatibility with direct container-runtime commands, an argument exactly matching the configured clean image reference is also changed to the dirty reference. `ASPIRE_MODULE_IMAGE` contains the same effective reference for scripts that prefer an environment variable.
+
+The publish command must create the effective image reference. Its executable and all arguments other than the documented image substitutions remain caller-supplied; the extension does not infer how .NET or any other application type should be published.
+
+`WorkingDirectory` is relative to the repository root. It defaults to the project directory for `ExportAsContainer` and to the repository root for `WithImagePublishCommand`. Arguments are passed directly to the executable; the extension does not invoke a shell or parse a command line string.
 
 ## Repository behavior
 
 - `ExportModule` registers an inert definition in a catalog held by `IServiceCollection`.
 - `Add(module)` materializes local resources and does not pull the developer's worktree.
 - `ImportModule(name)` clones or fast-forward-pulls the configured repository before Aspire starts resources.
-- A dirty imported worktree is never pulled or reset. Its service installer still runs the supplied publish command, so dirty images are always rebuilt.
-- The publish installer runs on every AppHost session, including clean worktrees. Build caching is entirely controlled by the supplied command.
+- A dirty imported worktree is never pulled or reset. Its service installers use the `-dirty` image-tag suffix and run on every AppHost session.
+- A clean image is published only when its configured local tag does not already exist.
 - The container waits for its installer to exit successfully. Installers are excluded from deployment manifests.
 - Repeated export, add, and import calls are deduplicated by the service-collection-backed module registry.
 
@@ -156,9 +170,9 @@ Repository synchronization is shared across services in the same module, while e
 
 [`samples`](samples/README.md) contains a complete runnable example:
 
-- AppHost A exports a .NET project as `modular-sample-api:dev` using an explicit Podman command and includes one of every public core top-level Aspire resource type.
-- AppHost B imports the complete module and adds a gateway container with references and health dependencies on the two running containers.
-- The gateway's `/health` endpoint probes both imported services, so it becomes healthy only when both dependencies respond successfully.
+- AppHost A exports a .NET project and a Dockerfile-backed container image using explicit Podman commands, and includes one of every public core top-level Aspire resource type.
+- AppHost B imports the complete module and adds a gateway container with references and health dependencies on all three running containers.
+- The gateway's `/health` endpoint probes all three imported services, so it becomes healthy only when every dependency responds successfully.
 
 ## Repository base location parameter
 

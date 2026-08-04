@@ -10,6 +10,7 @@ _ = module.Api;
 _ = module.Project;
 _ = module.CSharpApp;
 _ = module.Static;
+_ = module.GeneratedStatic;
 _ = module.Executable;
 _ = module.DotnetTool;
 _ = module.Message;

@@ -123,12 +123,18 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
         ModuleContainerExportOptions options,
         Action<IResourceBuilder<ContainerResource>>? configureContainer = null)
     {
+        project.SetExport(new ModuleContainerExport(CopyOptions(options), configureContainer));
+        return this;
+    }
+
+    internal static ModuleContainerExportOptions CopyOptions(ModuleContainerExportOptions options)
+    {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.PublishCommand);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageTag);
 
-        var copiedOptions = new ModuleContainerExportOptions(
+        return new ModuleContainerExportOptions(
             options.ImageName,
             options.PublishCommand,
             options.PublishArguments.ToArray())
@@ -136,9 +142,6 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
             ImageTag = options.ImageTag,
             WorkingDirectory = options.WorkingDirectory
         };
-
-        project.SetExport(new ModuleContainerExport(copiedOptions, configureContainer));
-        return this;
     }
 }
 
@@ -152,6 +155,23 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
     {
         ArgumentNullException.ThrowIfNull(configureContainer);
         container.ConfigureContainer += configureContainer;
+        return this;
+    }
+
+    public IDistributedApplicationModuleContainerBuilder WithImagePublishCommand(
+        ModuleContainerExportOptions options)
+    {
+        var copiedOptions = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
+        if (!string.Equals(container.Image, copiedOptions.ImageName, StringComparison.Ordinal) ||
+            !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"The publish image '{copiedOptions.ImageName}:{copiedOptions.ImageTag}' must match " +
+                $"the container image '{container.Image}:{container.Tag}'.",
+                nameof(options));
+        }
+
+        container.SetImagePublishOptions(copiedOptions);
         return this;
     }
 }

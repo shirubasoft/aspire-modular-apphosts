@@ -163,6 +163,19 @@ internal sealed class DistributedApplicationModuleContainer(
     public string Tag { get; } = tag;
 
     internal Action<IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
+
+    internal ModuleContainerExportOptions? ImagePublishOptions { get; private set; }
+
+    internal void SetImagePublishOptions(ModuleContainerExportOptions options)
+    {
+        if (ImagePublishOptions is not null)
+        {
+            throw new InvalidOperationException(
+                $"Container '{Name}' already has an image publish command.");
+        }
+
+        ImagePublishOptions = options;
+    }
 }
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource

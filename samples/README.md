@@ -8,6 +8,7 @@ AppHost A
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
 ├── sample-static (ContainerResource, nginx:alpine)
+├── sample-generated-static ── podman build ──> modular-sample-static:dev
 ├── sample-executable (ExecutableResource, explicit start)
 ├── sample-dotnet-tool (DotnetToolResource, explicit start)
 ├── sample-message (ParameterResource)
@@ -21,20 +22,21 @@ AppHost A
                          ▼
 AppHost B imports every resource
 └── dependency-gateway container
-    ├── references both HTTP endpoints
-    ├── waits for both resources to be healthy
-    └── reports healthy only after probing both upstreams
+    ├── references all three HTTP endpoints
+    ├── waits for all three resources to be healthy
+    └── reports healthy only after probing all three upstreams
 ```
 
-The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project export supplies the exact command that must produce the configured image:
+The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project and generated-container exports supply the exact commands that produce their configured images:
 
 ```text
 podman build --tag modular-sample-api:dev .
+podman build --tag modular-sample-static:dev .
 ```
 
-The extension does not generate or alter this command.
+For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
 
-`AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
+`AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `GeneratedStatic`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
 
 ## Prerequisites
 
@@ -49,7 +51,7 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module. `sample-api-installer` builds the project image before `sample-api` starts, while `sample-static` runs directly from `nginx:alpine`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module. `sample-api-installer` builds the project image and `sample-generated-static-installer` builds the Dockerfile-based static image before their containers start. `sample-static` continues to run directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild `dev-dirty` images. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
@@ -65,9 +67,10 @@ AppHost B points `module-repository-base-location` at the sample source director
 ```bash
 aspire wait sample-api
 aspire wait sample-static
+aspire wait sample-generated-static
 aspire wait sample-message
 aspire wait dependency-gateway
 aspire describe --include-hidden
 ```
 
-The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to both imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while both upstreams respond successfully.
+The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.

@@ -104,6 +104,10 @@ public interface IDistributedApplicationModuleContainerBuilder
     /// <summary>Applies Aspire container-resource configuration when the module is materialized.</summary>
     IDistributedApplicationModuleContainerBuilder Configure(
         Action<IResourceBuilder<ContainerResource>> configureContainer);
+
+    /// <summary>Publishes the container image with an explicit command before the container starts.</summary>
+    IDistributedApplicationModuleContainerBuilder WithImagePublishCommand(
+        ModuleContainerExportOptions options);
 }
 
 /// <summary>A project contained in a distributed application module.</summary>
@@ -141,16 +145,29 @@ public sealed class ModuleContainerExportOptions(
     string publishCommand,
     params string[] publishArguments)
 {
+    /// <summary>Placeholder for the effective image name in a publish argument.</summary>
+    public const string ImageNamePlaceholder = "{image-name}";
+
+    /// <summary>Placeholder for the effective image tag in a publish argument.</summary>
+    public const string ImageTagPlaceholder = "{image-tag}";
+
+    /// <summary>Placeholder for the complete effective image reference in a publish argument.</summary>
+    public const string ImageReferencePlaceholder = "{image}";
+
     /// <summary>Gets the image name that the publish command must create.</summary>
     public string ImageName { get; } = imageName;
 
     /// <summary>Gets the executable invoked by the service installer.</summary>
     public string PublishCommand { get; } = publishCommand;
 
-    /// <summary>Gets the arguments passed verbatim to <see cref="PublishCommand"/>.</summary>
+    /// <summary>
+    /// Gets the arguments supplied to <see cref="PublishCommand"/>. Image placeholders are resolved before invocation.
+    /// </summary>
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
 
-    /// <summary>Gets or sets the image tag.</summary>
+    /// <summary>
+    /// Gets or sets the clean image tag. The effective tag has <c>-dirty</c> appended for a dirty repository.
+    /// </summary>
     public string ImageTag { get; set; } = "latest";
 
     /// <summary>

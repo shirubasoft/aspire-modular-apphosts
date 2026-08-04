@@ -12,6 +12,7 @@ public static partial class AppHostAModule
     public const string ProjectResourceName = "sample-project";
     public const string CSharpAppResourceName = "sample-csharp-app";
     public const string StaticResourceName = "sample-static";
+    public const string GeneratedStaticResourceName = "sample-generated-static";
     public const string ExecutableResourceName = "sample-executable";
     public const string DotnetToolResourceName = "sample-dotnet-tool";
     public const string MessageResourceName = "sample-message";
@@ -62,6 +63,18 @@ public static partial class AppHostAModule
 #pragma warning restore ASPIRECSHARPAPPS001
 
             module.AddContainer(StaticResourceName, "nginx", "alpine")
+                .Configure(container => container
+                    .WithHttpEndpoint(targetPort: 80, name: "http")
+                    .WithHttpHealthCheck("/"));
+
+            module.AddContainer(GeneratedStaticResourceName, "modular-sample-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    imageName: "modular-sample-static",
+                    publishCommand: "podman",
+                    publishArguments: ["build", "--tag", "modular-sample-static:dev", "."])
+                {
+                    ImageTag = "dev"
+                })
                 .Configure(container => container
                     .WithHttpEndpoint(targetPort: 80, name: "http")
                     .WithHttpHealthCheck("/"));

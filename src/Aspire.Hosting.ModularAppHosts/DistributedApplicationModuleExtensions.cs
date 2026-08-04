@@ -97,6 +97,7 @@ public static class DistributedApplicationModuleExtensions
         var repositoryPath = imported && hasRepository
             ? GetImportedRepositoryPath(builder, registry, module.Name)
             : GetLocalRepositoryPath(builder, module);
+        var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
 
         ValidateResourceNames(builder, module, registry);
         ConfigureRepositorySynchronization(builder, module, registry, repositoryPath, imported);
@@ -106,10 +107,24 @@ public static class DistributedApplicationModuleExtensions
             switch (definition)
             {
                 case DistributedApplicationModuleProject project:
-                    MaterializeProject(builder, module, project, repositoryPath, imported, registry);
+                    MaterializeProject(
+                        builder,
+                        module,
+                        project,
+                        repositoryPath,
+                        repositoryDirty,
+                        imported,
+                        registry);
                     break;
                 case DistributedApplicationModuleContainer container:
-                    MaterializeContainer(builder, module, container, repositoryPath, imported, registry);
+                    MaterializeContainer(
+                        builder,
+                        module,
+                        container,
+                        repositoryPath,
+                        repositoryDirty,
+                        imported,
+                        registry);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
                     MaterializeResource(builder, module, resource, repositoryPath, imported, registry);
@@ -128,6 +143,7 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         DistributedApplicationModuleProject project,
         string repositoryPath,
+        bool repositoryDirty,
         bool imported,
         ModuleApplicationRegistry registry)
     {
@@ -147,10 +163,11 @@ public static class DistributedApplicationModuleExtensions
             repositoryPath,
             normalizedWorkingDirectoryRelativePath,
             nameof(ModuleContainerExportOptions.WorkingDirectory));
+        var publishPlan = CreateImagePublishPlan(builder, export.Options, repositoryDirty);
 
         var container = builder
-            .AddContainer(project.Name, export.Options.ImageName, export.Options.ImageTag)
-            .WithImagePullPolicy(ImagePullPolicy.Missing)
+            .AddContainer(project.Name, publishPlan.ImageName, publishPlan.ImageTag)
+            .WithImagePullPolicy(ImagePullPolicy.Never)
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 project.Name,
@@ -159,12 +176,14 @@ public static class DistributedApplicationModuleExtensions
 
         export.ConfigureContainer?.Invoke(container);
 
-        if (builder.ExecutionContext.IsRunMode)
+        if (builder.ExecutionContext.IsRunMode && publishPlan.ShouldPublish)
         {
-            AddRepositoryInstaller(
+            AddImagePublishInstaller(
                 builder,
                 module,
-                project,
+                project.Name,
+                export.Options,
+                publishPlan,
                 repositoryPath,
                 publishWorkingDirectory,
                 imported,
@@ -181,18 +200,50 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         DistributedApplicationModuleContainer definition,
         string repositoryPath,
+        bool repositoryDirty,
         bool imported,
         ModuleApplicationRegistry registry)
     {
+        var publishOptions = definition.ImagePublishOptions;
+        var publishPlan = publishOptions is null
+            ? null
+            : CreateImagePublishPlan(builder, publishOptions, repositoryDirty);
         var container = builder
-            .AddContainer(definition.Name, definition.Image, definition.Tag)
+            .AddContainer(
+                definition.Name,
+                publishPlan?.ImageName ?? definition.Image,
+                publishPlan?.ImageTag ?? definition.Tag)
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 definition.Name,
                 repositoryPath,
                 imported));
 
+        if (publishPlan is not null)
+        {
+            container.WithImagePullPolicy(ImagePullPolicy.Never);
+        }
+
         definition.ConfigureContainer?.Invoke(container);
+
+        if (builder.ExecutionContext.IsRunMode && publishPlan is { ShouldPublish: true })
+        {
+            var publishWorkingDirectory = GetContainedPath(
+                repositoryPath,
+                publishOptions!.WorkingDirectory ?? ".",
+                nameof(ModuleContainerExportOptions.WorkingDirectory));
+            AddImagePublishInstaller(
+                builder,
+                module,
+                definition.Name,
+                publishOptions,
+                publishPlan,
+                repositoryPath,
+                publishWorkingDirectory,
+                imported,
+                container,
+                registry);
+        }
 
         registry.TrackResource(container.Resource);
         module.TrackMaterializedResource(builder, container.Resource);
@@ -224,10 +275,25 @@ public static class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, resource);
     }
 
-    private static void AddRepositoryInstaller(
+    private static ModuleImagePublishPlan CreateImagePublishPlan(
+        IDistributedApplicationBuilder builder,
+        ModuleContainerExportOptions options,
+        bool repositoryDirty)
+    {
+        return ModuleImagePublishPlan.Create(
+            options,
+            repositoryDirty,
+            builder.ExecutionContext.IsRunMode
+                ? ContainerImageInspector.Exists
+                : _ => false);
+    }
+
+    private static void AddImagePublishInstaller(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
-        DistributedApplicationModuleProject project,
+        string resourceName,
+        ModuleContainerExportOptions options,
+        ModuleImagePublishPlan publishPlan,
         string repositoryPath,
         string publishWorkingDirectory,
         bool imported,
@@ -235,19 +301,21 @@ public static class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry)
     {
         var installerResource = new ModuleRepositoryInstallerResource(
-            GetInstallerName(project.Name),
+            GetInstallerName(resourceName),
             repositoryPath,
             module.Repository,
             imported,
-            project.Export.Options.PublishCommand,
-            project.Export.Options.PublishArguments,
-            publishWorkingDirectory);
+            options.PublishCommand,
+            publishPlan.PublishArguments,
+            publishWorkingDirectory,
+            publishPlan.ImageReference,
+            publishPlan.RepositoryDirty);
 
         var installer = builder.AddResource(installerResource)
-            .WithArgs(project.Export.Options.PublishArguments.ToArray())
+            .WithArgs(publishPlan.PublishArguments.ToArray())
             .WithEnvironment(
                 "ASPIRE_MODULE_IMAGE",
-                $"{project.Export.Options.ImageName}:{project.Export.Options.ImageTag}")
+                publishPlan.ImageReference)
             .WithParentRelationship(container.Resource)
             .ExcludeFromManifest()
             .WithCertificateTrustScope(CertificateTrustScope.None)
@@ -349,7 +417,7 @@ public static class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry)
     {
         var resourceNames = module.ResourceDefinitions.SelectMany(definition =>
-            definition is DistributedApplicationModuleProject && builder.ExecutionContext.IsRunMode
+            RequiresImagePublishInstaller(definition) && builder.ExecutionContext.IsRunMode
                 ? new[] { definition.Name, GetInstallerName(definition.Name) }
                 : new[] { definition.Name });
 
@@ -367,6 +435,12 @@ public static class DistributedApplicationModuleExtensions
                     $"Cannot materialize module '{module.Name}' because resource '{resourceName}' already exists{tracked}.");
             }
         }
+    }
+
+    private static bool RequiresImagePublishInstaller(IDistributedApplicationModuleResource definition)
+    {
+        return definition is DistributedApplicationModuleProject ||
+            definition is DistributedApplicationModuleContainer { ImagePublishOptions: not null };
     }
 
     private static string GetContainedPath(string root, string path, string parameterName)

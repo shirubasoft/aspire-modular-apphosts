@@ -10,7 +10,9 @@ public sealed class ModuleRepositoryInstallerResource(
     bool updatesRepository,
     string publishCommand,
     IReadOnlyList<string> publishArguments,
-    string workingDirectory)
+    string workingDirectory,
+    string imageReference,
+    bool repositoryDirty)
     : ExecutableResource(name, publishCommand, workingDirectory)
 {
     /// <summary>Gets the local repository path.</summary>
@@ -25,8 +27,14 @@ public sealed class ModuleRepositoryInstallerResource(
     /// <summary>Gets the caller-supplied image publish executable.</summary>
     public string PublishCommand { get; } = publishCommand;
 
-    /// <summary>Gets the caller-supplied image publish arguments.</summary>
+    /// <summary>Gets the effective image publish arguments after image placeholders are resolved.</summary>
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
+
+    /// <summary>Gets the effective image reference produced by this installer.</summary>
+    public string ImageReference { get; } = imageReference;
+
+    /// <summary>Gets whether the repository was dirty when the module was materialized.</summary>
+    public bool RepositoryDirty { get; } = repositoryDirty;
 }
 
 /// <summary>Associates a materialized resource with its module definition.</summary>
