@@ -204,4 +204,13 @@ dotnet test Aspire.ModularAppHosts.slnx --no-build --no-restore
 
 ## Publishing
 
-GitHub Actions builds, tests, and packs every pull request. Publishing uses the Shirubasoft organization-level `NUGET_API_KEY` Actions secret, which is available to this repository. Publish a GitHub release whose tag is a semantic version prefixed with `v`, such as `v1.0.0`; the publishing workflow can also be started manually with an explicit package version.
+GitHub Actions builds, tests, and packs every pull request. After a change reaches `main`, semantic-release analyzes the semantic commit messages since the latest `v`-prefixed version tag, chooses the next version, publishes the package to NuGet.org, and creates a GitHub release with the package attached. The workflow uses the Shirubasoft organization-level `NUGET_API_KEY` Actions secret.
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for commits that affect consumers:
+
+- `fix:` and `perf:` produce a patch release.
+- `feat:` produces a minor release.
+- A `!` after the type or scope, or a `BREAKING CHANGE:` footer, produces a major release.
+- Other commit types, including `build:`, `chore:`, `ci:`, `docs:`, `refactor:`, `style:`, and `test:`, do not produce a release on their own.
+
+For example, `feat(modules): export container resources` produces a minor release. When squash-merging, make sure the resulting commit message follows the same convention. The publishing workflow can be started manually to retry any unreleased commits, but versions are always calculated from the commit history rather than entered by hand.
