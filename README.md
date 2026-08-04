@@ -63,6 +63,26 @@ builder.Build().Run();
 
 For a repository-backed module, use `WithRepository(...)` in its contract and materialize it with `CatalogModule.ImportModule(builder)`. The module guide covers repository-aware factories, projects, managed checkouts, and image publishing.
 
+Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
+
+```json
+{
+  "Aspire": {
+    "ModularAppHosts": {
+      "Modules": {
+        "catalog": {
+          "Projects": {
+            "catalog-api": {
+              "RunAsContainer": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ## Guides and samples
 
 - [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.

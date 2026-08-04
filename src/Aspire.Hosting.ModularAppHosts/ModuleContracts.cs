@@ -126,6 +126,10 @@ public interface IDistributedApplicationModuleProjectBuilder
     /// <summary>Gets the project being configured.</summary>
     IDistributedApplicationModuleProject Project { get; }
 
+    /// <summary>Applies Aspire project-resource configuration when the project runs directly.</summary>
+    IDistributedApplicationModuleProjectBuilder ConfigureProject(
+        Action<IResourceBuilder<ProjectResource>> configureProject);
+
     /// <summary>Exports the project as a container built by the supplied publish command.</summary>
     IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         string imageName,

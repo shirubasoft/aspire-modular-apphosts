@@ -107,6 +107,14 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
 {
     public IDistributedApplicationModuleProject Project => project;
 
+    public IDistributedApplicationModuleProjectBuilder ConfigureProject(
+        Action<IResourceBuilder<ProjectResource>> configureProject)
+    {
+        ArgumentNullException.ThrowIfNull(configureProject);
+        project.ConfigureProject += configureProject;
+        return this;
+    }
+
     public IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         string imageName,
         string publishCommand,

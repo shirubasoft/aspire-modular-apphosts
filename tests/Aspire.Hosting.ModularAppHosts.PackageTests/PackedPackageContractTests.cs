@@ -23,6 +23,8 @@ public sealed class PackedPackageContractTests
 
         Assert.Contains(dependencies, dependency => dependency.Id == "Aspire.Hosting");
         Assert.Contains(dependencies, dependency => dependency.Id == "CliWrap");
+        Assert.Contains(dependencies, dependency => dependency.Id == "Microsoft.Extensions.Configuration.Binder");
+        Assert.Contains(dependencies, dependency => dependency.Id == "Microsoft.Extensions.Options");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Testing");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Docker");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == TestingPackageId);
@@ -47,6 +49,7 @@ public sealed class PackedPackageContractTests
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
         const string source = """
+            using Aspire.Hosting.ApplicationModel;
             using Aspire.Hosting.ModularAppHosts;
 
             namespace PackedCoreConsumer;
@@ -56,13 +59,17 @@ public sealed class PackedPackageContractTests
             {
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
-                    module.AddContainer("orders-api", "nginx");
+                    module.AddProject("orders-api", "Orders.Api.csproj")
+                        .ExportAsContainer("orders-api", "dotnet", ["publish"]);
                 }
             }
 
             public static class Contract
             {
                 public static System.Type GeneratedModuleType => typeof(OrdersModule.Module);
+
+                public static IResourceBuilder<IResourceWithEndpoints> GetApi(OrdersModule.Module module) =>
+                    module.OrdersApi;
             }
             """;
 

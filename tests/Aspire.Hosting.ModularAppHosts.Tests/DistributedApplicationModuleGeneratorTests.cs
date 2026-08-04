@@ -40,7 +40,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var generated = Assert.Single(result.GeneratedSources);
         Assert.Contains("public static Module AddModule(", generated);
         Assert.Contains("public static Module ImportModule(", generated);
-        Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> OrdersApi", generated);
+        Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Cache", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
         Assert.Contains("ImportModule(builder, \"orders\")", generated);

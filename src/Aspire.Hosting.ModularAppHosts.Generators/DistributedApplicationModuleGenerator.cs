@@ -180,6 +180,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         var resources = new List<ResourceModel>();
         var containerType = compilation.GetTypeByMetadataName(
             "Aspire.Hosting.ApplicationModel.ContainerResource");
+        var resourceWithEndpointsType = compilation.GetTypeByMetadataName(
+            "Aspire.Hosting.ApplicationModel.IResourceWithEndpoints");
 
         foreach (var syntaxReference in moduleSymbol.DeclaringSyntaxReferences)
         {
@@ -209,7 +211,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 var methodName = operation.TargetMethod.Name;
                 ITypeSymbol? resourceType = methodName switch
                 {
-                    "AddProject" => containerType,
+                    "AddProject" => resourceWithEndpointsType,
                     "AddContainer" => containerType,
                     "AddResource" when operation.TargetMethod.TypeArguments.Length == 1 =>
                         operation.TargetMethod.TypeArguments[0],

@@ -126,13 +126,15 @@ internal sealed class DistributedApplicationModuleProject(
 {
     public string Name { get; } = name;
 
-    public Type ResourceType => typeof(ContainerResource);
+    public Type ResourceType => typeof(IResourceWithEndpoints);
 
     public string ProjectPath { get; } = projectPath;
 
     public bool IsExportedAsContainer => Export is not null;
 
     internal string SourceRepositoryRoot { get; } = sourceRepositoryRoot;
+
+    internal Action<IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
 
     internal ModuleContainerExport Export => _export
         ?? throw new InvalidOperationException($"Project '{Name}' has not been exported as a container.");

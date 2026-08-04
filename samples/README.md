@@ -4,7 +4,7 @@ This sample demonstrates one AppHost exporting a mixed module and another AppHos
 
 ```text
 AppHost A
-├── sample-api project ── podman build ──> modular-sample-api:dev
+├── sample-api project (development) / exported modular-sample-api:dev container
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
 ├── sample-static (ContainerResource, nginx:alpine)
@@ -51,7 +51,7 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module. `sample-api-installer` builds the project image and `sample-generated-static-installer` builds the Dockerfile-based static image before their containers start. `sample-static` continues to run directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild `dev-dirty` images. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module. Development configuration sets `sample-api`'s `RunAsContainer` option to `false`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild `dev-dirty` images. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
@@ -62,7 +62,7 @@ cd samples/AppHostB
 aspire run
 ```
 
-AppHost B points `module-repository-base-location` at the sample source directory, imports the complete `AppHostA` module, injects the exported parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B sets `Aspire:ModularAppHosts:RepositoryBasePath` to the sample source directory, imports the complete `AppHostA` module, injects the exported parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api

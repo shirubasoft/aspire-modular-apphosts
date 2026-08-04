@@ -13,7 +13,8 @@ public interface IDistributedApplicationModuleCatalog
     bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule);
 }
 
-internal sealed class ModuleApplicationRegistry : IDistributedApplicationModuleCatalog
+internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options = null)
+    : IDistributedApplicationModuleCatalog
 {
     private readonly Dictionary<string, DistributedApplicationModule> _modules =
         new(StringComparer.OrdinalIgnoreCase);
@@ -26,6 +27,8 @@ internal sealed class ModuleApplicationRegistry : IDistributedApplicationModuleC
 
     private readonly ConcurrentDictionary<string, Lazy<Task>> _repositorySynchronizations =
         new(StringComparer.OrdinalIgnoreCase);
+
+    internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 

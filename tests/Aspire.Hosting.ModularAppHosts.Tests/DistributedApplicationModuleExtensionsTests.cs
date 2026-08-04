@@ -3,6 +3,7 @@ using Aspire.Hosting.ModularAppHosts;
 using CliWrap;
 using CliWrap.Buffered;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 using CliCommand = global::CliWrap.Cli;
 
@@ -133,19 +134,19 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public void ImportModule_uses_repository_base_parameter_and_marks_installer_for_updates()
+    public void ImportModule_uses_configured_repository_base_path_and_marks_installer_for_updates()
     {
         using var repository = TestRepository.Create();
         using var imports = TemporaryDirectory.Create();
         var builder = CreateBuilder(repository.Path);
-        builder.Configuration[$"Parameters:{DistributedApplicationModuleExtensions.RepositoryBaseLocationParameterName}"] = imports.Path;
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
 
         ExportModule(builder, repository.ProjectPath);
         var imported = builder.ImportModule("orders");
         builder.ImportModule("orders");
 
         Assert.Equal("orders", imported.Name);
-        Assert.Single(builder.Resources.OfType<ParameterResource>());
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
@@ -169,7 +170,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public void ImportModule_with_projects_requires_a_repository_location()
+    public void ImportModule_with_projects_adds_an_interaction_backed_repository_parameter()
     {
         using var repository = TestRepository.Create();
         var builder = CreateBuilder(repository.Path);
@@ -177,9 +178,191 @@ public sealed class DistributedApplicationModuleExtensionsTests
             module.AddProject("orders-api", repository.ProjectPath)
                 .ExportAsContainer("orders-api", "dotnet", ["publish"]));
 
-        var exception = Assert.Throws<InvalidOperationException>(() => builder.ImportModule("orders"));
+        builder.ImportModule("orders");
 
-        Assert.Contains("does not have a repository location", exception.Message, StringComparison.Ordinal);
+        var parameter = Assert.Single(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal(DistributedApplicationModuleExtensions.GetRepositoryParameterName("orders"), parameter.Name);
+        Assert.Null(parameter.Default);
+#pragma warning disable ASPIREINTERACTION001
+        var inputGenerator = Assert.Single(parameter.Annotations.OfType<InputGeneratorAnnotation>());
+        var input = inputGenerator.InputGenerator(parameter);
+        Assert.Equal(InputType.Text, input.InputType);
+#pragma warning restore ASPIREINTERACTION001
+        Assert.True(input.Required);
+        Assert.Contains("repository", input.Placeholder, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Configuration_can_run_an_exported_project_directly_for_debugging()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var projectConfigured = false;
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
+            "false";
+
+        var module = builder.ExportModule("orders", definition =>
+            definition.AddProject("orders-api", repository.ProjectPath)
+                .ConfigureProject(project =>
+                {
+                    projectConfigured = true;
+                    project.WithExplicitStart();
+                })
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]));
+
+        builder.Add(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Equal("orders-api", project.Name);
+        Assert.True(projectConfigured);
+        Assert.Empty(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Same(project, module.GetResource<IResourceWithEndpoints>("orders-api").Resource);
+
+        var descriptor = Assert.Single(
+            builder.Services,
+            service => service.ServiceType == typeof(IOptions<ModularAppHostsOptions>));
+        var boundOptions = Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(
+            descriptor.ImplementationInstance);
+        Assert.False(boundOptions.Value.Modules["orders"].Projects["orders-api"].RunAsContainer);
+    }
+
+    [Fact]
+    public void Configuration_can_run_an_imported_project_from_an_existing_managed_checkout()
+    {
+        using var repository = TestRepository.Create();
+        using var imports = TemporaryDirectory.Create();
+        var checkout = Path.Combine(imports.Path, "orders");
+        Directory.CreateDirectory(checkout);
+        File.Copy(repository.ProjectPath, Path.Combine(checkout, Path.GetFileName(repository.ProjectPath)));
+        var builder = CreateBuilder(repository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
+            "false";
+        ExportModule(builder, repository.ProjectPath);
+
+        var module = builder.ImportModule("orders");
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        var annotation = Assert.Single(project.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal(checkout, annotation.RepositoryPath);
+        Assert.True(annotation.Imported);
+        Assert.Empty(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Same(project, module.GetResource<IResourceWithEndpoints>("orders-api").Resource);
+    }
+
+    [Fact]
+    public void Configuration_overrides_project_image_publishing_and_repository_policy()
+    {
+        using var repository = TestRepository.Create();
+        using var imports = TemporaryDirectory.Create();
+        var builder = CreateBuilder(repository.Path);
+        var section = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.Configuration[$"{section}:Repository"] = "https://example.test/configured/orders.git";
+        builder.Configuration[$"{section}:UpdateRepository"] = "false";
+        builder.Configuration[$"{section}:Projects:orders-api:ImageName"] = "configured/orders-api";
+        builder.Configuration[$"{section}:Projects:orders-api:ImageTag"] = "debug";
+        builder.Configuration[$"{section}:Projects:orders-api:PublishCommand"] = "configured-publisher";
+        builder.Configuration[$"{section}:Projects:orders-api:PublishArguments:0"] = "publish";
+        builder.Configuration[$"{section}:Projects:orders-api:PublishArguments:1"] =
+            ModuleContainerExportOptions.ImageReferencePlaceholder;
+        builder.Configuration[$"{section}:Projects:orders-api:PublishWorkingDirectory"] = ".";
+        builder.Configuration[$"{section}:Projects:orders-api:ImagePullPolicy"] = nameof(ImagePullPolicy.Missing);
+
+        builder.ExportModule("orders", definition =>
+            definition.AddProject("orders-api", repository.ProjectPath)
+                .ExportAsContainer("declared/orders-api", "dotnet", ["publish"]));
+        var imported = builder.ImportModule("orders");
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var pullPolicy = Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal("configured/orders-api", image.Image);
+        Assert.Equal("debug", image.Tag);
+        Assert.Equal(ImagePullPolicy.Missing, pullPolicy.ImagePullPolicy);
+        Assert.Equal("configured-publisher", installer.PublishCommand);
+        Assert.Equal(["publish", "configured/orders-api:debug"], installer.PublishArguments);
+        Assert.Equal(Path.Combine(imports.Path, "orders"), installer.WorkingDirectory);
+        Assert.Equal("https://example.test/configured/orders.git", installer.Repository);
+        Assert.False(installer.UpdatesRepository);
+        Assert.Same(container, imported.GetResource<IResourceWithEndpoints>("orders-api").Resource);
+    }
+
+    [Fact]
+    public void Configuration_can_disable_publishing_and_override_a_container_image()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var section = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{section}:ImageName"] = "registry.example.test/static-site";
+        builder.Configuration[$"{section}:ImageTag"] = "preview";
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+        builder.Configuration[$"{section}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
+
+        var module = builder.ExportModule("static", definition =>
+            definition.AddContainer("static-site", "declared/static-site", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "declared/static-site",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev"
+                })
+                .Configure(container => container.WithImagePullPolicy(ImagePullPolicy.Missing)));
+
+        builder.Add(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var pullPolicy = Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>());
+        Assert.Equal("registry.example.test/static-site", image.Image);
+        Assert.Equal("preview", image.Tag);
+        Assert.Equal(ImagePullPolicy.Always, pullPolicy.ImagePullPolicy);
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+    }
+
+    [Fact]
+    public void Configuration_cannot_introduce_an_undeclared_container_publisher()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var section = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{section}:PublishImage"] = "true";
+        builder.Configuration[$"{section}:PublishCommand"] = "dotnet";
+
+        var module = builder.ExportModule("static", definition =>
+            definition.AddContainer("static-site", "nginx", "alpine"));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+
+        Assert.Contains("does not call WithImagePublishCommand", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfigureModularAppHosts_applies_programmatic_options_before_materialization()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        builder.ConfigureModularAppHosts(options => options.PublishImages = false);
+        var module = ExportModule(builder, repository.ProjectPath);
+
+        builder.Add(module);
+
+        Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var configured = Assert.Single(
+            builder.Services,
+            service => service.ServiceType == typeof(IOptions<ModularAppHostsOptions>));
+        Assert.False(
+            Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(configured.ImplementationInstance)
+                .Value
+                .PublishImages);
     }
 
     [Fact]
@@ -272,12 +455,16 @@ public sealed class DistributedApplicationModuleExtensionsTests
     {
         using var repository = TestRepository.Create();
         var builder = CreateBuilder(repository.Path, "--publisher", "manifest");
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
+            "false";
         var module = ExportModule(builder, repository.ProjectPath);
 
         builder.Add(module);
 
         Assert.True(builder.ExecutionContext.IsPublishMode);
         Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ProjectResource>());
         Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
     }
 

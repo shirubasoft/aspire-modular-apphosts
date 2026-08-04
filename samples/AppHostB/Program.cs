@@ -5,7 +5,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var samplesRoot = Path.GetFullPath("..", builder.AppHostDirectory);
 var appHostASource = Path.Combine(samplesRoot, "AppHostA");
-builder.Configuration[$"Parameters:{DistributedApplicationModuleExtensions.RepositoryBaseLocationParameterName}"] = samplesRoot;
+builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = samplesRoot;
 
 AppHostAModule.Register(builder, appHostASource);
 var imported = AppHostAModule.ImportModule(builder);

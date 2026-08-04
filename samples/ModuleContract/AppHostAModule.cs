@@ -34,6 +34,9 @@ public static partial class AppHostAModule
             module.AddProject(
                     ApiResourceName,
                     Path.Combine(absoluteSourceRoot, "Api", "ModularSample.Api.csproj"))
+                .ConfigureProject(project => project
+                    .WithHttpEndpoint(name: "http")
+                    .WithHttpHealthCheck("/health"))
                 .ExportAsContainer(
                     new ModuleContainerExportOptions(
                         imageName: "modular-sample-api",
