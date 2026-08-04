@@ -1,4 +1,5 @@
 using Aspire.Hosting;
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
 
 namespace ModularSample.ModuleContract;
@@ -8,6 +9,7 @@ public static class AppHostAModule
     public const string Name = "AppHostA";
     public const string ApiResourceName = "sample-api";
     public const string StaticResourceName = "sample-static";
+    public const string MessageResourceName = "sample-message";
 
     public static IDistributedApplicationModule Register(
         IDistributedApplicationBuilder builder,
@@ -38,6 +40,12 @@ public static class AppHostAModule
                 .Configure(container => container
                     .WithHttpEndpoint(targetPort: 80, name: "http")
                     .WithHttpHealthCheck("/"));
+
+            module.AddResource<ParameterResource>(MessageResourceName, context =>
+                context.ApplicationBuilder.AddParameter(
+                    context.ResourceName,
+                    "Hello from an arbitrary exported Aspire resource.",
+                    publishValueAsDefault: true));
         });
     }
 }

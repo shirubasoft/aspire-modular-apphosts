@@ -310,6 +310,104 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public void Module_exports_any_custom_resource_type_through_a_lazy_factory()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        IDistributedApplicationModuleResourceContext? capturedContext = null;
+
+        var module = builder.ExportModule("custom", definition =>
+            definition.AddResource<TestResource>("clock", context =>
+            {
+                capturedContext = context;
+                return context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName));
+            }));
+
+        var exportedResource = Assert.Single(module.Resources);
+        Assert.Equal("clock", exportedResource.Name);
+        Assert.Equal(typeof(TestResource), exportedResource.ResourceType);
+        Assert.Empty(builder.Resources);
+
+        builder.Add(module);
+
+        var clock = module.GetResource<TestResource>("clock");
+        Assert.Same(clock.Resource, Assert.Single(builder.Resources.OfType<TestResource>()));
+        Assert.NotNull(capturedContext);
+        Assert.False(capturedContext.Imported);
+        Assert.Equal(repository.Path, capturedContext.RepositoryPath);
+        var annotation = Assert.Single(
+            clock.Resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal("clock", annotation.ResourceName);
+    }
+
+    [Fact]
+    public void Generic_resource_factories_can_resolve_earlier_exports_in_declaration_order()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        TestResource? resolvedDependency = null;
+
+        var module = builder.ExportModule("ordered", definition =>
+        {
+            definition.AddResource<TestResource>("first", context =>
+                context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName)));
+            definition.AddResource<TestResource>("second", context =>
+            {
+                resolvedDependency = context.GetResource<TestResource>("first").Resource;
+                return context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName));
+            });
+        });
+
+        builder.Add(module);
+
+        Assert.Same(module.GetResource<TestResource>("first").Resource, resolvedDependency);
+        Assert.Equal(
+            ["first", "second"],
+            builder.Resources.OfType<TestResource>().Select(resource => resource.Name));
+    }
+
+    [Fact]
+    public void ImportModule_allows_repository_independent_generic_resources()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        IDistributedApplicationModuleResourceContext? capturedContext = null;
+
+        builder.ExportModule("portable", definition =>
+            definition.AddResource<TestResource>("portable-resource", context =>
+            {
+                capturedContext = context;
+                return context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName));
+            }));
+
+        var imported = builder.ImportModule("portable");
+
+        Assert.NotNull(capturedContext);
+        Assert.True(capturedContext.Imported);
+        Assert.Equal(repository.Path, capturedContext.RepositoryPath);
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal(
+            "portable-resource",
+            imported.GetResource<TestResource>("portable-resource").Resource.Name);
+    }
+
+    [Fact]
+    public void Generic_resource_factory_must_return_the_declared_name()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var module = builder.ExportModule("invalid", definition =>
+            definition.AddResource<TestResource>("expected", context =>
+                context.ApplicationBuilder.AddResource(new TestResource("actual"))));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+
+        Assert.Contains("expected", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("actual", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("context.ResourceName", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Imported_existing_non_git_source_does_not_attempt_clone_over_it()
     {
         using var repository = TestRepository.Create();
@@ -553,6 +651,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
             }
         }
     }
+
+    private sealed class TestResource(string name) : Resource(name);
 
     private sealed class TemporaryDirectory : IDisposable
     {

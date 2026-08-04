@@ -5,7 +5,8 @@ app.MapGet("/", (IConfiguration configuration) => Results.Ok(new
 {
     service = "dependency-gateway",
     api = configuration["UPSTREAM_API"],
-    staticSite = configuration["UPSTREAM_STATIC"]
+    staticSite = configuration["UPSTREAM_STATIC"],
+    message = configuration["MODULE_MESSAGE"]
 }));
 
 app.MapGet("/health", async (IConfiguration configuration, CancellationToken cancellationToken) =>

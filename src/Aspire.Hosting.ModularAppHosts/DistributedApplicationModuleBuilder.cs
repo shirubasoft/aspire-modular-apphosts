@@ -6,6 +6,18 @@ internal sealed class DistributedApplicationModuleBuilder(
     IDistributedApplicationBuilder applicationBuilder,
     DistributedApplicationModule module) : IDistributedApplicationModuleBuilder
 {
+    public IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
+        where TResource : IResource
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(resourceFactory);
+
+        module.AddResource(new DistributedApplicationModuleResource<TResource>(name, resourceFactory));
+        return this;
+    }
+
     public IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
         where TProject : IProjectMetadata, new()
     {

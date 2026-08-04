@@ -32,15 +32,19 @@ public sealed class ModuleRepositoryInstallerResource(
 /// <summary>Associates a materialized resource with its module definition.</summary>
 public sealed class DistributedApplicationModuleResourceAnnotation(
     string moduleName,
-    string projectName,
+    string resourceName,
     string repositoryPath,
     bool imported) : IResourceAnnotation
 {
     /// <summary>Gets the module name.</summary>
     public string ModuleName { get; } = moduleName;
 
-    /// <summary>Gets the project name.</summary>
-    public string ProjectName { get; } = projectName;
+    /// <summary>Gets the exported resource name.</summary>
+    public string ResourceName { get; } = resourceName;
+
+    /// <summary>Gets the exported resource name.</summary>
+    [Obsolete($"Use {nameof(ResourceName)} instead.")]
+    public string ProjectName => ResourceName;
 
     /// <summary>Gets the worktree used by the service installer.</summary>
     public string RepositoryPath { get; } = repositoryPath;

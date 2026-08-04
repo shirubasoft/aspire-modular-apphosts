@@ -40,6 +40,12 @@ var orders = builder.ExportModule("orders", module =>
 
     module.AddContainer("orders-cache", "redis", "8-alpine")
         .Configure(container => container.WithEndpoint(targetPort: 6379, name: "tcp"));
+
+    module.AddResource<ParameterResource>("orders-region", context =>
+        context.ApplicationBuilder.AddParameter(
+            context.ResourceName,
+            "local",
+            publishValueAsDefault: true));
 });
 
 // Use projects from the current worktree.
@@ -57,12 +63,30 @@ An importing AppHost can retrieve materialized resources for ordinary Aspire wir
 var orders = builder.ImportModule("orders");
 var api = orders.GetResource<ContainerResource>("orders-api");
 var cache = orders.GetResource<ContainerResource>("orders-cache");
+var region = orders.GetResource<ParameterResource>("orders-region");
 
 builder.AddContainer("consumer", "example/consumer")
     .WithReference(api.GetEndpoint("http"))
+    .WithEnvironment("ORDERS_REGION", region)
     .WaitFor(api)
     .WaitFor(cache);
 ```
+
+## Exporting any Aspire resource
+
+`AddResource<TResource>` accepts a lazy factory for any type implementing Aspire's `IResource`, including resources returned by first-party integrations, community integrations, and custom extensions:
+
+```csharp
+module.AddResource<PostgresServerResource>("postgres", context =>
+    context.ApplicationBuilder.AddPostgres(context.ResourceName));
+
+module.AddResource<TalkingClockResource>("clock", context =>
+    context.ApplicationBuilder.AddTalkingClock(context.ResourceName));
+```
+
+Factories run in declaration order only when the module is added or imported. `IDistributedApplicationModuleResourceContext` exposes the receiving AppHost builder, the required resource name, the local or managed repository path, import state, and `GetResource<TResource>` for referring to earlier exports in the same module. The factory must return a resource with `context.ResourceName`; mismatches fail during materialization.
+
+Modules made entirely from repository-independent generic resources or existing images can be imported without `WithRepository`. Configure a repository when factories use source files or when the module exports projects.
 
 The publish command must create the exact `ImageName:ImageTag` configured on `ModuleContainerExportOptions`. `ASPIRE_MODULE_IMAGE` is also provided to the command as an environment variable for scripts that prefer to consume the image identity that way.
 

@@ -71,10 +71,11 @@ public static class DistributedApplicationModuleExtensions
                 $"Module '{name}' has not been exported. Call ExportModule before ImportModule.");
         }
 
-        if (string.IsNullOrWhiteSpace(module.Repository))
+        if (module.ProjectDefinitions.Count > 0 && string.IsNullOrWhiteSpace(module.Repository))
         {
             throw new InvalidOperationException(
-                $"Module '{name}' does not have a Git remote. Configure one with moduleBuilder.WithRepository(...).");
+                $"Module '{name}' exports projects but does not have a repository location. " +
+                "Configure one with moduleBuilder.WithRepository(...).");
         }
 
         Materialize(builder, module, registry, imported: true);
@@ -92,22 +93,31 @@ public static class DistributedApplicationModuleExtensions
             return;
         }
 
-        var repositoryPath = imported
+        var hasRepository = !string.IsNullOrWhiteSpace(module.Repository);
+        var repositoryPath = imported && hasRepository
             ? GetImportedRepositoryPath(builder, registry, module.Name)
-            : module.ProjectDefinitions.Count > 0
-                ? module.ProjectDefinitions[0].SourceRepositoryRoot
-                : builder.AppHostDirectory;
+            : GetLocalRepositoryPath(builder, module);
 
         ValidateResourceNames(builder, module, registry);
+        ConfigureRepositorySynchronization(builder, module, registry, repositoryPath, imported);
 
-        foreach (var project in module.ProjectDefinitions)
+        foreach (var definition in module.ResourceDefinitions)
         {
-            MaterializeProject(builder, module, project, repositoryPath, imported, registry);
-        }
-
-        foreach (var container in module.ContainerDefinitions)
-        {
-            MaterializeContainer(builder, module, container, repositoryPath, imported, registry);
+            switch (definition)
+            {
+                case DistributedApplicationModuleProject project:
+                    MaterializeProject(builder, module, project, repositoryPath, imported, registry);
+                    break;
+                case DistributedApplicationModuleContainer container:
+                    MaterializeContainer(builder, module, container, repositoryPath, imported, registry);
+                    break;
+                case IDistributedApplicationModuleFactoryResource resource:
+                    MaterializeResource(builder, module, resource, repositoryPath, imported, registry);
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"Module resource definition '{definition.Name}' has an unsupported implementation type.");
+            }
         }
 
         registry.MarkMaterialized(module.Name);
@@ -188,6 +198,32 @@ public static class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, container.Resource);
     }
 
+    private static void MaterializeResource(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        IDistributedApplicationModuleFactoryResource definition,
+        string repositoryPath,
+        bool imported,
+        ModuleApplicationRegistry registry)
+    {
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            module,
+            definition.Name,
+            repositoryPath,
+            imported);
+        var resource = definition.Materialize(
+            context,
+            new DistributedApplicationModuleResourceAnnotation(
+                module.Name,
+                definition.Name,
+                repositoryPath,
+                imported));
+
+        registry.TrackResource(resource);
+        module.TrackMaterializedResource(builder, resource);
+    }
+
     private static void AddRepositoryInstaller(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
@@ -221,6 +257,21 @@ public static class DistributedApplicationModuleExtensions
             .WaitForCompletion(installer)
             .WithAnnotation(new ModuleRepositoryInstallerAnnotation(installerResource));
 
+        registry.TrackResource(installer.Resource);
+    }
+
+    private static void ConfigureRepositorySynchronization(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        ModuleApplicationRegistry registry,
+        string repositoryPath,
+        bool imported)
+    {
+        if (!builder.ExecutionContext.IsRunMode || !imported || string.IsNullOrWhiteSpace(module.Repository))
+        {
+            return;
+        }
+
         builder.Eventing.Subscribe<BeforeStartEvent>(async (_, cancellationToken) =>
         {
             await registry.SynchronizeRepositoryAsync(
@@ -228,11 +279,9 @@ public static class DistributedApplicationModuleExtensions
                 () => RepositorySynchronizer.SynchronizeAsync(
                     repositoryPath,
                     module.Repository,
-                    updateRepository: imported,
+                    updateRepository: true,
                     cancellationToken)).ConfigureAwait(false);
         });
-
-        registry.TrackResource(installer.Resource);
     }
 
     private static ModuleApplicationRegistry GetOrCreateRegistry(IDistributedApplicationBuilder builder)
@@ -272,18 +321,39 @@ public static class DistributedApplicationModuleExtensions
         return Path.Combine(baseLocation, GetSafeDirectoryName(moduleName));
     }
 
+    private static string GetLocalRepositoryPath(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module)
+    {
+        if (module.ProjectDefinitions.Count > 0)
+        {
+            return module.ProjectDefinitions[0].SourceRepositoryRoot;
+        }
+
+        if (!string.IsNullOrWhiteSpace(module.Repository) &&
+            (!Uri.TryCreate(module.Repository, UriKind.Absolute, out var repositoryUri) || repositoryUri.IsFile))
+        {
+            var candidate = Path.GetFullPath(module.Repository, builder.AppHostDirectory);
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return builder.AppHostDirectory;
+    }
+
     private static void ValidateResourceNames(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry)
     {
-        var projectResourceNames = module.ProjectDefinitions
-            .SelectMany(project => builder.ExecutionContext.IsRunMode
-                ? new[] { project.Name, GetInstallerName(project.Name) }
-                : new[] { project.Name });
-        var containerResourceNames = module.ContainerDefinitions.Select(container => container.Name);
+        var resourceNames = module.ResourceDefinitions.SelectMany(definition =>
+            definition is DistributedApplicationModuleProject && builder.ExecutionContext.IsRunMode
+                ? new[] { definition.Name, GetInstallerName(definition.Name) }
+                : new[] { definition.Name });
 
-        foreach (var resourceName in projectResourceNames.Concat(containerResourceNames))
+        foreach (var resourceName in resourceNames)
         {
             var existing = builder.Resources.FirstOrDefault(resource =>
                 string.Equals(resource.Name, resourceName, StringComparison.OrdinalIgnoreCase));

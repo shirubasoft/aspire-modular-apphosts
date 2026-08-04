@@ -4,6 +4,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal sealed class DistributedApplicationModule(string name) : IDistributedApplicationModule
 {
+    private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
     private readonly List<DistributedApplicationModuleContainer> _containers = [];
     private readonly Dictionary<string, IResource> _materializedResources =
@@ -11,6 +12,8 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
     private IDistributedApplicationBuilder? _materializedApplicationBuilder;
 
     public string Name { get; } = name;
+
+    public IReadOnlyList<IDistributedApplicationModuleResource> Resources => _resources;
 
     public IReadOnlyList<IDistributedApplicationModuleProject> Projects => _projects;
 
@@ -20,18 +23,29 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
 
     internal IReadOnlyList<DistributedApplicationModuleContainer> ContainerDefinitions => _containers;
 
+    internal IReadOnlyList<IDistributedApplicationModuleResource> ResourceDefinitions => _resources;
+
     internal string? Repository { get; set; }
 
     internal void AddProject(DistributedApplicationModuleProject project)
     {
         ThrowIfNameIsAlreadyUsed(project.Name);
         _projects.Add(project);
+        _resources.Add(project);
     }
 
     internal void AddContainer(DistributedApplicationModuleContainer container)
     {
         ThrowIfNameIsAlreadyUsed(container.Name);
         _containers.Add(container);
+        _resources.Add(container);
+    }
+
+    internal void AddResource<TResource>(DistributedApplicationModuleResource<TResource> resource)
+        where TResource : IResource
+    {
+        ThrowIfNameIsAlreadyUsed(resource.Name);
+        _resources.Add(resource);
     }
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
@@ -67,7 +81,7 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
 
     internal void Validate()
     {
-        if (_projects.Count == 0 && _containers.Count == 0)
+        if (_resources.Count == 0)
         {
             throw new InvalidOperationException($"Module '{Name}' does not contain any resources.");
         }
@@ -98,8 +112,7 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
 
     private void ThrowIfNameIsAlreadyUsed(string name)
     {
-        if (_projects.Any(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)) ||
-            _containers.Any(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)))
+        if (_resources.Any(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidOperationException($"Module '{Name}' already contains a resource named '{name}'.");
         }
@@ -112,6 +125,8 @@ internal sealed class DistributedApplicationModuleProject(
     string sourceRepositoryRoot) : IDistributedApplicationModuleProject
 {
     public string Name { get; } = name;
+
+    public Type ResourceType => typeof(ContainerResource);
 
     public string ProjectPath { get; } = projectPath;
 
@@ -141,9 +156,66 @@ internal sealed class DistributedApplicationModuleContainer(
 {
     public string Name { get; } = name;
 
+    public Type ResourceType => typeof(ContainerResource);
+
     public string Image { get; } = image;
 
     public string Tag { get; } = tag;
 
     internal Action<IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
+}
+
+internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
+{
+    IResource Materialize(
+        IDistributedApplicationModuleResourceContext context,
+        DistributedApplicationModuleResourceAnnotation annotation);
+}
+
+internal sealed class DistributedApplicationModuleResource<TResource>(
+    string name,
+    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
+    : IDistributedApplicationModuleFactoryResource
+    where TResource : IResource
+{
+    public string Name { get; } = name;
+
+    public Type ResourceType => typeof(TResource);
+
+    public IResource Materialize(
+        IDistributedApplicationModuleResourceContext context,
+        DistributedApplicationModuleResourceAnnotation annotation)
+    {
+        var resource = resourceFactory(context)
+            ?? throw new InvalidOperationException($"The factory for module resource '{Name}' returned null.");
+
+        if (!string.Equals(resource.Resource.Name, Name, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"The factory for module resource '{Name}' returned a resource named '{resource.Resource.Name}'. " +
+                "Use context.ResourceName when creating the resource.");
+        }
+
+        resource.WithAnnotation(annotation);
+        return resource.Resource;
+    }
+}
+
+internal sealed class DistributedApplicationModuleResourceContext(
+    IDistributedApplicationBuilder applicationBuilder,
+    DistributedApplicationModule module,
+    string resourceName,
+    string repositoryPath,
+    bool imported) : IDistributedApplicationModuleResourceContext
+{
+    public IDistributedApplicationBuilder ApplicationBuilder { get; } = applicationBuilder;
+
+    public string ResourceName { get; } = resourceName;
+
+    public string RepositoryPath { get; } = repositoryPath;
+
+    public bool Imported { get; } = imported;
+
+    public IResourceBuilder<TResource> GetResource<TResource>(string name)
+        where TResource : IResource => module.GetResource<TResource>(name);
 }

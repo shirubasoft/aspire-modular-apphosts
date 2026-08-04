@@ -10,6 +10,9 @@ public interface IDistributedApplicationModule
     /// <summary>Gets the module name.</summary>
     string Name { get; }
 
+    /// <summary>Gets every resource exported by the module in declaration order.</summary>
+    IReadOnlyList<IDistributedApplicationModuleResource> Resources { get; }
+
     /// <summary>Gets the projects exported by the module.</summary>
     IReadOnlyList<IDistributedApplicationModuleProject> Projects { get; }
 
@@ -24,6 +27,14 @@ public interface IDistributedApplicationModule
 /// <summary>Builds an <see cref="IDistributedApplicationModule"/> definition.</summary>
 public interface IDistributedApplicationModuleBuilder
 {
+    /// <summary>
+    /// Adds any Aspire resource type through a factory that runs when the module is materialized.
+    /// </summary>
+    IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
+        where TResource : IResource;
+
     /// <summary>Adds a generated Aspire project reference to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
         where TProject : IProjectMetadata, new();
@@ -44,12 +55,39 @@ public interface IDistributedApplicationModuleBuilder
     IDistributedApplicationModuleBuilder WithRepository(string repository);
 }
 
-/// <summary>A container contained in a distributed application module.</summary>
-public interface IDistributedApplicationModuleContainer
+/// <summary>Describes a resource exported by a distributed application module.</summary>
+public interface IDistributedApplicationModuleResource
 {
     /// <summary>Gets the Aspire resource name.</summary>
     string Name { get; }
 
+    /// <summary>Gets the resource type returned by the materialization factory.</summary>
+    Type ResourceType { get; }
+}
+
+/// <summary>Provides state to a generic resource factory when its module is materialized.</summary>
+public interface IDistributedApplicationModuleResourceContext
+{
+    /// <summary>Gets the AppHost builder receiving the resource.</summary>
+    IDistributedApplicationBuilder ApplicationBuilder { get; }
+
+    /// <summary>Gets the declared name that the factory must assign to its resource.</summary>
+    string ResourceName { get; }
+
+    /// <summary>Gets the local source or managed repository path for this module.</summary>
+    string RepositoryPath { get; }
+
+    /// <summary>Gets whether the module is being imported rather than added from local source.</summary>
+    bool Imported { get; }
+
+    /// <summary>Gets a previously materialized resource exported by the same module.</summary>
+    IResourceBuilder<TResource> GetResource<TResource>(string name)
+        where TResource : IResource;
+}
+
+/// <summary>A container contained in a distributed application module.</summary>
+public interface IDistributedApplicationModuleContainer : IDistributedApplicationModuleResource
+{
     /// <summary>Gets the container image name.</summary>
     string Image { get; }
 
@@ -69,11 +107,8 @@ public interface IDistributedApplicationModuleContainerBuilder
 }
 
 /// <summary>A project contained in a distributed application module.</summary>
-public interface IDistributedApplicationModuleProject
+public interface IDistributedApplicationModuleProject : IDistributedApplicationModuleResource
 {
-    /// <summary>Gets the Aspire resource name.</summary>
-    string Name { get; }
-
     /// <summary>Gets the source project path used when the module is added locally.</summary>
     string ProjectPath { get; }
 

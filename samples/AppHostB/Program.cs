@@ -13,6 +13,7 @@ var imported = builder.ImportModule(AppHostAModule.Name);
 
 var api = imported.GetResource<ContainerResource>(AppHostAModule.ApiResourceName);
 var staticSite = imported.GetResource<ContainerResource>(AppHostAModule.StaticResourceName);
+var message = imported.GetResource<ParameterResource>(AppHostAModule.MessageResourceName);
 
 builder.AddDockerfile("dependency-gateway", "Gateway")
     .WithHttpEndpoint(targetPort: 8080, name: "http")
@@ -20,6 +21,7 @@ builder.AddDockerfile("dependency-gateway", "Gateway")
     .WithReference(staticSite.GetEndpoint("http"))
     .WithEnvironment("UPSTREAM_API", api.GetEndpoint("http"))
     .WithEnvironment("UPSTREAM_STATIC", staticSite.GetEndpoint("http"))
+    .WithEnvironment("MODULE_MESSAGE", message)
     .WaitFor(api)
     .WaitFor(staticSite)
     .WithHttpHealthCheck("/health");
