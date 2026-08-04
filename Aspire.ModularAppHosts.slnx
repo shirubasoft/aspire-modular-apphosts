@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />
+    <Project Path="samples/AppHostA/Api/ModularSample.Api.csproj" />
+    <Project Path="samples/AppHostA/ModularSample.AppHostA.csproj" />
+    <Project Path="samples/AppHostB/Gateway/ModularSample.Gateway.csproj" />
+    <Project Path="samples/AppHostB/ModularSample.AppHostB.csproj" />
+  </Folder>
+</Solution>

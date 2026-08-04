@@ -1,0 +1,126 @@
+using Aspire.Hosting.ApplicationModel;
+
+namespace Aspire.Hosting.ModularAppHosts;
+
+/// <summary>
+/// A reusable group of Aspire resources that can be added locally or imported from its Git repository.
+/// </summary>
+public interface IDistributedApplicationModule
+{
+    /// <summary>Gets the module name.</summary>
+    string Name { get; }
+
+    /// <summary>Gets the projects exported by the module.</summary>
+    IReadOnlyList<IDistributedApplicationModuleProject> Projects { get; }
+
+    /// <summary>Gets the containers exported by the module.</summary>
+    IReadOnlyList<IDistributedApplicationModuleContainer> Containers { get; }
+
+    /// <summary>Gets a materialized module resource by name.</summary>
+    IResourceBuilder<TResource> GetResource<TResource>(string name)
+        where TResource : IResource;
+}
+
+/// <summary>Builds an <see cref="IDistributedApplicationModule"/> definition.</summary>
+public interface IDistributedApplicationModuleBuilder
+{
+    /// <summary>Adds a generated Aspire project reference to the module.</summary>
+    IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
+        where TProject : IProjectMetadata, new();
+
+    /// <summary>Adds a project path to the module.</summary>
+    IDistributedApplicationModuleProjectBuilder AddProject(string name, string projectPath);
+
+    /// <summary>Adds an existing container image to the module.</summary>
+    IDistributedApplicationModuleContainerBuilder AddContainer(
+        string name,
+        string image,
+        string tag = "latest");
+
+    /// <summary>
+    /// Overrides the Git repository used by <c>ImportModule</c>. When omitted, the origin remote is inferred
+    /// from the projects' common Git worktree.
+    /// </summary>
+    IDistributedApplicationModuleBuilder WithRepository(string repository);
+}
+
+/// <summary>A container contained in a distributed application module.</summary>
+public interface IDistributedApplicationModuleContainer
+{
+    /// <summary>Gets the Aspire resource name.</summary>
+    string Name { get; }
+
+    /// <summary>Gets the container image name.</summary>
+    string Image { get; }
+
+    /// <summary>Gets the container image tag.</summary>
+    string Tag { get; }
+}
+
+/// <summary>Configures one existing container in a module.</summary>
+public interface IDistributedApplicationModuleContainerBuilder
+{
+    /// <summary>Gets the container being configured.</summary>
+    IDistributedApplicationModuleContainer Container { get; }
+
+    /// <summary>Applies Aspire container-resource configuration when the module is materialized.</summary>
+    IDistributedApplicationModuleContainerBuilder Configure(
+        Action<IResourceBuilder<ContainerResource>> configureContainer);
+}
+
+/// <summary>A project contained in a distributed application module.</summary>
+public interface IDistributedApplicationModuleProject
+{
+    /// <summary>Gets the Aspire resource name.</summary>
+    string Name { get; }
+
+    /// <summary>Gets the source project path used when the module is added locally.</summary>
+    string ProjectPath { get; }
+
+    /// <summary>Gets whether this project is exported as a container.</summary>
+    bool IsExportedAsContainer { get; }
+}
+
+/// <summary>Configures one project in a module.</summary>
+public interface IDistributedApplicationModuleProjectBuilder
+{
+    /// <summary>Gets the project being configured.</summary>
+    IDistributedApplicationModuleProject Project { get; }
+
+    /// <summary>Exports the project as a container built by the supplied publish command.</summary>
+    IDistributedApplicationModuleProjectBuilder ExportAsContainer(
+        string imageName,
+        string publishCommand,
+        IReadOnlyList<string> publishArguments,
+        Action<IResourceBuilder<ContainerResource>>? configureContainer = null);
+
+    /// <summary>Exports the project as a container with explicit publish settings.</summary>
+    IDistributedApplicationModuleProjectBuilder ExportAsContainer(
+        ModuleContainerExportOptions options,
+        Action<IResourceBuilder<ContainerResource>>? configureContainer = null);
+}
+
+/// <summary>Controls how a module project is converted into a container resource.</summary>
+public sealed class ModuleContainerExportOptions(
+    string imageName,
+    string publishCommand,
+    params string[] publishArguments)
+{
+    /// <summary>Gets the image name that the publish command must create.</summary>
+    public string ImageName { get; } = imageName;
+
+    /// <summary>Gets the executable invoked by the service installer.</summary>
+    public string PublishCommand { get; } = publishCommand;
+
+    /// <summary>Gets the arguments passed verbatim to <see cref="PublishCommand"/>.</summary>
+    public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
+
+    /// <summary>Gets or sets the image tag.</summary>
+    public string ImageTag { get; set; } = "latest";
+
+    /// <summary>
+    /// Gets or sets the publish working directory relative to the repository root. The project directory is used
+    /// when this is not set.
+    /// </summary>
+    public string? WorkingDirectory { get; set; }
+}

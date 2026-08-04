@@ -1,0 +1,66 @@
+name: Publish NuGet package
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Resolve package version
+        id: package-version
+        shell: bash
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${MANUAL_VERSION:-${RELEASE_TAG#v}}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Expected a semantic version, but received '$version'." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore Aspire.ModularAppHosts.slnx
+
+      - name: Build
+        run: dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
+
+      - name: Pack
+        run: dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj --configuration Release --no-build --no-restore --output artifacts -p:PackageVersion=${{ steps.package-version.outputs.version }}
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Shirubasoft.Aspire.ModularAppHosts-${{ steps.package-version.outputs.version }}
+          path: artifacts/*.nupkg
+          if-no-files-found: error
+
+      - name: Publish package to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push "artifacts/*.nupkg" --source https://api.nuget.org/v3/index.json --skip-duplicate

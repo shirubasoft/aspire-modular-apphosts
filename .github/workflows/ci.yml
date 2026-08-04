@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Aspire.ModularAppHosts.slnx
+
+      - name: Verify formatting
+        run: dotnet format Aspire.ModularAppHosts.slnx --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
+
+      - name: Pack
+        run: dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj --configuration Release --no-build --no-restore --output artifacts
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-package
+          path: artifacts/*.nupkg
+          if-no-files-found: error
