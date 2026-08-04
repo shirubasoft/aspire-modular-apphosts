@@ -6,6 +6,12 @@
 dotnet add package Shirubasoft.Aspire.ModularAppHosts
 ```
 
+E2E projects that test Docker Compose deployments use the separate testing package. Regular AppHosts do not acquire dependencies on `Aspire.Hosting.Testing` or `Aspire.Hosting.Docker` through the core package.
+
+```bash
+dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
+```
+
 The extension deliberately does not infer how an application image should be produced. Every image export supplies the image name and the exact publish executable and arguments. A one-shot installer runs that command before the corresponding container starts when the repository is dirty or the clean image tag does not exist locally.
 
 ## Usage
@@ -181,6 +187,8 @@ Repository synchronization is shared across services in the same module, while e
 - start the AppHost in the test process with `DistributedApplicationTestingBuilder`;
 - let the Compose testing builder deploy the AppHost through Aspire, run the tests, and tear the deployment down.
 
+The Compose helpers live in `Shirubasoft.Aspire.ModularAppHosts.Testing`. That package depends on the core modular AppHosts package, Aspire's Docker hosting integration, and `Aspire.Hosting.Testing`; the core package itself depends only on `Aspire.Hosting`.
+
 The Docker Compose AppHost exports the test-facing endpoints and parameter-backed values into Aspire's environment-specific file:
 
 ```csharp
@@ -240,7 +248,7 @@ dotnet test Aspire.ModularAppHosts.slnx --no-build --no-restore
 
 ## Publishing
 
-GitHub Actions builds, tests, and packs every pull request. After a change reaches `main`, semantic-release analyzes the semantic commit messages since the latest `v`-prefixed version tag, chooses the next version, publishes the package to NuGet.org, and creates a GitHub release with the package attached. The workflow uses the Shirubasoft organization-level `NUGET_API_KEY` Actions secret.
+GitHub Actions builds, tests, and packs both NuGet packages on every pull request. After a change reaches `main`, semantic-release analyzes the semantic commit messages since the latest `v`-prefixed version tag, chooses the next version, publishes both packages to NuGet.org, and creates a GitHub release with the packages attached. The workflow uses the Shirubasoft organization-level `NUGET_API_KEY` Actions secret.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) for commits that affect consumers:
 

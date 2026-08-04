@@ -7,10 +7,12 @@
     <Project Path="samples/E2ETesting/EShop.Orders.Api/EShop.Orders.Api.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
     <Project Path="src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">

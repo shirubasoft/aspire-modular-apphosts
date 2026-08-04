@@ -11,6 +11,8 @@ catalog module ──> catalog-api <── orders-api <── scenario tests
 
 `EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
 
+The E2E AppHost and test project reference `Shirubasoft.Aspire.ModularAppHosts.Testing`, which contains the Compose export extensions and deployment builder. The ordinary modular AppHosts package remains free of `Aspire.Hosting.Testing` and Docker hosting dependencies.
+
 ## Run through the AppHost
 
 The default mode starts and disposes the AppHost with `DistributedApplicationTestingBuilder`:

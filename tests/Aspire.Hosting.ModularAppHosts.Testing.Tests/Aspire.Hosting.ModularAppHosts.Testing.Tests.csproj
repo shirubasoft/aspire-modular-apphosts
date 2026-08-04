@@ -12,7 +12,6 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
-    <ProjectReference Include="../EShop.E2E.AppHost/EShop.E2E.AppHost.csproj" />
+    <ProjectReference Include="../../src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
   </ItemGroup>
 </Project>

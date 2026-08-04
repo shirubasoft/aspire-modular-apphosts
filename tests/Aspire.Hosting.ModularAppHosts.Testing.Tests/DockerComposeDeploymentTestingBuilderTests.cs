@@ -4,7 +4,7 @@ using Aspire.Hosting.ModularAppHosts;
 using Aspire.Hosting.Testing;
 using Xunit;
 
-namespace Aspire.Hosting.ModularAppHosts.Tests;
+namespace Aspire.Hosting.ModularAppHosts.Testing.Tests;
 
 public sealed class DockerComposeDeploymentTestingBuilderTests
 {
