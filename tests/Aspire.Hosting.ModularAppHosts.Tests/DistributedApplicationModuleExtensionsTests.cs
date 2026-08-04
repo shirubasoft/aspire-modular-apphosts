@@ -373,6 +373,118 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public void Container_image_publish_working_directory_must_remain_inside_the_repository()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        var module = builder.ExportModule("invalid", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "podman",
+                    "build")
+                {
+                    ImageTag = "dev",
+                    WorkingDirectory = ".."
+                });
+        });
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() => builder.Add(module));
+
+        Assert.Equal(nameof(ModuleContainerExportOptions.WorkingDirectory), exception.ParamName);
+    }
+
+    [Fact]
+    public void Container_image_publish_command_can_only_be_configured_once()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var options = new ModuleContainerExportOptions("modular-static", "podman", "build")
+        {
+            ImageTag = "dev"
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ExportModule("invalid", definition =>
+            {
+                var container = definition.AddContainer("static", "modular-static", "dev");
+                container.WithImagePublishCommand(options);
+                container.WithImagePublishCommand(options);
+            }));
+
+        Assert.Contains("static", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("already has an image publish command", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WithImagePublishCommand_copies_mutable_options()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        var publishArguments = new[]
+        {
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            "."
+        };
+        var options = new ModuleContainerExportOptions("modular-static", "podman", publishArguments)
+        {
+            ImageTag = "dev"
+        };
+        var module = builder.ExportModule("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(options);
+        });
+
+        publishArguments[0] = "mutated";
+        options.ImageTag = "changed";
+        options.WorkingDirectory = "missing";
+
+        builder.Add(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal("dev-dirty", image.Tag);
+        Assert.Equal(
+            ["build", "--tag", "modular-static:dev-dirty", "."],
+            installer.PublishArguments);
+        Assert.Equal(repository.Path, installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public void Publish_mode_does_not_add_container_image_publish_installers()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path, "--publisher", "manifest");
+        var module = builder.ExportModule("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "podman",
+                    "build")
+                {
+                    ImageTag = "dev"
+                });
+        });
+
+        builder.Add(module);
+
+        Assert.True(builder.ExecutionContext.IsPublishMode);
+        Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+    }
+
+    [Fact]
     public void Clean_image_publish_plan_skips_a_tag_that_already_exists()
     {
         var options = new ModuleContainerExportOptions(
@@ -397,6 +509,32 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal("dev", plan.ImageTag);
         Assert.Equal("modular-static:dev", plan.ImageReference);
         Assert.Equal(["build", "--tag", "modular-static:dev", "."], plan.PublishArguments);
+    }
+
+    [Fact]
+    public void Clean_image_publish_plan_publishes_a_missing_tag()
+    {
+        var options = new ModuleContainerExportOptions(
+            "modular-static",
+            "podman",
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageTag = "dev"
+        };
+        var inspectedReference = string.Empty;
+
+        var plan = ModuleImagePublishPlan.Create(options, repositoryDirty: false, imageReference =>
+        {
+            inspectedReference = imageReference;
+            return false;
+        });
+
+        Assert.True(plan.ShouldPublish);
+        Assert.Equal("modular-static:dev", inspectedReference);
+        Assert.Equal("modular-static:dev", plan.ImageReference);
+        Assert.Equal(["build", "--tag", "modular-static:dev"], plan.PublishArguments);
     }
 
     [Fact]
@@ -436,6 +574,29 @@ public sealed class DistributedApplicationModuleExtensionsTests
                 "tag=dev-dirty"
             ],
             plan.PublishArguments);
+    }
+
+    [Fact]
+    public void Dirty_image_publish_plan_does_not_duplicate_the_dirty_suffix()
+    {
+        var options = new ModuleContainerExportOptions(
+            "modular-static",
+            "podman",
+            "build",
+            ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageTag = "dev-dirty"
+        };
+
+        var plan = ModuleImagePublishPlan.Create(
+            options,
+            repositoryDirty: true,
+            _ => throw new InvalidOperationException("Dirty images must not be inspected."));
+
+        Assert.True(plan.ShouldPublish);
+        Assert.Equal("dev-dirty", plan.ImageTag);
+        Assert.Equal("modular-static:dev-dirty", plan.ImageReference);
+        Assert.Equal(["build", "modular-static:dev-dirty"], plan.PublishArguments);
     }
 
     [Fact]
