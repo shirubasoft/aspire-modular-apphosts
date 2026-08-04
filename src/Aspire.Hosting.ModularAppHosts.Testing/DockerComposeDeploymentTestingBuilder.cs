@@ -2,7 +2,6 @@
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREUSERSECRETS001
 
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
 using System.Reflection;
@@ -12,10 +11,12 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Testing;
+using CliWrap;
 using HealthChecks.Uris;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
@@ -106,7 +107,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             environmentName,
             outputPath,
             appHostPath,
-            ProcessAspireCommandRunner.Instance,
+            CliWrapAspireCommandRunner.Instance,
             cancellationToken);
     }
 
@@ -439,93 +440,59 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             deployment.EnvironmentName,
             cancellationToken);
 
-    private static async Task RunAspireProcessAsync(
+    private static async Task RunAspireCliAsync(
         string command,
         string appHostPath,
         string outputPath,
         string environmentName,
         CancellationToken cancellationToken)
     {
-        using var process = new Process
+        var arguments = new List<string>
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "aspire",
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(appHostPath)!
-            }
+            command,
+            "--apphost",
+            appHostPath,
+            "--output-path",
+            outputPath,
+            "--environment",
+            environmentName
         };
-        process.StartInfo.ArgumentList.Add(command);
-        process.StartInfo.ArgumentList.Add("--apphost");
-        process.StartInfo.ArgumentList.Add(appHostPath);
-        process.StartInfo.ArgumentList.Add("--output-path");
-        process.StartInfo.ArgumentList.Add(outputPath);
-        process.StartInfo.ArgumentList.Add("--environment");
-        process.StartInfo.ArgumentList.Add(environmentName);
         if (string.Equals(command, "destroy", StringComparison.Ordinal))
         {
-            process.StartInfo.ArgumentList.Add("--yes");
+            arguments.Add("--yes");
         }
 
-        process.StartInfo.ArgumentList.Add("--non-interactive");
-
-        if (!process.Start())
-        {
-            throw new InvalidOperationException($"Failed to start 'aspire {command}'.");
-        }
-
-        var standardOutput = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var standardError = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        arguments.Add("--non-interactive");
+        var standardOutput = new StringBuilder();
+        var standardError = new StringBuilder();
+        CommandResult result;
         try
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            TryKillProcess(process);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            throw;
+            result = await CliCommand.Wrap("aspire")
+                .WithArguments(arguments)
+                .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToStringBuilder(standardOutput))
+                .WithStandardErrorPipe(PipeTarget.ToStringBuilder(standardError))
+                .ExecuteAsync(cancellationToken);
         }
         finally
         {
-            var output = await standardOutput.ConfigureAwait(false);
-            var error = await standardError.ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(output))
+            if (standardOutput.Length > 0)
             {
-                await Console.Out.WriteAsync(output).ConfigureAwait(false);
+                await Console.Out.WriteAsync(standardOutput.ToString()).ConfigureAwait(false);
             }
 
-            if (!string.IsNullOrEmpty(error))
+            if (standardError.Length > 0)
             {
-                await Console.Error.WriteAsync(error).ConfigureAwait(false);
+                await Console.Error.WriteAsync(standardError.ToString()).ConfigureAwait(false);
             }
         }
 
-        if (process.ExitCode != 0)
+        if (!result.IsSuccess)
         {
             throw new InvalidOperationException(
-                $"'aspire {command}' exited with code {process.ExitCode} for AppHost '{appHostPath}'.");
-        }
-    }
-
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Cancellation must preserve the original exception even if process termination races with exit.")]
-    private static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Preserve the cancellation exception.
+                $"'aspire {command}' exited with code {result.ExitCode} for AppHost '{appHostPath}'.");
         }
     }
 
@@ -705,9 +672,9 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
     private sealed class DeployedEndpointResource(string name) : Resource(name), IResourceWithEndpoints;
 
-    private sealed class ProcessAspireCommandRunner : IAspireCommandRunner
+    private sealed class CliWrapAspireCommandRunner : IAspireCommandRunner
     {
-        public static ProcessAspireCommandRunner Instance { get; } = new();
+        public static CliWrapAspireCommandRunner Instance { get; } = new();
 
         public Task RunAsync(
             string command,
@@ -715,7 +682,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             string outputPath,
             string environmentName,
             CancellationToken cancellationToken) =>
-            RunAspireProcessAsync(
+            RunAspireCliAsync(
                 command,
                 appHostPath,
                 outputPath,

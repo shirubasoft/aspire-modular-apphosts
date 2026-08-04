@@ -1,5 +1,6 @@
-using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
+using CliWrap;
+using CliWrap.Buffered;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
@@ -48,44 +49,25 @@ internal static class RepositoryInspector
 
         try
         {
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "git",
-                    WorkingDirectory = Directory.Exists(workingDirectory)
-                        ? workingDirectory
-                        : Path.GetDirectoryName(workingDirectory) ?? workingDirectory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var result = CliCommand.Wrap("git")
+                .WithArguments(arguments)
+                .WithWorkingDirectory(Directory.Exists(workingDirectory)
+                    ? workingDirectory
+                    : Path.GetDirectoryName(workingDirectory) ?? workingDirectory)
+                .WithValidation(CommandResultValidation.None)
+                .ExecuteBufferedAsync(timeout.Token)
+                .GetAwaiter()
+                .GetResult();
 
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
-            }
-
-            if (!process.Start())
-            {
-                return false;
-            }
-
-            output = process.StandardOutput.ReadToEnd();
-            _ = process.StandardError.ReadToEnd();
-
-            if (!process.WaitForExit(milliseconds: 5_000))
-            {
-                process.Kill(entireProcessTree: true);
-                return false;
-            }
-
-            return process.ExitCode == 0;
+            output = result.StandardOutput;
+            return result.IsSuccess;
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or IOException
+                or OperationCanceledException)
         {
             return false;
         }
@@ -144,69 +126,20 @@ internal static class RepositorySynchronizer
             return;
         }
 
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = command.Executable,
-                WorkingDirectory = Path.GetDirectoryName(repositoryPath)
-                    ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."),
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }
-        };
+        var result = await CliCommand.Wrap(command.Executable)
+            .WithArguments(command.Arguments)
+            .WithWorkingDirectory(Path.GetDirectoryName(repositoryPath)
+                ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."))
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(cancellationToken);
 
-        foreach (var argument in command.Arguments)
+        if (!result.IsSuccess)
         {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-
-        if (!process.Start())
-        {
-            throw new InvalidOperationException($"Failed to start repository synchronization for '{repositoryPath}'.");
-        }
-
-        var standardOutput = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var standardError = process.StandardError.ReadToEndAsync(CancellationToken.None);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            TryKillProcess(process);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-
-        if (process.ExitCode != 0)
-        {
-            var error = await standardError.ConfigureAwait(false);
+            var error = string.IsNullOrWhiteSpace(result.StandardError)
+                ? result.StandardOutput
+                : result.StandardError;
             throw new InvalidOperationException(
-                $"Repository synchronization failed for '{repositoryPath}' with exit code {process.ExitCode}: {error.Trim()}");
-        }
-
-        _ = await standardOutput.ConfigureAwait(false);
-    }
-
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Cancellation must preserve the original exception even if process termination races with exit.")]
-    private static void TryKillProcess(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Preserve the cancellation exception.
+                $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
         }
     }
 }

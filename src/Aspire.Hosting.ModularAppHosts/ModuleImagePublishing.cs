@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using CliWrap;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
@@ -67,7 +68,7 @@ internal sealed record ModuleImagePublishPlan(
 
 internal static class ContainerImageInspector
 {
-    private const int ProcessTimeoutMilliseconds = 5_000;
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(5);
 
     public static bool Exists(string imageReference)
     {
@@ -94,43 +95,22 @@ internal static class ContainerImageInspector
     {
         try
         {
-            using var process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = executable,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
-
-            foreach (var argument in arguments)
-            {
-                process.StartInfo.ArgumentList.Add(argument);
-            }
-
-            if (!process.Start())
-            {
-                return null;
-            }
-
-            var standardOutput = process.StandardOutput.ReadToEndAsync();
-            var standardError = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(ProcessTimeoutMilliseconds))
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit();
-                Task.WaitAll(standardOutput, standardError);
-                return null;
-            }
-
-            Task.WaitAll(standardOutput, standardError);
-            return process.ExitCode;
+            using var timeout = new CancellationTokenSource(CommandTimeout);
+            var result = CliCommand.Wrap(executable)
+                .WithArguments(arguments)
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
+                .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
+                .ExecuteAsync(timeout.Token)
+                .GetAwaiter()
+                .GetResult();
+            return result.ExitCode;
         }
         catch (Exception exception) when (
-            exception is InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or IOException
+                or OperationCanceledException)
         {
             return null;
         }

@@ -1,7 +1,9 @@
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Xml.Linq;
+using CliWrap;
+using CliWrap.Buffered;
 using Xunit;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts.PackageTests;
 
@@ -20,13 +22,14 @@ public sealed class PackedPackageContractTests
         var dependencies = ReadDependencies(packages.CorePackagePath);
 
         Assert.Contains(dependencies, dependency => dependency.Id == "Aspire.Hosting");
+        Assert.Contains(dependencies, dependency => dependency.Id == "CliWrap");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Testing");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Docker");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == TestingPackageId);
     }
 
     [Fact]
-    public async Task Testing_package_declares_core_Docker_and_testing_dependencies()
+    public async Task Testing_package_declares_required_dependencies()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
 
@@ -36,6 +39,7 @@ public sealed class PackedPackageContractTests
         Assert.Contains(packages.Version, core.Version, StringComparison.Ordinal);
         Assert.Contains(dependencies, dependency => dependency.Id == "Aspire.Hosting.Docker");
         Assert.Contains(dependencies, dependency => dependency.Id == "Aspire.Hosting.Testing");
+        Assert.Contains(dependencies, dependency => dependency.Id == "CliWrap");
     }
 
     [Fact]
@@ -239,46 +243,15 @@ public sealed class PackedPackageContractTests
         CancellationToken cancellationToken,
         params string[] arguments)
     {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            }
-        };
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-
-        Assert.True(process.Start(), $"Failed to start dotnet {string.Join(' ', arguments)}.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        var standardError = process.StandardError.ReadToEndAsync(CancellationToken.None);
-        try
-        {
-            await process.WaitForExitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
-            await process.WaitForExitAsync(CancellationToken.None);
-            throw;
-        }
-
-        var output = await standardOutput;
-        var error = await standardError;
+        var result = await CliCommand.Wrap("dotnet")
+            .WithArguments(arguments)
+            .WithWorkingDirectory(workingDirectory)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(cancellationToken);
         Assert.True(
-            process.ExitCode == 0,
-            $"dotnet {string.Join(' ', arguments)} failed with exit code {process.ExitCode}.{Environment.NewLine}" +
-            output + Environment.NewLine + error);
+            result.IsSuccess,
+            $"dotnet {string.Join(' ', arguments)} failed with exit code {result.ExitCode}.{Environment.NewLine}" +
+            result.StandardOutput + Environment.NewLine + result.StandardError);
     }
 
     private static string FindRepositoryRoot()

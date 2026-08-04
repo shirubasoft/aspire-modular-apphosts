@@ -1,8 +1,10 @@
-using System.Diagnostics;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
+using CliWrap;
+using CliWrap.Buffered;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
@@ -951,26 +953,16 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         private static void RunGit(string workingDirectory, params string[] arguments)
         {
-            var startInfo = new ProcessStartInfo
+            var result = CliCommand.Wrap("git")
+                .WithArguments(arguments)
+                .WithWorkingDirectory(workingDirectory)
+                .WithValidation(CommandResultValidation.None)
+                .ExecuteBufferedAsync()
+                .GetAwaiter()
+                .GetResult();
+            if (!result.IsSuccess)
             {
-                FileName = "git",
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false
-            };
-
-            foreach (var argument in arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Unable to start git.");
-            process.WaitForExit();
-            if (process.ExitCode != 0)
-            {
-                throw new InvalidOperationException(process.StandardError.ReadToEnd());
+                throw new InvalidOperationException(result.StandardError);
             }
         }
     }
