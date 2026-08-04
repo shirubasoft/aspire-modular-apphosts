@@ -118,4 +118,4 @@ dotnet test Aspire.ModularAppHosts.slnx --no-build --no-restore
 
 ## Publishing
 
-GitHub Actions builds, tests, and packs every pull request. To publish to NuGet.org, configure a repository secret named `NUGET_API_KEY`, then publish a GitHub release whose tag is a semantic version prefixed with `v`, such as `v1.0.0`. The publishing workflow can also be started manually with an explicit package version.
+GitHub Actions builds, tests, and packs every pull request. Publishing uses the Shirubasoft organization-level `NUGET_API_KEY` Actions secret, which is available to this repository. Publish a GitHub release whose tag is a semantic version prefixed with `v`, such as `v1.0.0`; the publishing workflow can also be started manually with an explicit package version.
