@@ -101,3 +101,46 @@ jobs:
           --environment CI
           --yes
           --non-interactive
+
+  e2e-multi-repo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Install Aspire CLI
+        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+
+      - name: Stage an isolated consumer repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          multi_repo_root="$(mktemp -d "$RUNNER_TEMP/multi-repo-e2e.XXXXXX")"
+          git clone --no-local "$GITHUB_WORKSPACE" "$multi_repo_root/consumer"
+          test ! -e "$multi_repo_root/spire"
+          echo "MULTI_REPO_ROOT=$multi_repo_root" >> "$GITHUB_ENV"
+          echo "MULTI_REPO_APPHOST=$multi_repo_root/consumer/samples/MultiRepoE2E/Spire.Consumer.AppHost" >> "$GITHUB_ENV"
+
+      - name: Validate a real multi-repository AppHost
+        shell: bash
+        run: |
+          set -euo pipefail
+          aspire start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
+          trap 'aspire stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
+
+          aspire wait spire-api --apphost "$MULTI_REPO_APPHOST" --timeout 180 --non-interactive
+
+          test -d "$MULTI_REPO_ROOT/spire/.git"
+          origin="$(git -C "$MULTI_REPO_ROOT/spire" remote get-url origin)"
+          test "${origin,,}" = "https://github.com/shirubasoft/spire.git"
+          curl --fail --show-error --silent http://localhost:55201/weatherforecast |
+            jq --exit-status 'length == 5 and all(.[]; has("date") and has("temperatureC"))'

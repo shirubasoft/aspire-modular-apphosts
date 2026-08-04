@@ -6,6 +6,9 @@
     <Project Path="samples/E2ETesting/EShop.Modules/EShop.Modules.csproj" />
     <Project Path="samples/E2ETesting/EShop.Orders.Api/EShop.Orders.Api.csproj" />
   </Folder>
+  <Folder Name="/samples/MultiRepoE2E/">
+    <Project Path="samples/MultiRepoE2E/Spire.Consumer.AppHost/Spire.Consumer.AppHost.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
     <Project Path="src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />

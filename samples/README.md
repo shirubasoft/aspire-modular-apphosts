@@ -78,3 +78,10 @@ The dashboard graph shows `Reference` and `WaitFor` relationships from `dependen
 ## E2E testing sample
 
 [`E2ETesting`](E2ETesting/README.md) contains a separate eShop example with `catalog` and `orders` modules. Its E2E AppHost supports both Aspire's in-process testing builder and an Aspire-deployed Docker Compose environment. The same test scenario runs against both modes in CI.
+
+## Multi-repository E2E sample
+
+[`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
+sample API from the separate `Shirubasoft/spire` repository. CI runs it from an isolated Git root,
+so the real GitHub CLI must discover and clone the missing sibling repository before Aspire can
+start the service.
