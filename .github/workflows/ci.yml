@@ -208,7 +208,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      GH_TOKEN: ${{ github.token }}
+      ASPIRE_CONTAINER_RUNTIME: docker
 
     steps:
       - name: Check out repository
@@ -222,25 +222,49 @@ jobs:
       - name: Restore the pinned Aspire CLI
         run: dotnet tool restore
 
-      - name: Pack the producer-owned module contract
+      - name: Create isolated consumer and resource repositories
         shell: bash
         run: |
           set -euo pipefail
           multi_repo_root="$(mktemp -d "$RUNNER_TEMP/multi-repo-e2e.XXXXXX")"
           package_version="0.0.0-multi-repo-e2e"
           package_feed="$multi_repo_root/packages"
+          consumer_repository="$multi_repo_root/consumer"
+          resource_repository="$multi_repo_root/resource-build-source"
           mkdir -p "$package_feed"
+
           dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj \
             --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
           dotnet pack samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj \
             --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
 
-          git clone --no-local "$GITHUB_WORKSPACE" "$multi_repo_root/consumer"
-          test ! -e "$multi_repo_root/spire"
-          mv "$multi_repo_root/consumer/samples/MultiRepoE2E/Spire.ModuleContract" \
+          git clone --no-local "$GITHUB_WORKSPACE" "$consumer_repository"
+          mv "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract" \
             "$multi_repo_root/producer-contract-source"
+          mv "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository" \
+            "$resource_repository"
+          test ! -e "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract"
+          test ! -e "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository"
+
+          git -C "$resource_repository" init --initial-branch main
+          git -C "$resource_repository" config user.name "MultiRepo E2E"
+          git -C "$resource_repository" config user.email "multi-repo@example.invalid"
+          git -C "$resource_repository" add .
+          git -C "$resource_repository" commit -m "Add pinned resource build"
+          resource_revision="$(git -C "$resource_repository" rev-parse HEAD)"
+
+          printf '%s\n' 'multi-repo-resource-unpinned-latest' \
+            > "$resource_repository/marker.txt"
+          git -C "$resource_repository" add marker.txt
+          git -C "$resource_repository" commit -m "Change marker after pinned revision"
+          resource_latest_revision="$(git -C "$resource_repository" rev-parse HEAD)"
+          test "$resource_revision" != "$resource_latest_revision"
+
           echo "MULTI_REPO_ROOT=$multi_repo_root" >> "$GITHUB_ENV"
-          echo "MULTI_REPO_APPHOST=$multi_repo_root/consumer/samples/MultiRepoE2E/Spire.Consumer.AppHost" >> "$GITHUB_ENV"
+          echo "MULTI_REPO_APPHOST=$consumer_repository/samples/MultiRepoE2E/Spire.Consumer.AppHost" >> "$GITHUB_ENV"
+          echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository" >> "$GITHUB_ENV"
+          echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision" >> "$GITHUB_ENV"
+          echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision" >> "$GITHUB_ENV"
           echo "SpireContractPackageVersion=$package_version" >> "$GITHUB_ENV"
           echo "RestoreAdditionalProjectSources=$package_feed" >> "$GITHUB_ENV"
 
@@ -254,18 +278,43 @@ jobs:
           dotnet tool run aspire -- start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
           trap 'dotnet tool run aspire -- stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
 
-          dotnet tool run aspire -- wait spire-api --apphost "$MULTI_REPO_APPHOST" --timeout 180 --non-interactive
+          dotnet tool run aspire -- wait multi-repo-api \
+            --apphost "$MULTI_REPO_APPHOST" \
+            --timeout 180 \
+            --non-interactive
 
-          test -d "$MULTI_REPO_ROOT/spire/.git"
-          origin="$(git -C "$MULTI_REPO_ROOT/spire" remote get-url origin)"
-          test "${origin,,}" = "https://github.com/shirubasoft/spire.git"
-          spire_api_url="$(
-            dotnet tool run aspire -- describe spire-api \
+          mapfile -t managed_git_directories < <(
+            find "$MULTI_REPO_APPHOST/.aspire/module-repositories" \
+              -type d \
+              -name .git \
+              -print
+          )
+          if (( ${#managed_git_directories[@]} != 1 )); then
+            echo "Expected exactly one managed build repository checkout." >&2
+            exit 1
+          fi
+          build_checkout="${managed_git_directories[0]%/.git}"
+          actual_revision="$(git -C "$build_checkout" rev-parse HEAD)"
+          test "$actual_revision" = "$MULTI_REPO_RESOURCE_BUILD_REVISION"
+          test "$(git -C "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY" rev-parse HEAD)" = \
+            "$MULTI_REPO_RESOURCE_LATEST_REVISION"
+          test -z "$(git -C "$build_checkout" branch --show-current)"
+
+          origin="$(git -C "$build_checkout" remote get-url origin)"
+          test "$(realpath "$origin")" = "$(realpath "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY")"
+          test -n "$(docker image ls \
+            --filter 'reference=multi-repo-e2e-resource:*' \
+            --format '{{.Repository}}:{{.Tag}}')"
+
+          resource_url="$(
+            dotnet tool run aspire -- describe multi-repo-api \
               --apphost "$MULTI_REPO_APPHOST" \
               --format Json \
               --non-interactive |
               jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
           )"
-          test -n "$spire_api_url"
-          curl --fail --show-error --silent "${spire_api_url%/}/weatherforecast" |
-            jq --exit-status 'length == 5 and all(.[]; has("date") and has("temperatureC"))'
+          test -n "$resource_url"
+          test "$(curl --fail --show-error --silent "${resource_url%/}/health.txt")" = \
+            "healthy-from-separate-build-repository"
+          test "$(curl --fail --show-error --silent "${resource_url%/}/marker.txt")" = \
+            "multi-repo-resource-pinned-revision"

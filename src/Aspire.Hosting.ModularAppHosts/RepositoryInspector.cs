@@ -606,6 +606,33 @@ internal static class ModuleRepositoryDiscovery
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         ArgumentNullException.ThrowIfNull(module);
 
+        var projectRepositoryRoot = module.ProjectDefinitions.Count == 0
+            ? null
+            : module.ProjectDefinitions[0].SourceRepositoryRoot;
+        return await ResolveAsync(
+            appHostDirectory,
+            module.Name,
+            projectRepositoryRoot,
+            repository,
+            githubCliPath,
+            commandTimeout,
+            gitExecutablePath,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<ModuleRepositoryResolution> ResolveAsync(
+        string appHostDirectory,
+        string subjectName,
+        string? sourceRepositoryRoot,
+        string? repository,
+        string githubCliPath,
+        TimeSpan? commandTimeout = null,
+        string gitExecutablePath = "git",
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subjectName);
+
         var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
             appHostDirectory,
             gitExecutablePath,
@@ -617,10 +644,7 @@ internal static class ModuleRepositoryDiscovery
                 $"Automatic module discovery requires AppHost directory '{appHostDirectory}' to be inside a Git repository.");
         }
 
-        var projectRepositoryRoot = module.ProjectDefinitions.Count == 0
-            ? null
-            : module.ProjectDefinitions[0].SourceRepositoryRoot;
-        if (PathSafety.AreEqual(projectRepositoryRoot, appHostRepositoryRoot))
+        if (PathSafety.AreEqual(sourceRepositoryRoot, appHostRepositoryRoot))
         {
             return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
         }
@@ -654,10 +678,10 @@ internal static class ModuleRepositoryDiscovery
         var siblingPath = GetSiblingPath(
             appHostDirectory,
             siblingParent,
-            projectRepositoryRoot,
+            sourceRepositoryRoot,
             repository);
 
-        EnsureSiblingPath(appHostRepositoryRoot, siblingParent, siblingPath, module.Name);
+        EnsureSiblingPath(appHostRepositoryRoot, siblingParent, siblingPath, subjectName);
 
         if (Directory.Exists(siblingPath))
         {
@@ -669,14 +693,14 @@ internal static class ModuleRepositoryDiscovery
                     cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
-                    $"Discovered module '{module.Name}' at '{siblingPath}', but that directory is not a Git repository.");
+                    $"Discovered repository for '{subjectName}' at '{siblingPath}', but that directory is not a Git repository.");
             }
 
             await EnsureExpectedOriginAsync(
                 siblingPath,
                 repository,
                 appHostDirectory,
-                module.Name,
+                subjectName,
                 gitExecutablePath,
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false);
@@ -687,9 +711,9 @@ internal static class ModuleRepositoryDiscovery
         if (string.IsNullOrWhiteSpace(repository) || IsLocalRepository(repository, appHostDirectory))
         {
             throw new InvalidOperationException(
-                $"Module '{module.Name}' was not found at sibling path '{siblingPath}'. " +
+                $"Repository for '{subjectName}' was not found at sibling path '{siblingPath}'. " +
                 $"Automatic cloning requires a GitHub repository configured through " +
-                $"{DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(module.Name)} or WithRepository().");
+                "the module definition or AppHost configuration.");
         }
 
         await GitHubRepositoryCloner.CloneAsync(
@@ -703,7 +727,7 @@ internal static class ModuleRepositoryDiscovery
             siblingPath,
             repository,
             appHostDirectory,
-            module.Name,
+            subjectName,
             gitExecutablePath,
             commandTimeout,
             cancellationToken).ConfigureAwait(false);

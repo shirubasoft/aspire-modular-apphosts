@@ -324,6 +324,115 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public async Task Resource_auto_clone_policy_clones_build_repository_without_cloning_container_definition_repository()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var parent = TemporaryDirectory.Create();
+        using var source = TemporaryDirectory.Create();
+        File.WriteAllText(Path.Combine(source.Path, "Containerfile"), "FROM scratch");
+        await InitializeGitAsync(source.Path, "feature/build-inputs");
+        const string BuildRepository = "https://github.com/acme/build-inputs.git";
+        await RunGitAsync(source.Path, "remote", "add", "origin", BuildRepository);
+
+        var appHostRoot = Path.Combine(parent.Path, "consumer");
+        var appHostDirectory = Path.Combine(appHostRoot, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
+
+        var fakeGh = CreateFakeGh(parent.Path, source.Path, BuildRepository);
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] = fakeGh;
+        builder.Configuration[$"{section}:BuildRepository"] = BuildRepository;
+        builder.Configuration[$"{section}:AutoCloneBuildRepository"] = "true";
+        builder.Configuration[$"{section}:UpdateBuildRepository"] = "false";
+        var imageName = $"module-test-auto-cloned-build-{Guid.NewGuid():N}";
+        await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/module-definition.git");
+            definition.AddContainer("static-site", imageName, "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    imageName,
+                    "podman",
+                    "build",
+                    ModuleContainerExportOptions.ImageReferencePlaceholder,
+                    "."));
+        });
+
+        await builder.ImportModuleAsync("static");
+
+        var clonePath = Path.Combine(parent.Path, "build-inputs");
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var definitionAnnotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.True(definitionAnnotation.Imported);
+        Assert.False(Directory.Exists(definitionAnnotation.RepositoryPath));
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal(await ExpectedTagAsync(clonePath, "feature/build-inputs"), image.Tag);
+        Assert.Equal(clonePath, installer.RepositoryPath);
+        Assert.Equal(clonePath, installer.WorkingDirectory);
+        Assert.Equal(BuildRepository, installer.Repository);
+        Assert.False(installer.UpdatesRepository);
+        Assert.True(await RepositoryInspector.IsGitRepositoryAsync(
+            clonePath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Resource_auto_clone_reuses_but_does_not_update_the_active_apphost_worktree()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(appHost.Path, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHost.Path, "README.md"), "consumer build inputs");
+        await InitializeGitAsync(appHost.Path, "feature/consumer-build");
+        const string BuildRepository = "https://github.com/acme/consumer.git";
+        await RunGitAsync(appHost.Path, "remote", "add", "origin", BuildRepository);
+        var originalHead = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            appHost.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{section}:BuildRepository"] = BuildRepository;
+        builder.Configuration[$"{section}:AutoCloneBuildRepository"] = "true";
+        builder.Configuration[$"{section}:UpdateBuildRepository"] = "true";
+        var imageName = $"module-test-active-apphost-build-{Guid.NewGuid():N}";
+        await builder.ExportModuleAsync("static", definition =>
+            definition.AddContainer("static-site", imageName, "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    imageName,
+                    "podman",
+                    "build",
+                    ModuleContainerExportOptions.ImageReferencePlaceholder,
+                    ".")
+                {
+                    ImageTag = "dev"
+                }));
+
+        await builder.ImportModuleAsync("static");
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal(appHost.Path, installer.RepositoryPath);
+        Assert.False(installer.UpdatesRepository);
+        Assert.Equal("feature/consumer-build", await RepositoryInspector.TryGetBranchAsync(
+            appHost.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(originalHead, await RepositoryInspector.TryResolveCommitAsync(
+            appHost.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Missing_gh_has_an_actionable_error_only_when_auto_clone_is_enabled()
     {
         using var parent = TemporaryDirectory.Create();
@@ -554,7 +663,10 @@ public sealed class ModuleRepositoryDiscoveryTests
         return builder;
     }
 
-    private static string CreateFakeGh(string directory, string sourceRepository)
+    private static string CreateFakeGh(
+        string directory,
+        string sourceRepository,
+        string remoteRepository = "https://github.com/acme/orders.git")
     {
         if (OperatingSystem.IsWindows())
         {
@@ -563,11 +675,12 @@ public sealed class ModuleRepositoryDiscoveryTests
 
         var path = Path.Combine(directory, "fake-gh");
         var escapedSource = sourceRepository.Replace("'", "'\"'\"'", StringComparison.Ordinal);
+        var escapedRemote = remoteRepository.Replace("'", "'\"'\"'", StringComparison.Ordinal);
         File.WriteAllText(
             path,
             $"#!/bin/sh{Environment.NewLine}" +
             $"git clone --recurse-submodules -- '{escapedSource}' \"$4\" || exit $?{Environment.NewLine}" +
-            $"exec git -C \"$4\" remote set-url origin https://github.com/acme/orders.git{Environment.NewLine}");
+            $"exec git -C \"$4\" remote set-url origin '{escapedRemote}'{Environment.NewLine}");
         File.SetUnixFileMode(
             path,
             UnixFileMode.UserRead |

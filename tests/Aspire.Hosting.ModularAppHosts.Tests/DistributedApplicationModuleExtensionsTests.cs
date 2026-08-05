@@ -867,6 +867,288 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(nameof(ModuleContainerExportOptions.WorkingDirectory), exception.ParamName);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Image_publish_uses_separate_dirty_build_repository_and_defaults_to_its_root(
+        bool projectResource)
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(
+            initializeGit: true,
+            projectRelativePath: Path.Combine("src", "Orders.Api", "Orders.Api.csproj"));
+        using var buildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(buildRepository.ProjectPath, Environment.NewLine + "<!-- dirty build input -->");
+        var builder = CreateBuilder(definitionRepository.Path);
+        var imageName = $"module-test-separate-build-{Guid.NewGuid():N}";
+        var options = new ModuleContainerExportOptions(
+            imageName,
+            "dotnet",
+            "publish",
+            ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageTag = "dev",
+            BuildRepository = buildRepository.Path
+        };
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            if (projectResource)
+            {
+                definition.AddProject("orders-api", definitionRepository.ProjectPath)
+                    .ExportAsContainer(options);
+            }
+            else
+            {
+                definition.AddContainer("orders-api", imageName, "dev")
+                    .WithImagePublishCommand(options);
+            }
+        });
+
+        await builder.AddAsync(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var annotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal(definitionRepository.Path, annotation.RepositoryPath);
+        Assert.Equal(buildRepository.Path, installer.RepositoryPath);
+        Assert.Equal(buildRepository.Path, installer.WorkingDirectory);
+        Assert.True(installer.RepositoryDirty);
+        Assert.Equal("dev-dirty", image.Tag);
+        Assert.False(await RepositoryInspector.IsDirtyAsync(
+            definitionRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Image_publish_working_directory_must_remain_inside_the_separate_build_repository(
+        bool projectResource)
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var buildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(buildRepository.ProjectPath, Environment.NewLine + "<!-- dirty build input -->");
+        var builder = CreateBuilder(definitionRepository.Path);
+        var imageName = $"module-test-contained-build-{Guid.NewGuid():N}";
+        var options = new ModuleContainerExportOptions(imageName, "dotnet", "publish")
+        {
+            ImageTag = "dev",
+            BuildRepository = buildRepository.Path,
+            WorkingDirectory = ".."
+        };
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            if (projectResource)
+            {
+                definition.AddProject("orders-api", definitionRepository.ProjectPath)
+                    .ExportAsContainer(options);
+            }
+            else
+            {
+                definition.AddContainer("orders-api", imageName, "dev")
+                    .WithImagePublishCommand(options);
+            }
+        });
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => builder.AddAsync(module));
+
+        Assert.Equal(nameof(ModuleContainerExportOptions.WorkingDirectory), exception.ParamName);
+    }
+
+    [Fact]
+    public async Task Resource_configuration_overrides_build_checkout_and_does_not_mutate_definition_repository()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var declaredBuildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var configuredBuildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        var configuredRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            configuredBuildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        File.AppendAllText(
+            configuredBuildRepository.ProjectPath,
+            Environment.NewLine + "<!-- later build input -->");
+        await TestRepository.RunGitAsync(configuredBuildRepository.Path, "add", ".");
+        await TestRepository.RunGitAsync(configuredBuildRepository.Path, "commit", "-m", "later build input");
+        var configuredSourceHead = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            configuredBuildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var definitionHead = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            definitionRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        using var imports = TemporaryDirectory.Create();
+        var builder = CreateBuilder(definitionRepository.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.Configuration[$"{section}:BuildRepository"] = configuredBuildRepository.Path;
+        builder.Configuration[$"{section}:BuildRepositoryRevision"] = configuredRevision;
+        builder.Configuration[$"{section}:PublishWorkingDirectory"] = "configured";
+        builder.Configuration[$"{section}:AutoCloneBuildRepository"] = "true";
+        builder.Configuration[$"{section}:UpdateBuildRepository"] = "false";
+        var imageName = $"module-test-configured-build-{Guid.NewGuid():N}";
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            definition.AddProject("orders-api", definitionRepository.ProjectPath)
+                .ExportAsContainer(new ModuleContainerExportOptions(imageName, "dotnet", "publish")
+                {
+                    BuildRepository = declaredBuildRepository.Path,
+                    BuildRepositoryRevision = "declared-revision",
+                    WorkingDirectory = "declared"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var image = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal(configuredBuildRepository.Path, installer.Repository);
+        Assert.StartsWith(imports.Path, installer.RepositoryPath, StringComparison.Ordinal);
+        Assert.Equal(Path.Combine(installer.RepositoryPath, "configured"), installer.WorkingDirectory);
+        Assert.False(installer.UpdatesRepository);
+        Assert.Equal($"sha-{configuredRevision[..12]}", image.Tag);
+        Assert.Equal(configuredRevision, await RepositoryInspector.TryResolveCommitAsync(
+            installer.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(await RepositoryInspector.TryGetBranchAsync(
+            installer.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(configuredSourceHead, await RepositoryInspector.TryResolveCommitAsync(
+            configuredBuildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(definitionHead, await RepositoryInspector.TryResolveCommitAsync(
+            definitionRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await RepositoryInspector.IsDirtyAsync(
+            definitionRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Resource_update_policy_fast_forwards_an_existing_build_checkout()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var buildSource = await TestRepository.CreateAsync(initializeGit: true);
+        using var checkoutParent = TemporaryDirectory.Create();
+        var buildCheckout = Path.Combine(checkoutParent.Path, "build-checkout");
+        await TestRepository.RunGitAsync(checkoutParent.Path, "clone", "--", buildSource.Path, buildCheckout);
+        File.AppendAllText(buildSource.ProjectPath, Environment.NewLine + "<!-- current build input -->");
+        await TestRepository.RunGitAsync(buildSource.Path, "add", ".");
+        await TestRepository.RunGitAsync(buildSource.Path, "commit", "-m", "current build input");
+        var currentBuildHead = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            buildSource.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(definitionRepository.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{section}:UpdateBuildRepository"] = "true";
+        var imageName = $"module-test-updated-build-{Guid.NewGuid():N}";
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            definition.AddContainer("static-site", imageName, "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(imageName, "dotnet", "publish")
+                {
+                    ImageTag = "dev",
+                    BuildRepository = buildCheckout
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.True(installer.UpdatesRepository);
+        Assert.Equal(buildCheckout, installer.RepositoryPath);
+        Assert.Equal(currentBuildHead, await RepositoryInspector.TryResolveCommitAsync(
+            buildCheckout,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Publishing_disabled_with_immutable_image_skips_definition_and_build_repository_checkouts()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var missingBuildRepository = Path.Combine(workspace.Path, "missing-build-repository");
+        var builder = CreateBuilder(workspace.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.Configuration[$"{section}:BuildRepository"] = missingBuildRepository;
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+        builder.Configuration[$"{section}:ImageSHA256"] = $"sha256:{new string('a', 64)}";
+        await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/module-definition.git");
+            definition.AddContainer("static-site", "registry.example.test/static-site", "preview")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "registry.example.test/static-site",
+                    "dotnet",
+                    "publish"));
+        });
+
+        var module = await builder.ImportModuleAsync("static");
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var annotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.True(annotation.Imported);
+        Assert.Equal(new string('a', 64), image.SHA256);
+        Assert.Same(container, module.GetResource<ContainerResource>("static-site").Resource);
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.False(Directory.Exists(annotation.RepositoryPath));
+        Assert.False(Directory.Exists(missingBuildRepository));
+    }
+
+    [Fact]
+    public async Task Imported_same_identity_build_repository_is_cloned_before_selecting_its_image_tag()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        using var sourceRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var imports = TemporaryDirectory.Create();
+        var branch = Assert.IsType<string>(await RepositoryInspector.TryGetBranchAsync(
+            sourceRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var commit = Assert.IsType<string>(await RepositoryInspector.TryGetCommitAsync(
+            sourceRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(appHost.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        var imageName = $"module-test-same-build-{Guid.NewGuid():N}";
+        await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(sourceRepository.Path);
+            definition.AddContainer("static-site", imageName)
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    imageName,
+                    "dotnet",
+                    "publish")
+                {
+                    BuildRepository = sourceRepository.Path
+                });
+        });
+
+        await builder.ImportModuleAsync("static");
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.NotEqual(sourceRepository.Path, installer.RepositoryPath);
+        Assert.StartsWith(imports.Path, installer.RepositoryPath, StringComparison.Ordinal);
+        Assert.Equal(sourceRepository.Path, installer.Repository);
+        Assert.Equal(ModuleImageTag.FromRepository(branch, commit), image.Tag);
+        Assert.Equal(commit, await RepositoryInspector.TryGetCommitAsync(
+            installer.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task Publish_mode_does_not_add_run_only_installer_resources()
     {
@@ -1040,7 +1322,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
         };
         var options = new ModuleContainerExportOptions("modular-static", "podman", publishArguments)
         {
-            ImageTag = "dev"
+            ImageTag = "dev",
+            BuildRepository = repository.Path
         };
         var module = await builder.ExportModuleAsync("static", definition =>
         {
@@ -1052,6 +1335,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
         publishArguments[0] = "mutated";
         options.ImageTag = "changed";
         options.WorkingDirectory = "missing";
+        options.BuildRepository = Path.Combine(repository.Path, "missing");
+        options.BuildRepositoryRevision = "missing";
 
         await builder.AddAsync(module);
 
@@ -1773,10 +2058,13 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         public string ProjectPath { get; }
 
-        public static async Task<TestRepository> CreateAsync(bool initializeGit = false)
+        public static async Task<TestRepository> CreateAsync(
+            bool initializeGit = false,
+            string projectRelativePath = "Orders.Api.csproj")
         {
             var directory = TemporaryDirectory.Create();
-            var projectPath = System.IO.Path.Combine(directory.Path, "Orders.Api.csproj");
+            var projectPath = System.IO.Path.Combine(directory.Path, projectRelativePath);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(projectPath)!);
             File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
 
             if (initializeGit)

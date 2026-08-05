@@ -163,7 +163,7 @@ module.AddResource<PostgresServerResource>("postgres", context =>
     context.ApplicationBuilder.AddPostgres(context.ResourceName));
 ```
 
-Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically because the command runs from repository content.
+Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically when the command uses the module repository. A publisher with an explicit `BuildRepository` can keep the module definition repository-independent.
 
 Factories run in declaration order when the module is materialized. The context provides the receiving builder, required resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`.
 
@@ -201,7 +201,49 @@ In run mode, a one-shot installer invokes the configured executable before the c
 
 Publish arguments can use the `{image}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
 
-`WorkingDirectory` is relative to the repository root. It defaults to the project directory for `ExportAsContainer` and to the repository root for `WithImagePublishCommand`. The command and arguments are executed directly without a shell.
+`WorkingDirectory` is relative to the effective build repository root. It defaults to the project directory for `ExportAsContainer` when the module repository also builds the image. A separate build repository and `WithImagePublishCommand` both default to the build repository root. The command and arguments are executed directly without a shell.
+
+### Build a resource from another repository
+
+The repository that defines a resource and the repository that builds its image are independent. Set `BuildRepository` on the resource's export options when, for example, an application contract declares a custom database container but the Dockerfile and build script belong to the database repository:
+
+```csharp
+module.AddContainer("orders-database", "example/orders-database")
+    .WithImagePublishCommand(new ModuleContainerExportOptions(
+        imageName: "example/orders-database",
+        publishCommand: "./build-image.sh",
+        publishArguments: [ModuleContainerExportOptions.ImageReferencePlaceholder])
+    {
+        BuildRepository = "https://github.com/example/orders-database.git",
+        BuildRepositoryRevision = "main",
+        WorkingDirectory = "."
+    });
+```
+
+The AppHost resolves and synchronizes that checkout independently of the module repository, runs the publisher from it, and uses the build checkout's branch, commit, and dirty state for the default image tag. The container's module annotation still points to the definition repository; the generated installer points to the build repository. An exact `BuildRepositoryRevision` that differs from the definition checkout is checked out in a separate managed worktree, so selecting a database commit never changes the application checkout or a sibling source worktree.
+
+The receiving AppHost can replace the declaration for one environment without changing the shared contract:
+
+```csharp
+builder.ConfigureModularAppHosts(options =>
+{
+    options.Modules[OrdersModule.Name] = new DistributedApplicationModuleOptions
+    {
+        Containers =
+        {
+            ["orders-database"] = new DistributedApplicationModuleContainerOptions
+            {
+                BuildRepository = "/work/orders-database",
+                BuildRepositoryRevision = "feature/new-schema",
+                AutoCloneBuildRepository = false,
+                UpdateBuildRepository = false
+            }
+        }
+    };
+});
+```
+
+Relative local build-repository paths are resolved from the AppHost directory. `AutoCloneBuildRepository` selects the same direct-sibling convention as module auto-cloning; otherwise the checkout is placed under `RepositoryBasePath`. `UpdateBuildRepository` controls updates independently of the definition checkout. If publishing is disabled and the resource has an explicit tag or `ImageSHA256`, no build checkout is required—the origin repository's already-built image can be pulled directly.
 
 ## AppHost configuration
 
@@ -245,6 +287,10 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
                 "-p:ContainerImageTag={image-tag}"
               ],
               "PublishWorkingDirectory": "src/Orders.Api",
+              "BuildRepository": "https://github.com/example/orders-api-images.git",
+              "BuildRepositoryRevision": "release/2026-08",
+              "AutoCloneBuildRepository": false,
+              "UpdateBuildRepository": true,
               "ImagePullPolicy": "Never"
             }
           },
@@ -265,7 +311,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 `ProjectMode` is honored only in Aspire run mode. Its safe `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built.
 
-Existing clean imported repositories update by default. Set `UpdateRepository` or `UpdateImportedRepositories` to `false` where a checkout must remain fixed. Image build commands remain opt-in through `PublishImage`/`PublishImages`. Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
+Existing clean imported repositories update by default. Set `UpdateRepository` or `UpdateImportedRepositories` to `false` where a checkout must remain fixed. Resource-level `UpdateBuildRepository` and `AutoCloneBuildRepository` independently override those policies for a separate image-build checkout. Image build commands remain opt-in through `PublishImage`/`PublishImages`. Image, command, build-repository, and build-revision settings override a publisher declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy; an explicit tag or digest also avoids resolving an unused build repository.
 
 Configured module, project, and container names are validated against exported definitions. A typo fails with the missing name and the available names instead of being silently ignored. With sibling discovery enabled, every specialized `AddProject` path is also checked after discovery or cloning; an absent service project fails with its module name, resource name, and expected path.
 

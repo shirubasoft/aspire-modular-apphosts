@@ -38,7 +38,7 @@ internal static class PathSafety
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 path,
-                "The path must remain inside the module repository and cannot traverse a symbolic link outside it.");
+                "The path must remain inside the selected repository and cannot traverse a symbolic link outside it.");
         }
 
         return candidate;

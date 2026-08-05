@@ -49,7 +49,7 @@ internal sealed class DistributedApplicationModuleBuilder(
 
         var container = new DistributedApplicationModuleContainer(name, image, tag);
         module.AddContainer(container);
-        return new DistributedApplicationModuleContainerBuilder(module, container);
+        return new DistributedApplicationModuleContainerBuilder(container);
     }
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository)
@@ -124,13 +124,14 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
             options.PublishArguments.ToArray())
         {
             ImageTag = options.ImageTag,
-            WorkingDirectory = options.WorkingDirectory
+            WorkingDirectory = options.WorkingDirectory,
+            BuildRepository = options.BuildRepository,
+            BuildRepositoryRevision = options.BuildRepositoryRevision
         };
     }
 }
 
 internal sealed class DistributedApplicationModuleContainerBuilder(
-    DistributedApplicationModule module,
     DistributedApplicationModuleContainer container) : IDistributedApplicationModuleContainerBuilder
 {
     public IDistributedApplicationModuleContainer Container => container;
@@ -158,7 +159,6 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
         }
 
         container.SetImagePublishOptions(copiedOptions);
-        module.RequiresRepositoryContent = true;
         return this;
     }
 }

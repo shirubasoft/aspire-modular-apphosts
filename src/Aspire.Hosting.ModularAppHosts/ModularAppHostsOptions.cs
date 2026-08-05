@@ -120,8 +120,26 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the complete argument list used to publish the image.</summary>
     public IReadOnlyList<string>? PublishArguments { get; set; }
 
-    /// <summary>Gets or sets the publish working directory relative to the module repository.</summary>
+    /// <summary>Gets or sets the publish working directory relative to the effective build repository.</summary>
     public string? PublishWorkingDirectory { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Git repository containing this resource's image build inputs. This overrides the repository
+    /// declared by <see cref="ModuleContainerExportOptions.BuildRepository"/>.
+    /// </summary>
+    public string? BuildRepository { get; set; }
+
+    /// <summary>Gets or sets the branch, tag, or commit checked out from the build repository.</summary>
+    public string? BuildRepositoryRevision { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether a missing build repository is cloned beside the AppHost repository instead of under the
+    /// managed repository base path.
+    /// </summary>
+    public bool? AutoCloneBuildRepository { get; set; }
+
+    /// <summary>Gets or sets whether an existing clean build repository is updated before publishing.</summary>
+    public bool? UpdateBuildRepository { get; set; }
 
     /// <summary>Gets or sets the container runtime image pull policy.</summary>
     public ImagePullPolicy? ImagePullPolicy { get; set; }

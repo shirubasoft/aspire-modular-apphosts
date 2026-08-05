@@ -198,8 +198,19 @@ public sealed class ModuleContainerExportOptions(
     public string? ImageTag { get; set; }
 
     /// <summary>
-    /// Gets or sets the publish working directory relative to the repository root. The project directory is used
-    /// when this is not set.
+    /// Gets or sets the publish working directory relative to the effective build repository root. When this is not
+    /// set, exported projects use their project directory for the module repository and the repository root for a
+    /// separate build repository. Container publishers always use the repository root.
     /// </summary>
     public string? WorkingDirectory { get; set; }
+
+    /// <summary>
+    /// Gets or sets the Git repository that contains the image build inputs. When omitted, the module repository is used.
+    /// </summary>
+    public string? BuildRepository { get; set; }
+
+    /// <summary>
+    /// Gets or sets the branch, tag, or commit checked out from <see cref="BuildRepository"/> before publishing.
+    /// </summary>
+    public string? BuildRepositoryRevision { get; set; }
 }

@@ -1,6 +1,14 @@
 #nullable enable
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.get -> bool?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepository.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepository.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepositoryRevision.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepositoryRevision.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.get -> string?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.UpdateBuildRepository.get -> bool?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.UpdateBuildRepository.set -> void
 Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver
 Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity
 Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Commit.get -> string!
@@ -98,6 +106,10 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Name.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Name.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepository.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepository.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevision.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevision.set -> void
 const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 1 -> int
 const Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.CurrentSchemaVersion = 1 -> int
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
