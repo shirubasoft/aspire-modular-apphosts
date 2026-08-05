@@ -3,6 +3,7 @@
     <Title>Spire sample module contract</Title>
     <Description>Producer-owned sample contract used to validate a packaged multi-repository Aspire module.</Description>
     <PackageId>Shirubasoft.Spire.Sample.ModuleContract</PackageId>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
   <ItemGroup>
@@ -10,5 +11,8 @@
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="../../../src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

@@ -7,7 +7,6 @@
                       IsAspireProjectResource="false" />
   </ItemGroup>
   <ItemGroup Condition="'$(SpireContractPackageVersion)' != ''">
-    <PackageReference Include="Shirubasoft.Spire.Sample.ModuleContract"
-                      Version="$(SpireContractPackageVersion)" />
+    <PackageReference Include="Shirubasoft.Spire.Sample.ModuleContract" />
   </ItemGroup>
 </Project>
