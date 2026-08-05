@@ -18,6 +18,9 @@ namespace Aspire.Hosting.ModularAppHosts.Generators;
 [Generator(LanguageNames.CSharp)]
 public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerator
 {
+    private static readonly string GeneratorVersion =
+        typeof(DistributedApplicationModuleGenerator).Assembly.GetName().Version?.ToString() ?? "unknown";
+
     private const string AttributeMetadataName =
         "Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute";
 
@@ -76,6 +79,14 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         "SAMHSG007",
         "Invalid generated module version",
         "The module version supplied to GenerateDistributedApplicationModule must be a non-empty compile-time string",
+        "Shirubasoft.Aspire.ModularAppHosts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static readonly DiagnosticDescriptor InaccessibleResourceType = new(
+        "SAMHSG008",
+        "Resource type is less accessible than the generated module API",
+        "Resource type '{0}' cannot be exposed by generated module '{1}'; make the resource type and its containing types at least as accessible as the module",
         "Shirubasoft.Aspire.ModularAppHosts",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -143,14 +154,23 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             canGenerate = false;
         }
 
-        var hasConventionalDefineMethod = symbol.GetMembers("Define")
+        var moduleBuilderType = context.SemanticModel.Compilation.GetTypeByMetadataName(ModuleBuilderMetadataName);
+        var conventionalDefineMethods = symbol.GetMembers("Define")
             .OfType<IMethodSymbol>()
-            .Any(method => method.IsStatic &&
+            .Where(method => method.IsStatic &&
                 method.ReturnsVoid &&
                 method.Parameters.Length == 1 &&
-                method.Parameters[0].Type.ToDisplayString() == ModuleBuilderMetadataName);
+                SymbolEqualityComparer.Default.Equals(method.Parameters[0].Type, moduleBuilderType))
+            .ToImmutableArray();
+        var definitionMethods = conventionalDefineMethods.Length > 0
+            ? conventionalDefineMethods
+            : symbol.GetMembers()
+                .OfType<IMethodSymbol>()
+                .Where(method => method.IsStatic && method.Parameters.Any(parameter =>
+                    SymbolEqualityComparer.Default.Equals(parameter.Type, moduleBuilderType)))
+                .ToImmutableArray();
 
-        foreach (var reservedMemberName in new[] { "AddModule", "ImportModule", "Module" })
+        foreach (var reservedMemberName in new[] { "AddModuleAsync", "ImportModuleAsync", "Module" })
         {
             if (symbol.GetMembers(reservedMemberName).Length > 0)
             {
@@ -163,7 +183,12 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             }
         }
 
-        var resources = CollectResources(symbol, context.SemanticModel.Compilation, diagnostics, cancellationToken);
+        var resources = CollectResources(
+            symbol,
+            definitionMethods,
+            context.SemanticModel.Compilation,
+            diagnostics,
+            cancellationToken);
         if (resources.Length == 0)
         {
             diagnostics.Add(new DiagnosticInfo(NoResourcesFound, moduleLocation, symbol.ToDisplayString()));
@@ -191,7 +216,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             symbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal",
             moduleName ?? string.Empty,
             moduleVersion,
-            hasConventionalDefineMethod,
+            conventionalDefineMethods.Length > 0,
             resources,
             diagnostics.ToImmutable(),
             canGenerate);
@@ -199,6 +224,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
 
     private static ImmutableArray<ResourceModel> CollectResources(
         INamedTypeSymbol moduleSymbol,
+        ImmutableArray<IMethodSymbol> definitionMethods,
         Compilation compilation,
         ImmutableArray<DiagnosticInfo>.Builder diagnostics,
         CancellationToken cancellationToken)
@@ -219,11 +245,11 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             var semanticModel = compilation.GetSemanticModel(declaration.SyntaxTree);
             foreach (var invocation in declaration.DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                var nearestType = invocation.Ancestors().OfType<TypeDeclarationSyntax>().FirstOrDefault();
-                if (nearestType is null ||
-                    !SymbolEqualityComparer.Default.Equals(
-                        semanticModel.GetDeclaredSymbol(nearestType, cancellationToken),
-                        moduleSymbol))
+                var enclosingSymbol = semanticModel.GetEnclosingSymbol(invocation.SpanStart, cancellationToken);
+                var belongsToDefinitionMethod = definitionMethods.Any(method =>
+                    SymbolEqualityComparer.Default.Equals(enclosingSymbol, method));
+                if (!belongsToDefinitionMethod &&
+                    !IsInsideModuleDefinitionLambda(invocation, semanticModel, cancellationToken))
                 {
                     continue;
                 }
@@ -246,6 +272,16 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
 
                 if (resourceType is null)
                 {
+                    continue;
+                }
+
+                if (!IsAccessibleForGeneratedApi(resourceType, moduleSymbol, compilation))
+                {
+                    diagnostics.Add(new DiagnosticInfo(
+                        InaccessibleResourceType,
+                        invocation.GetLocation(),
+                        resourceType.ToDisplayString(),
+                        moduleSymbol.ToDisplayString()));
                     continue;
                 }
 
@@ -278,6 +314,79 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .OrderBy(resource => resource.FilePath, StringComparer.Ordinal)
             .ThenBy(resource => resource.SpanStart)
             .ToImmutableArray();
+    }
+
+    private static bool IsAccessibleForGeneratedApi(
+        ITypeSymbol resourceType,
+        INamedTypeSymbol moduleSymbol,
+        Compilation compilation)
+    {
+        if (!compilation.IsSymbolAccessibleWithin(resourceType, moduleSymbol))
+        {
+            return false;
+        }
+
+        var requiresPublicAccessibility = moduleSymbol.DeclaredAccessibility == Accessibility.Public;
+        return HasSufficientAccessibility(resourceType, requiresPublicAccessibility);
+    }
+
+    private static bool HasSufficientAccessibility(ITypeSymbol type, bool requiresPublicAccessibility)
+    {
+        if (type is IArrayTypeSymbol arrayType)
+        {
+            return HasSufficientAccessibility(arrayType.ElementType, requiresPublicAccessibility);
+        }
+
+        if (type is not INamedTypeSymbol namedType)
+        {
+            return true;
+        }
+
+        for (var current = namedType; current is not null; current = current.ContainingType)
+        {
+            if (requiresPublicAccessibility)
+            {
+                if (current.DeclaredAccessibility != Accessibility.Public)
+                {
+                    return false;
+                }
+            }
+            else if (current.DeclaredAccessibility is not (
+                Accessibility.Public or
+                Accessibility.Internal or
+                Accessibility.ProtectedOrInternal))
+            {
+                return false;
+            }
+        }
+
+        return namedType.TypeArguments.All(argument =>
+            HasSufficientAccessibility(argument, requiresPublicAccessibility));
+    }
+
+    private static bool IsInsideModuleDefinitionLambda(
+        InvocationExpressionSyntax resourceInvocation,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        foreach (var lambda in resourceInvocation.Ancestors().OfType<AnonymousFunctionExpressionSyntax>())
+        {
+            IOperation? operation = semanticModel.GetOperation(lambda, cancellationToken);
+            while (operation is not null && operation is not IArgumentOperation)
+            {
+                operation = operation.Parent;
+            }
+
+            if (operation is IArgumentOperation { Parameter.Name: "moduleBuilder", Parent: IInvocationOperation owner } &&
+                owner.TargetMethod.Name is "DefineModuleAsync" or "ExportModuleAsync" &&
+                owner.TargetMethod.ContainingType.ToDisplayString() ==
+                    "Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ImmutableArray<string> GetExperimentalDiagnosticIds(ITypeSymbol resourceType)
@@ -400,7 +509,9 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             source.AppendLine();
         }
 
-        source.AppendLine("[global::System.CodeDom.Compiler.GeneratedCode(\"Shirubasoft.Aspire.ModularAppHosts\", \"1.0.0\")]");
+        source.Append("[global::System.CodeDom.Compiler.GeneratedCode(\"Shirubasoft.Aspire.ModularAppHosts\", ")
+            .Append(SymbolDisplay.FormatLiteral(GeneratorVersion, quote: true))
+            .AppendLine(")]");
         source.Append(module.Accessibility)
             .Append(" static partial class ")
             .Append(module.TypeName)
@@ -409,87 +520,86 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         if (module.HasConventionalDefineMethod)
         {
             source.AppendLine("    /// <summary>Defines and adds the module in one call and returns its typed resources.</summary>");
-            source.AppendLine("    public static Module AddModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)");
+            source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> AddModuleAsync(");
+            source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+            source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
             source.AppendLine("    {");
             source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
-            source.Append("        var module = global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModule(builder, ")
+            source.Append("        var module = await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
-                .AppendLine(", Define);");
-            source.AppendLine("        return AddModule(builder, module);");
+                .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
+            source.AppendLine("        return await AddModuleAsync(builder, module, cancellationToken).ConfigureAwait(false);");
             source.AppendLine("    }");
             source.AppendLine();
         }
 
         source.AppendLine("    /// <summary>Adds the exported module to the AppHost and returns its typed resources.</summary>");
-        source.AppendLine("    public static Module AddModule(");
+        source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> AddModuleAsync(");
         source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module)");
+        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module,");
+        source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(module);");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.Add(builder, module);");
+        source.Append("        if (!global::System.String.Equals(module.Name, ")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+            .AppendLine(", global::System.StringComparison.Ordinal) ||");
+        source.Append("            !global::System.String.Equals(module.Version, ")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+            .AppendLine(", global::System.StringComparison.Ordinal))");
+        source.AppendLine("        {");
+        source.Append("            throw new global::System.ArgumentException(")
+            .Append(SymbolDisplay.FormatLiteral(
+                $"Expected module '{module.ModuleName}' with contract version '{module.ModuleVersion}'.",
+                quote: true))
+            .AppendLine(", nameof(module));");
+        source.AppendLine("        }");
+        source.AppendLine();
+        source.AppendLine("        await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.AddAsync(builder, module, cancellationToken).ConfigureAwait(false);");
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>Imports the module and returns its typed resources.</summary>");
-        source.AppendLine("    public static Module ImportModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)");
+        source.AppendLine("    public static global::System.Threading.Tasks.Task<Module> ImportModuleAsync(");
+        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+        source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
-        source.AppendLine("        return ImportModule(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions());");
+        source.AppendLine("        return ImportModuleAsync(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions(), cancellationToken);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>Imports the module with resource naming options and returns its typed resources.</summary>");
-        source.AppendLine("    public static Module ImportModule(");
+        source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> ImportModuleAsync(");
         source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions options)");
+        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions options,");
+        source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(options);");
         if (module.HasConventionalDefineMethod)
         {
-            source.Append("        global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModule(builder, ")
+            source.Append("        await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
-                .AppendLine(", Define);");
+                .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
         }
 
-        source.Append("        return new Module(global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ImportModule(builder, ")
+        source.Append("        var module = await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ImportModuleAsync(builder, ")
             .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
-            .AppendLine(", options));");
+            .AppendLine(", options, cancellationToken).ConfigureAwait(false);");
+        source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>A materialized module with strongly typed access to every declared resource.</summary>");
-        source.AppendLine("    public sealed class Module : global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule");
+        source.AppendLine("    public sealed class Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference");
         source.AppendLine("    {");
-        source.AppendLine("        private readonly global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule _module;");
-        source.AppendLine();
         source.AppendLine("        internal Module(global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module)");
+        source.AppendLine("            : base(module)");
         source.AppendLine("        {");
-        source.AppendLine("            _module = module;");
         source.AppendLine("        }");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public string Name => _module.Name;");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public string Version => _module.Version;");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public global::System.Collections.Generic.IReadOnlyList<global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResource> Resources => _module.Resources;");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public global::System.Collections.Generic.IReadOnlyList<global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject> Projects => _module.Projects;");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public global::System.Collections.Generic.IReadOnlyList<global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainer> Containers => _module.Containers;");
-        source.AppendLine();
-        source.AppendLine("        /// <inheritdoc />");
-        source.AppendLine("        public global::Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource> GetResource<TResource>(string name)");
-        source.AppendLine("            where TResource : global::Aspire.Hosting.ApplicationModel.IResource");
-        source.AppendLine("            => _module.GetResource<TResource>(name);");
 
         foreach (var resource in module.Resources)
         {
@@ -501,7 +611,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .Append(resource.TypeName)
                 .Append("> ")
                 .Append(resource.PropertyName)
-                .Append(" => _module.GetResource<")
+                .Append(" => GetResource<")
                 .Append(resource.TypeName)
                 .Append(">(")
                 .Append(SymbolDisplay.FormatLiteral(resource.ResourceName, quote: true))

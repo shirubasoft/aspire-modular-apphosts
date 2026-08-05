@@ -1,4 +1,7 @@
 using System.IO.Compression;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Xml.Linq;
 using CliWrap;
 using CliWrap.Buffered;
@@ -11,8 +14,15 @@ public sealed class PackedPackageContractTests
 {
     private const string CorePackageId = "Shirubasoft.Aspire.ModularAppHosts";
     private const string TestingPackageId = "Shirubasoft.Aspire.ModularAppHosts.Testing";
+    private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
     private static PackageArtifacts? _packageArtifacts;
+    private readonly PackageTestWorkspace _workspace;
+
+    public PackedPackageContractTests(PackageTestWorkspace workspace)
+    {
+        _workspace = workspace;
+    }
 
     [Fact]
     public async Task Core_package_excludes_testing_and_Docker_dependencies()
@@ -49,7 +59,12 @@ public sealed class PackedPackageContractTests
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
 
-        foreach (var packagePath in new[] { packages.CorePackagePath, packages.TestingPackagePath })
+        foreach (var packagePath in new[]
+                 {
+                     packages.CorePackagePath,
+                     packages.TestingPackagePath,
+                     packages.TemplatePackagePath
+                 })
         {
             var metadata = ReadMetadata(packagePath);
             Assert.Equal("MIT", metadata.LicenseExpression);
@@ -59,6 +74,49 @@ public sealed class PackedPackageContractTests
 
         Assert.True(File.Exists(packages.CoreSymbolPackagePath));
         Assert.True(File.Exists(packages.TestingSymbolPackagePath));
+    }
+
+    [Fact]
+    public async Task Package_version_is_embedded_in_every_shipped_assembly()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        var expectedVersion = new Version(8, 7, 6, 0);
+
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.CorePackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.dll",
+            packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.CorePackagePath,
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.dll",
+            packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.TestingPackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll",
+            packages.OutputPath));
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.CorePackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.dll"),
+            StringComparison.Ordinal);
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.CorePackagePath,
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.dll"),
+            StringComparison.Ordinal);
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.TestingPackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Core_package_ships_generator_symbols_with_the_analyzer()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        const string generatorPdb =
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.pdb";
+
+        Assert.True(ContainsEntry(packages.CorePackagePath, generatorPdb));
+        Assert.True(ContainsEntry(packages.CoreSymbolPackagePath, generatorPdb));
     }
 
     [Fact]
@@ -143,7 +201,70 @@ public sealed class PackedPackageContractTests
             TestContext.Current.CancellationToken);
     }
 
-    private static async Task<PackageArtifacts> GetPackagesAsync(CancellationToken cancellationToken)
+    [Fact]
+    public async Task Module_item_template_scaffolds_a_named_versioned_contract()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        var workingDirectory = _workspace.CreateDirectory("template");
+        var outputPath = Path.Combine(workingDirectory, "output");
+        var defaultNamespaceOutputPath = Path.Combine(workingDirectory, "default-output");
+        var hivePath = Path.Combine(workingDirectory, "hive");
+
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "install",
+            packages.TemplatePackagePath,
+            "--debug:custom-hive",
+            hivePath);
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "aspire-module",
+            "--name",
+            "InventoryModule",
+            "--moduleName",
+            "inventory",
+            "--namespace",
+            "Inventory.Modules",
+            "--output",
+            outputPath,
+            "--debug:custom-hive",
+            hivePath);
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "aspire-module",
+            "--name",
+            "DefaultModule",
+            "--moduleName",
+            "defaults",
+            "--output",
+            defaultNamespaceOutputPath,
+            "--debug:custom-hive",
+            hivePath);
+
+        var sourcePath = Path.Combine(outputPath, "InventoryModule.cs");
+        Assert.True(File.Exists(sourcePath));
+        var source = await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken);
+        Assert.Contains("namespace Inventory.Modules;", source, StringComparison.Ordinal);
+        Assert.Contains("partial class InventoryModule", source, StringComparison.Ordinal);
+        Assert.Contains("public const string Name = \"inventory\";", source, StringComparison.Ordinal);
+        Assert.Contains("Version = \"1\"", source, StringComparison.Ordinal);
+        Assert.Contains("module.AddContainer(ApiResourceName, \"nginx\", \"alpine\")", source, StringComparison.Ordinal);
+        Assert.Contains("targetPort: 80", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("catalog-module-name", source, StringComparison.Ordinal);
+
+        var defaultNamespaceSource = await File.ReadAllTextAsync(
+            Path.Combine(defaultNamespaceOutputPath, "DefaultModule.cs"),
+            TestContext.Current.CancellationToken);
+        Assert.Contains("namespace Aspire.Modules;", defaultNamespaceSource, StringComparison.Ordinal);
+    }
+
+    private async Task<PackageArtifacts> GetPackagesAsync(CancellationToken cancellationToken)
     {
         if (_packageArtifacts is not null)
         {
@@ -159,11 +280,8 @@ public sealed class PackedPackageContractTests
             }
 
             var repositoryRoot = FindRepositoryRoot();
-            var outputPath = Path.Combine(
-                Path.GetTempPath(),
-                $"aspire-modular-package-tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(outputPath);
-            var version = $"0.0.0-package-tests-{Guid.NewGuid():N}";
+            var outputPath = _workspace.CreateDirectory("packages");
+            var version = $"8.7.6-package-tests-{Guid.NewGuid():N}";
 
             await RunDotNetAsync(
                 repositoryRoot,
@@ -175,7 +293,7 @@ public sealed class PackedPackageContractTests
                 "--no-restore",
                 "--output",
                 outputPath,
-                $"-p:PackageVersion={version}");
+                $"-p:Version={version}");
             await RunDotNetAsync(
                 repositoryRoot,
                 cancellationToken,
@@ -186,7 +304,18 @@ public sealed class PackedPackageContractTests
                 "--no-restore",
                 "--output",
                 outputPath,
-                $"-p:PackageVersion={version}");
+                $"-p:Version={version}");
+            await RunDotNetAsync(
+                repositoryRoot,
+                cancellationToken,
+                "pack",
+                "templates/Aspire.Hosting.ModularAppHosts.Templates.csproj",
+                "--configuration",
+                "Release",
+                "--no-restore",
+                "--output",
+                outputPath,
+                $"-p:Version={version}");
 
             return _packageArtifacts = new PackageArtifacts(
                 repositoryRoot,
@@ -194,6 +323,7 @@ public sealed class PackedPackageContractTests
                 version,
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"),
+                Path.Combine(outputPath, $"{TemplatePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.snupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"));
         }
@@ -237,6 +367,72 @@ public sealed class PackedPackageContractTests
             license.Value,
             (string?)repository.Attribute("url") ?? string.Empty,
             (string?)repository.Attribute("commit") ?? string.Empty);
+    }
+
+    private static bool ContainsEntry(string packagePath, string entryPath)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        return archive.Entries.Any(entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static Version ReadAssemblyVersion(
+        string packagePath,
+        string entryPath,
+        string extractionDirectory)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        var extractedPath = Path.Combine(
+            extractionDirectory,
+            $"{Guid.NewGuid():N}-{Path.GetFileName(entryPath)}");
+        entry.ExtractToFile(extractedPath);
+        return Assert.IsType<Version>(AssemblyName.GetAssemblyName(extractedPath).Version);
+    }
+
+    private static string ReadInformationalVersion(string packagePath, string entryPath)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        using var stream = entry.Open();
+        using var assemblyStream = new MemoryStream();
+        stream.CopyTo(assemblyStream);
+        assemblyStream.Position = 0;
+        using var peReader = new PEReader(assemblyStream);
+        var metadata = peReader.GetMetadataReader();
+        var assembly = metadata.GetAssemblyDefinition();
+        foreach (var attributeHandle in assembly.GetCustomAttributes())
+        {
+            var attribute = metadata.GetCustomAttribute(attributeHandle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            {
+                continue;
+            }
+
+            var constructor = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            var attributeType = metadata.GetTypeReference((TypeReferenceHandle)constructor.Parent);
+            if (!string.Equals(
+                    metadata.GetString(attributeType.Name),
+                    nameof(AssemblyInformationalVersionAttribute),
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = metadata.GetBlobReader(attribute.Value);
+            Assert.Equal(1, value.ReadUInt16());
+            return Assert.IsType<string>(value.ReadSerializedString());
+        }
+
+        throw new InvalidOperationException(
+            $"Assembly '{entryPath}' does not declare {nameof(AssemblyInformationalVersionAttribute)}.");
     }
 
     private static async Task BuildConsumerAsync(
@@ -330,6 +526,7 @@ public sealed class PackedPackageContractTests
         string Version,
         string CorePackagePath,
         string TestingPackagePath,
+        string TemplatePackagePath,
         string CoreSymbolPackagePath,
         string TestingSymbolPackagePath);
 

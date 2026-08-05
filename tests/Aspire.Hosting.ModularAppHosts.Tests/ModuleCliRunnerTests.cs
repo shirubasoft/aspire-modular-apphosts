@@ -53,15 +53,16 @@ public sealed class ModuleCliRunnerTests
     }
 
     [Fact]
-    public void Repository_commands_use_the_configured_git_executable()
+    public async Task Repository_commands_use_the_configured_git_executable()
     {
         var path = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}");
 
-        var command = Assert.Single(RepositorySynchronizer.CreateCommands(
+        var command = Assert.Single(await RepositorySynchronizer.CreateCommandsAsync(
             path,
             "https://github.com/acme/orders.git",
             updateRepository: true,
-            gitExecutablePath: "custom-git"));
+            gitExecutablePath: "custom-git",
+            cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("custom-git", command.Executable);
     }

@@ -30,22 +30,8 @@ internal sealed class DistributedApplicationModuleBuilder(
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
 
         var absoluteProjectPath = Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory);
-        var repositoryRoot = RepositoryInspector.FindRepositoryRoot(absoluteProjectPath);
-        var appHostDirectory = Path.GetFullPath(applicationBuilder.AppHostDirectory);
-        var configuredRepositoryRoot = GetConfiguredLocalRepositoryRoot(
-            module.Repository,
-            appHostDirectory,
-            absoluteProjectPath);
-
-        if (configuredRepositoryRoot is not null)
-        {
-            repositoryRoot = configuredRepositoryRoot;
-        }
-        else if (!RepositoryInspector.IsGitRepository(repositoryRoot) &&
-            PathSafety.IsContainedBy(appHostDirectory, absoluteProjectPath))
-        {
-            repositoryRoot = appHostDirectory;
-        }
+        var repositoryRoot = Path.GetDirectoryName(absoluteProjectPath)
+            ?? throw new InvalidOperationException($"Unable to determine the directory for '{absoluteProjectPath}'.");
 
         var project = new DistributedApplicationModuleProject(name, absoluteProjectPath, repositoryRoot);
         module.AddProject(project);
@@ -63,7 +49,7 @@ internal sealed class DistributedApplicationModuleBuilder(
 
         var container = new DistributedApplicationModuleContainer(name, image, tag);
         module.AddContainer(container);
-        return new DistributedApplicationModuleContainerBuilder(container);
+        return new DistributedApplicationModuleContainerBuilder(module, container);
     }
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository)
@@ -77,50 +63,18 @@ internal sealed class DistributedApplicationModuleBuilder(
         return SetRepository(repository, revision);
     }
 
+    public IDistributedApplicationModuleBuilder RequiresRepository()
+    {
+        module.RequiresRepositoryContent = true;
+        return this;
+    }
+
     private DistributedApplicationModuleBuilder SetRepository(string repository, string? revision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         module.Repository = repository;
         module.RepositoryRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
         return this;
-    }
-
-    private static string? GetConfiguredLocalRepositoryRoot(
-        string? repository,
-        string appHostDirectory,
-        string projectPath)
-    {
-        if (string.IsNullOrWhiteSpace(repository))
-        {
-            return null;
-        }
-
-        string candidate;
-        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
-        {
-            if (!RepositoryInspector.TryFindRepositoryRoot(appHostDirectory, out var appHostRepositoryRoot))
-            {
-                return null;
-            }
-
-            var repositoryParent = Path.GetDirectoryName(appHostRepositoryRoot);
-            if (repositoryParent is null)
-            {
-                return null;
-            }
-
-            candidate = Path.Combine(
-                repositoryParent,
-                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
-        }
-        else
-        {
-            candidate = Path.GetFullPath(repository, appHostDirectory);
-        }
-
-        return PathSafety.IsContainedBy(candidate, projectPath)
-            ? candidate
-            : null;
     }
 }
 
@@ -175,6 +129,7 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
 }
 
 internal sealed class DistributedApplicationModuleContainerBuilder(
+    DistributedApplicationModule module,
     DistributedApplicationModuleContainer container) : IDistributedApplicationModuleContainerBuilder
 {
     public IDistributedApplicationModuleContainer Container => container;
@@ -202,6 +157,7 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
         }
 
         container.SetImagePublishOptions(copiedOptions);
+        module.RequiresRepositoryContent = true;
         return this;
     }
 }

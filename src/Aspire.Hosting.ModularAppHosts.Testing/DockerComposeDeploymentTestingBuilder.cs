@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
@@ -34,16 +35,23 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <summary>The environment variable that selects the Aspire deployment output path used by <see cref="DeployAsync{TEntryPoint}(CancellationToken)"/>.</summary>
     public const string DeploymentOutputPathEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH";
 
-    /// <summary>The default Aspire deployment environment name.</summary>
+    /// <summary>The prefix used for generated Aspire test deployment environment names.</summary>
     public const string DefaultDeploymentEnvironmentName = "Tests";
 
     private const string EndpointPrefix = "ASPIRE_TEST_ENDPOINT__";
     private const string EndpointHealthPathPrefix = "ASPIRE_TEST_ENDPOINT_HEALTH_PATH__";
     private const string ValuePrefix = "ASPIRE_TEST_VALUE__";
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly IDistributedApplicationBuilder _innerBuilder;
     private readonly OwnedDeployment? _ownedDeployment;
+    private readonly object _lifecycleLock = new();
+
+    [SuppressMessage(
+        "Usage",
+        "CA2213:Disposable fields should be disposed",
+        Justification = "The shared disposal task disposes the application asynchronously for both disposal APIs.")]
     private DistributedApplication? _application;
-    private int _disposeState;
+    private Task? _disposeTask;
 
     private DockerComposeDeploymentTestingBuilder(
         IDistributedApplicationBuilder innerBuilder,
@@ -68,9 +76,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <remarks>
-    /// The deployment environment defaults to <see cref="DefaultDeploymentEnvironmentName"/> and can be overridden with
-    /// <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary directory and can be
-    /// overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Disposing the builder destroys the deployment.
+    /// The deployment environment defaults to a unique name prefixed by <see cref="DefaultDeploymentEnvironmentName"/> and
+    /// can be overridden with <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary
+    /// directory and can be overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Asynchronously
+    /// disposing the builder destroys the deployment.
     /// </remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         CancellationToken cancellationToken = default)
@@ -78,11 +87,13 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         var environmentName = System.Environment.GetEnvironmentVariable(DeploymentEnvironmentVariableName);
         var outputPath = System.Environment.GetEnvironmentVariable(DeploymentOutputPathEnvironmentVariableName);
-        return DeployAsync<TEntryPoint>(new DockerComposeDeploymentOptions
+        var options = new DockerComposeDeploymentOptions { OutputPath = outputPath };
+        if (!string.IsNullOrWhiteSpace(environmentName))
         {
-            EnvironmentName = environmentName ?? DefaultDeploymentEnvironmentName,
-            OutputPath = outputPath
-        }, cancellationToken);
+            options.EnvironmentName = environmentName;
+        }
+
+        return DeployAsync<TEntryPoint>(options, cancellationToken);
     }
 
     /// <summary>
@@ -91,7 +102,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
     /// <param name="options">The deployment options.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    /// <remarks>Asynchronously disposing the returned builder runs <c>aspire destroy</c>.</remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         DockerComposeDeploymentOptions options,
         CancellationToken cancellationToken = default)
@@ -116,7 +127,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// The deployment output path. When omitted, a temporary directory is created and removed with the deployment.
     /// </param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    /// <remarks>Asynchronously disposing the returned builder runs <c>aspire destroy</c>.</remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         string environmentName,
         string? outputPath = null,
@@ -148,6 +159,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             cancellationToken);
     }
 
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "All deployment failures require best-effort cleanup before the original exception is rethrown.")]
     private static async Task<DockerComposeDeploymentTestingBuilder> DeployCoreAsync<TEntryPoint>(
         DockerComposeDeploymentOptions options,
         string appHostPath,
@@ -168,18 +183,51 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             deleteOutputDirectory,
             commandRunner);
 
-        try
+        Exception? deploymentFailure = null;
+        for (var attempt = 0; attempt <= options.PortConflictRetryCount; attempt++)
         {
-            await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
-            var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
-            return Create<TEntryPoint>(configurationFilePath, deployment);
+            try
+            {
+                await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
+                var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
+                return Create<TEntryPoint>(configurationFilePath, deployment);
+            }
+            catch (Exception exception) when (
+                attempt < options.PortConflictRetryCount && IsPortConflict(exception))
+            {
+                Console.WriteLine(
+                    $"[aspire deploy] Host-port conflict detected; cleaning the partial deployment before retry " +
+                    $"{attempt + 1} of {options.PortConflictRetryCount}.");
+                var retryCleanupFailure = await DestroyFailedDeploymentAsync(deployment).ConfigureAwait(false);
+                if (retryCleanupFailure is not null)
+                {
+                    throw new AggregateException(
+                        $"The Compose deployment hit a host-port conflict and cleanup before retry also failed. " +
+                        $"Deployment state was retained at '{deployment.OutputPath}' for recovery.",
+                        exception,
+                        retryCleanupFailure);
+                }
+            }
+            catch (Exception exception)
+            {
+                deploymentFailure = exception;
+                break;
+            }
         }
-        catch
+
+        deploymentFailure ??= new InvalidOperationException("The Compose deployment failed without an exception.");
+        var cleanupFailure = await CleanupFailedDeploymentAsync(deployment).ConfigureAwait(false);
+        if (cleanupFailure is not null)
         {
-            await TryDestroyDeploymentAsync(deployment).ConfigureAwait(false);
-            TryDeleteOwnedOutputDirectory(deployment);
-            throw;
+            throw new AggregateException(
+                $"The Compose deployment failed and cleanup also failed. Deployment state was retained at " +
+                $"'{deployment.OutputPath}' for recovery.",
+                deploymentFailure,
+                cleanupFailure);
         }
+
+        ExceptionDispatchInfo.Capture(deploymentFailure).Throw();
+        throw new InvalidOperationException("Unreachable code.");
     }
 
     private static DockerComposeDeploymentTestingBuilder Create<TEntryPoint>(
@@ -207,7 +255,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         });
         innerBuilder.Services.AddHttpClient();
 
-        var values = LoadValues(absolutePath);
+        var values = DotEnvFile.Load(absolutePath);
         ImportConfiguration(innerBuilder, values);
         ImportEndpoints(innerBuilder, values);
 
@@ -275,12 +323,16 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <inheritdoc />
     public DistributedApplication Build()
     {
-        if (_application is not null)
+        lock (_lifecycleLock)
         {
-            throw new InvalidOperationException("The distributed application has already been built.");
-        }
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            if (_application is not null)
+            {
+                throw new InvalidOperationException("The distributed application has already been built.");
+            }
 
-        return _application = _innerBuilder.Build();
+            return _application = _innerBuilder.Build();
+        }
     }
 
     /// <inheritdoc />
@@ -291,27 +343,64 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     }
 
     /// <inheritdoc />
-    public void Dispose()
-    {
-        DisposeAsync().AsTask().GetAwaiter().GetResult();
-    }
+    [SuppressMessage(
+        "Design",
+        "CA1065:Do not raise exceptions in unexpected locations",
+        Justification = "Synchronous disposal cannot preserve the builder's required asynchronous deployment cleanup.")]
+    [SuppressMessage(
+        "Design",
+        "CA1063:Implement IDisposable correctly",
+        Justification = "The synchronous interface member is explicit so callers use the public asynchronous disposal contract.")]
+    void IDisposable.Dispose() => throw new InvalidOperationException(
+        $"{nameof(DockerComposeDeploymentTestingBuilder)} performs asynchronous cleanup. Use await using or await DisposeAsync().");
 
     /// <inheritdoc />
+    public ValueTask DisposeAsync() => new(GetOrCreateDisposalTask());
+
+    private Task GetOrCreateDisposalTask()
+    {
+        TaskCompletionSource? completion = null;
+        lock (_lifecycleLock)
+        {
+            if (_disposeTask is not null)
+            {
+                return _disposeTask;
+            }
+
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposeTask = completion.Task;
+        }
+
+        _ = CompleteDisposalAsync(completion);
+        return completion.Task;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Every disposal failure must be transferred to all callers of the shared disposal task.")]
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.SetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.SetException(exception);
+        }
+    }
+
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "All cleanup paths must run before disposal propagates failures.")]
-    public async ValueTask DisposeAsync()
+    private async Task DisposeCoreAsync()
     {
-        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
-        {
-            return;
-        }
-
         Exception? failure = null;
         try
         {
-            EnsureApplicationBuiltForDisposal();
             if (_application is not null)
             {
                 await _application.DisposeAsync().ConfigureAwait(false);
@@ -324,9 +413,11 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
         if (_ownedDeployment is not null)
         {
+            var deploymentDestroyed = false;
             try
             {
                 await RunAspireCommandAsync("destroy", _ownedDeployment, CancellationToken.None).ConfigureAwait(false);
+                deploymentDestroyed = true;
             }
             catch (Exception exception)
             {
@@ -337,7 +428,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
             try
             {
-                DeleteOwnedOutputDirectory(_ownedDeployment);
+                if (deploymentDestroyed)
+                {
+                    DeleteOwnedOutputDirectory(_ownedDeployment);
+                }
             }
             catch (Exception exception)
             {
@@ -366,6 +460,9 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
     internal static string GetValueVariableName(string configurationKey) =>
         ValuePrefix + EncodeName(configurationKey);
+
+    internal static string CreateDefaultDeploymentEnvironmentName() =>
+        $"{DefaultDeploymentEnvironmentName}-{System.Environment.ProcessId}-{Guid.NewGuid():N}";
 
     private static string ResolveProjectDirectory(Assembly appHostAssembly)
     {
@@ -469,6 +566,14 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 options.CleanupTimeout,
                 "The cleanup timeout must be positive.");
         }
+
+        if (options.PortConflictRetryCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.PortConflictRetryCount,
+                "The port-conflict retry count cannot be negative.");
+        }
     }
 
     private static DockerComposeDeploymentOptions Snapshot(DockerComposeDeploymentOptions options) => new()
@@ -476,6 +581,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         EnvironmentName = options.EnvironmentName,
         OutputPath = options.OutputPath,
         AspireCliPath = options.AspireCliPath,
+        PortConflictRetryCount = options.PortConflictRetryCount,
         DeploymentTimeout = options.DeploymentTimeout,
         CleanupTimeout = options.CleanupTimeout
     };
@@ -518,76 +624,178 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         string environmentName,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string>
-        {
-            command,
-            "--apphost",
-            appHostPath,
-            "--output-path",
-            outputPath,
-            "--environment",
-            environmentName
-        };
-        if (string.Equals(command, "destroy", StringComparison.Ordinal))
-        {
-            arguments.Add("--yes");
-        }
-
-        arguments.Add("--non-interactive");
+        var invocation = ResolveAspireCliInvocation(aspireCliPath, appHostPath);
+        var output = new StringBuilder();
         var outputLock = new object();
         void ReportOutput(string line)
         {
             lock (outputLock)
             {
+                output.AppendLine(line);
                 Console.WriteLine($"[aspire {command}] {line}");
             }
         }
 
-        CommandResult result;
-        result = await CliCommand.Wrap(aspireCliPath)
-            .WithArguments(arguments)
-            .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
-            .WithValidation(CommandResultValidation.None)
-            .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportOutput))
-            .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportOutput))
-            .ExecuteAsync(cancellationToken);
+        async Task<CommandResult> ExecuteAsync(AspireCliInvocation candidate)
+        {
+            var arguments = new List<string>(candidate.PrefixArguments)
+            {
+                command,
+                "--apphost",
+                appHostPath,
+                "--output-path",
+                outputPath,
+                "--environment",
+                environmentName
+            };
+            if (string.Equals(command, "destroy", StringComparison.Ordinal))
+            {
+                arguments.Add("--yes");
+            }
+
+            arguments.Add("--non-interactive");
+            return await CliCommand.Wrap(candidate.Executable)
+                .WithArguments(arguments)
+                .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportOutput))
+                .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportOutput))
+                .ExecuteAsync(cancellationToken);
+        }
+
+        var result = await ExecuteAsync(invocation).ConfigureAwait(false);
+        if (!result.IsSuccess && ShouldFallBackToAspireOnPath(invocation, output.ToString()))
+        {
+            ReportOutput("The manifest tool is not restored; falling back to 'aspire' on PATH.");
+            result = await ExecuteAsync(new AspireCliInvocation(aspireCliPath, [])).ConfigureAwait(false);
+        }
 
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException(
-                $"'aspire {command}' exited with code {result.ExitCode} for AppHost '{appHostPath}'.");
+                CreateAspireCommandFailureMessage(command, result.ExitCode, appHostPath, output.ToString()));
         }
     }
 
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Best-effort cleanup must preserve the deployment failure.")]
-    private static async Task TryDestroyDeploymentAsync(OwnedDeployment deployment)
+    private static string CreateAspireCommandFailureMessage(
+        string command,
+        int exitCode,
+        string appHostPath,
+        string output)
+    {
+        var diagnostic = output.Trim();
+        if (diagnostic.Length > 4000)
+        {
+            diagnostic = diagnostic[^4000..];
+        }
+
+        return $"'aspire {command}' exited with code {exitCode} for AppHost '{appHostPath}'." +
+            (diagnostic.Length == 0 ? string.Empty : $"{System.Environment.NewLine}{diagnostic}");
+    }
+
+    internal static AspireCliInvocation ResolveAspireCliInvocation(string aspireCliPath, string appHostPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(aspireCliPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostPath);
+        if (!string.Equals(aspireCliPath, "aspire", StringComparison.Ordinal))
+        {
+            return new AspireCliInvocation(aspireCliPath, []);
+        }
+
+        var current = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(appHostPath))!);
+        while (current is not null)
+        {
+            var manifestPath = Path.Combine(current.FullName, ".config", "dotnet-tools.json");
+            if (File.Exists(manifestPath) && ManifestProvidesAspireCli(manifestPath))
+            {
+                return new AspireCliInvocation("dotnet", ["tool", "run", "aspire", "--"]);
+            }
+
+            current = current.Parent;
+        }
+
+        return new AspireCliInvocation(aspireCliPath, []);
+    }
+
+    internal static bool ShouldFallBackToAspireOnPath(AspireCliInvocation invocation, string output)
+        => string.Equals(invocation.Executable, "dotnet", StringComparison.Ordinal)
+            && invocation.PrefixArguments.SequenceEqual(["tool", "run", "aspire", "--"])
+            && output.Contains("dotnet tool restore", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ManifestProvidesAspireCli(string manifestPath)
     {
         try
         {
-            await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!manifest.RootElement.TryGetProperty("tools", out var tools))
+            {
+                return false;
+            }
+
+            return tools.EnumerateObject().Any(tool =>
+                tool.Value.TryGetProperty("commands", out var commands) &&
+                commands.EnumerateArray().Any(command =>
+                    string.Equals(command.GetString(), "aspire", StringComparison.Ordinal)));
         }
-        catch
+        catch (JsonException exception)
         {
-            // Preserve the deployment failure.
+            throw new InvalidOperationException(
+                $"Unable to read local .NET tool manifest '{manifestPath}'.",
+                exception);
         }
+    }
+
+    private static bool IsPortConflict(Exception exception)
+    {
+        var message = exception.Message;
+        if (message.Contains("address already in use", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("port is already allocated", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("port is already in use", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return exception.InnerException is not null && IsPortConflict(exception.InnerException);
     }
 
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
-        Justification = "Best-effort cleanup must preserve the deployment failure.")]
-    private static void TryDeleteOwnedOutputDirectory(OwnedDeployment deployment)
+        Justification = "Cleanup failures are returned so they can be reported with the deployment failure.")]
+    private static async Task<Exception?> CleanupFailedDeploymentAsync(OwnedDeployment deployment)
     {
+        var destroyFailure = await DestroyFailedDeploymentAsync(deployment).ConfigureAwait(false);
+        if (destroyFailure is not null)
+        {
+            return destroyFailure;
+        }
+
         try
         {
             DeleteOwnedOutputDirectory(deployment);
         }
-        catch
+        catch (Exception exception)
         {
-            // Preserve the deployment failure.
+            return exception;
+        }
+
+        return null;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Cleanup failures are returned so callers can preserve deployment diagnostics and recovery state.")]
+    private static async Task<Exception?> DestroyFailedDeploymentAsync(OwnedDeployment deployment)
+    {
+        try
+        {
+            await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
         }
     }
 
@@ -599,40 +807,20 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    private static Dictionary<string, string> LoadValues(string filePath)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in File.ReadLines(filePath))
-        {
-            var content = line.TrimStart('\uFEFF').TrimStart();
-            if (content.Length == 0 || content[0] == '#')
-            {
-                continue;
-            }
-
-            var separator = content.IndexOf('=', StringComparison.Ordinal);
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            var key = content[..separator].Trim();
-            values[key] = content[(separator + 1)..];
-        }
-
-        return values;
-    }
-
     private static void ImportConfiguration(
         IDistributedApplicationBuilder builder,
         Dictionary<string, string> values)
     {
-        var configuration = values
-            .Where(pair => pair.Key.StartsWith(ValuePrefix, StringComparison.Ordinal))
-            .ToDictionary(
-                pair => DecodeName(pair.Key[ValuePrefix.Length..]),
-                pair => (string?)pair.Value,
-                StringComparer.OrdinalIgnoreCase);
+        var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in values.Where(pair => pair.Key.StartsWith(ValuePrefix, StringComparison.Ordinal)))
+        {
+            var configurationKey = DecodeName(pair.Key[ValuePrefix.Length..]);
+            if (!configuration.TryAdd(configurationKey, pair.Value))
+            {
+                throw new InvalidOperationException(
+                    $"The deployment test configuration exports configuration key '{configurationKey}' more than once.");
+            }
+        }
 
         builder.Configuration.AddInMemoryCollection(configuration);
     }
@@ -642,9 +830,11 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         Dictionary<string, string> values)
     {
         var resources = new Dictionary<string, (DeployedEndpointResource Resource, IResourceBuilder<DeployedEndpointResource> Builder)>(
-            StringComparer.Ordinal);
+            StringComparer.OrdinalIgnoreCase);
+        var endpointVariableNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pair in values.Where(pair => pair.Key.StartsWith(EndpointPrefix, StringComparison.Ordinal)))
         {
+            endpointVariableNames.Add(pair.Key);
             var encodedEndpoint = pair.Key[EndpointPrefix.Length..];
             var separator = encodedEndpoint.IndexOf("__", StringComparison.Ordinal);
             var encodedResourceName = separator < 0 ? encodedEndpoint : encodedEndpoint[..separator];
@@ -654,10 +844,15 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 : DecodeName(encodedEndpoint[(separator + 2)..]);
             if (!Uri.TryCreate(pair.Value, UriKind.Absolute, out var endpoint)
                 || !(string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                    || string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                || endpoint.AbsolutePath != "/"
+                || endpoint.Query.Length > 0
+                || endpoint.Fragment.Length > 0
+                || endpoint.UserInfo.Length > 0)
             {
                 throw new InvalidOperationException(
-                    $"The exported test endpoint '{resourceName}' has invalid HTTP URI value '{pair.Value}'.");
+                    $"The exported test endpoint '{resourceName}' must be an absolute HTTP(S) origin without " +
+                    $"credentials, path, query, or fragment; found '{pair.Value}'.");
             }
 
             endpointName ??= endpoint.Scheme;
@@ -677,7 +872,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             }
 
             if (imported.Resource.Annotations.OfType<EndpointAnnotation>().Any(annotation =>
-                string.Equals(annotation.Name, endpointName, StringComparison.Ordinal)))
+                string.Equals(annotation.Name, endpointName, StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidOperationException(
                     $"The exported test endpoint '{resourceName}/{endpointName}' is defined more than once.");
@@ -702,12 +897,30 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             var healthKey = EndpointHealthPathPrefix + encodedEndpoint;
             if (values.TryGetValue(healthKey, out var healthPath))
             {
+                if (!TestEndpointHealthPath.IsRootRelative(healthPath))
+                {
+                    throw new InvalidOperationException(
+                        $"The exported health check for '{resourceName}/{endpointName}' must be a root-relative URI path; " +
+                        $"found '{healthPath}'.");
+                }
+
                 var healthCheckKey = $"{resourceName}_{endpointName}_deployment_check";
                 var healthCheckUri = new Uri(endpoint, healthPath);
                 builder.Services.AddHealthChecks().AddUrlGroup(
                     options => options.AddUri(healthCheckUri),
                     healthCheckKey);
                 imported.Builder.WithHealthCheck(healthCheckKey);
+            }
+        }
+
+        foreach (var healthPair in values.Where(pair =>
+            pair.Key.StartsWith(EndpointHealthPathPrefix, StringComparison.Ordinal)))
+        {
+            var endpointVariableName = EndpointPrefix + healthPair.Key[EndpointHealthPathPrefix.Length..];
+            if (!endpointVariableNames.Contains(endpointVariableName))
+            {
+                throw new InvalidOperationException(
+                    $"The deployment test configuration exports health check '{healthPair.Key}' without its endpoint.");
             }
         }
     }
@@ -722,34 +935,19 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         try
         {
-            return Encoding.UTF8.GetString(Convert.FromHexString(encodedName));
+            var decodedName = StrictUtf8.GetString(Convert.FromHexString(encodedName));
+            if (string.IsNullOrWhiteSpace(decodedName))
+            {
+                throw new FormatException("The decoded name is empty.");
+            }
+
+            return decodedName;
         }
-        catch (FormatException exception)
+        catch (Exception exception) when (exception is FormatException or DecoderFallbackException)
         {
             throw new InvalidOperationException(
                 $"The Aspire deployment test configuration contains invalid encoded name '{encodedName}'.",
                 exception);
-        }
-    }
-
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Disposal matches Aspire's testing builder and must not hide the original test failure.")]
-    private void EnsureApplicationBuiltForDisposal()
-    {
-        if (_application is not null)
-        {
-            return;
-        }
-
-        try
-        {
-            Build();
-        }
-        catch
-        {
-            // Match Aspire's testing builder by suppressing build failures during disposal.
         }
     }
 
@@ -782,6 +980,8 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         bool DeleteOutputDirectory,
         IAspireCommandRunner CommandRunner);
 }
+
+internal sealed record AspireCliInvocation(string Executable, IReadOnlyList<string> PrefixArguments);
 
 internal interface IAspireCommandRunner
 {

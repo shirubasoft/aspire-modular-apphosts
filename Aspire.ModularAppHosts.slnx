@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/samples/MultiRepoE2E/">
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.AppHost/Spire.Consumer.AppHost.csproj" />
+    <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
@@ -18,6 +19,9 @@
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.PackageTests/Aspire.Hosting.ModularAppHosts.PackageTests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
+  </Folder>
+  <Folder Name="/templates/">
+    <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />

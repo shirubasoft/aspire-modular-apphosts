@@ -57,7 +57,7 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
     /// <summary>Gets the worktree used by the service installer.</summary>
     public string RepositoryPath { get; } = repositoryPath;
 
-    /// <summary>Gets whether the resource came from <c>ImportModule</c>.</summary>
+    /// <summary>Gets whether the resource came from <c>ImportModuleAsync</c>.</summary>
     public bool Imported { get; } = imported;
 }
 

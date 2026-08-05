@@ -21,9 +21,11 @@ public static class DockerComposeTestConfigurationExtensions
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        if (healthCheckPath is not null && !Uri.IsWellFormedUriString(healthCheckPath, UriKind.Relative))
+        if (healthCheckPath is not null && !TestEndpointHealthPath.IsRootRelative(healthCheckPath))
         {
-            throw new ArgumentException($"The health check path '{healthCheckPath}' is not a valid relative URI.", nameof(healthCheckPath));
+            throw new ArgumentException(
+                $"The health check path '{healthCheckPath}' must be a root-relative URI path.",
+                nameof(healthCheckPath));
         }
 
         var annotation = endpoint.EndpointAnnotation;
@@ -35,8 +37,13 @@ public static class DockerComposeTestConfigurationExtensions
 
         if (annotation.Port is not int port)
         {
+            port = AvailableHostPortAllocator.Allocate();
+            annotation.Port = port;
+        }
+        else if (port is <= 0 or > 65535)
+        {
             throw new InvalidOperationException(
-                $"Endpoint '{endpoint.Resource.Name}/{endpoint.EndpointName}' must have an explicit host port before it can be exported to tests.");
+                $"Endpoint '{endpoint.Resource.Name}/{endpoint.EndpointName}' has invalid host port '{port}'.");
         }
 
         var endpointName = endpoint.EndpointName;

@@ -12,7 +12,13 @@ permissions:
 
 jobs:
   build-test-pack:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
@@ -24,35 +30,51 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Restore
-        run: dotnet restore Aspire.ModularAppHosts.slnx
+      - name: Validate, test, and pack on Linux
+        if: runner.os != 'Windows'
+        run: ./build.sh
 
-      - name: Verify formatting
-        run: dotnet format Aspire.ModularAppHosts.slnx --verify-no-changes --no-restore
+      - name: Enforce core library line coverage
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/core.cobertura.xml
+          -p:CoverletOutputFormat=cobertura
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts*]*'
+          -p:Threshold=90
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
 
-      - name: Build
-        run: dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
+      - name: Enforce testing library line coverage
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/testing.cobertura.xml
+          -p:CoverletOutputFormat=cobertura
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts.Testing]*'
+          -p:Threshold=70
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
 
-      - name: Test core library
-        run: dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj --configuration Release --no-build --no-restore
+      - name: Upload coverage reports
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-reports
+          path: artifacts/coverage/*.cobertura.xml
+          if-no-files-found: error
 
-      - name: Test testing package
-        run: dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj --configuration Release --no-build --no-restore
-
-      - name: Test packed package contracts
-        run: dotnet test tests/Aspire.Hosting.ModularAppHosts.PackageTests/Aspire.Hosting.ModularAppHosts.PackageTests.csproj --configuration Release --no-build --no-restore
-
-      - name: Test E2E through the AppHost
-        env:
-          ESHOP_E2E_MODE: apphost
-        run: dotnet test samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj --configuration Release --no-build --no-restore
-
-      - name: Pack
-        run: |
-          dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj --configuration Release --no-build --no-restore --output artifacts
-          dotnet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj --configuration Release --no-build --no-restore --output artifacts
+      - name: Validate, test, and pack on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build.ps1
 
       - name: Upload packages
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
@@ -76,9 +98,11 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Install Aspire CLI
+      - name: Install the pinned Aspire CLI
         id: install-aspire
-        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+        run: |
+          aspire_version="$(jq --raw-output '.tools["aspire.cli"].version' .config/dotnet-tools.json)"
+          dotnet tool install --global Aspire.Cli --version "$aspire_version"
 
       - name: Restore
         run: dotnet restore samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj
@@ -102,6 +126,84 @@ jobs:
           --yes
           --non-interactive
 
+  e2e-modular-samples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore the pinned Aspire CLI and sample graph
+        run: |
+          dotnet tool restore
+          dotnet restore Aspire.ModularAppHosts.slnx
+
+      - name: Start and validate both modular AppHosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          active_apphost=""
+          stop_active_apphost() {
+            if [[ -n "$active_apphost" ]]; then
+              dotnet tool run aspire -- stop \
+                --apphost "$active_apphost" \
+                --non-interactive || true
+              active_apphost=""
+            fi
+          }
+          trap stop_active_apphost EXIT
+
+          active_apphost="samples/AppHostA/ModularSample.AppHostA.csproj"
+          dotnet tool run aspire -- start \
+            --apphost "$active_apphost" \
+            --isolated \
+            --format Json \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-api \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-generated-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          stop_active_apphost
+
+          active_apphost="samples/AppHostB/ModularSample.AppHostB.csproj"
+          dotnet tool run aspire -- start \
+            --apphost "$active_apphost" \
+            --isolated \
+            --format Json \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-api \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-generated-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait dependency-gateway \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+
   e2e-multi-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -117,30 +219,53 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Install Aspire CLI
-        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
 
-      - name: Stage an isolated consumer repository
+      - name: Pack the producer-owned module contract
         shell: bash
         run: |
           set -euo pipefail
           multi_repo_root="$(mktemp -d "$RUNNER_TEMP/multi-repo-e2e.XXXXXX")"
+          package_version="0.0.0-multi-repo-e2e"
+          package_feed="$multi_repo_root/packages"
+          mkdir -p "$package_feed"
+          dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj \
+            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
+          dotnet pack samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj \
+            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
+
           git clone --no-local "$GITHUB_WORKSPACE" "$multi_repo_root/consumer"
           test ! -e "$multi_repo_root/spire"
+          mv "$multi_repo_root/consumer/samples/MultiRepoE2E/Spire.ModuleContract" \
+            "$multi_repo_root/producer-contract-source"
           echo "MULTI_REPO_ROOT=$multi_repo_root" >> "$GITHUB_ENV"
           echo "MULTI_REPO_APPHOST=$multi_repo_root/consumer/samples/MultiRepoE2E/Spire.Consumer.AppHost" >> "$GITHUB_ENV"
+          echo "SpireContractPackageVersion=$package_version" >> "$GITHUB_ENV"
+          echo "RestoreAdditionalProjectSources=$package_feed" >> "$GITHUB_ENV"
+
+      - name: Restore the isolated package consumer
+        run: dotnet restore "$MULTI_REPO_APPHOST"
 
       - name: Validate a real multi-repository AppHost
         shell: bash
         run: |
           set -euo pipefail
-          aspire start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
-          trap 'aspire stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
+          dotnet tool run aspire -- start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
+          trap 'dotnet tool run aspire -- stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
 
-          aspire wait spire-api --apphost "$MULTI_REPO_APPHOST" --timeout 180 --non-interactive
+          dotnet tool run aspire -- wait spire-api --apphost "$MULTI_REPO_APPHOST" --timeout 180 --non-interactive
 
           test -d "$MULTI_REPO_ROOT/spire/.git"
           origin="$(git -C "$MULTI_REPO_ROOT/spire" remote get-url origin)"
           test "${origin,,}" = "https://github.com/shirubasoft/spire.git"
-          curl --fail --show-error --silent http://localhost:55201/weatherforecast |
+          spire_api_url="$(
+            dotnet tool run aspire -- describe spire-api \
+              --apphost "$MULTI_REPO_APPHOST" \
+              --format Json \
+              --non-interactive |
+              jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
+          )"
+          test -n "$spire_api_url"
+          curl --fail --show-error --silent "${spire_api_url%/}/weatherforecast" |
             jq --exit-status 'length == 5 and all(.[]; has("date") and has("temperatureC"))'

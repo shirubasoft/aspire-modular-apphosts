@@ -38,16 +38,20 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var generated = Assert.Single(result.GeneratedSources);
-        Assert.Contains("public static Module AddModule(", generated);
-        Assert.Contains("DefineModule(builder, \"orders\", \"2\", Define)", generated);
-        Assert.Contains("public static Module AddModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)", generated);
-        Assert.Contains("public static Module ImportModule(", generated);
+        Assert.Contains("Task<Module> AddModuleAsync(", generated);
+        Assert.Contains("DefineModuleAsync(builder, \"orders\", \"2\", Define, cancellationToken)", generated);
+        Assert.Contains("return await AddModuleAsync(builder, module, cancellationToken)", generated);
+        Assert.Contains("Task<Module> ImportModuleAsync(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
-        Assert.Contains("public string Version => _module.Version", generated);
+        Assert.Contains("Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Cache", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
-        Assert.Contains("ImportModule(builder, \"orders\", options)", generated);
+        Assert.Contains("ImportModuleAsync(builder, \"orders\", options, cancellationToken)", generated);
+        Assert.Contains(
+            typeof(DistributedApplicationModuleGenerator).Assembly.GetName().Version!.ToString(),
+            generated,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -167,8 +171,69 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var result = RunGenerator(source);
 
         var generated = Assert.Single(result.GeneratedSources);
-        Assert.DoesNotContain("DefineModule(builder", generated, StringComparison.Ordinal);
-        Assert.Contains("IDistributedApplicationModule module)", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("DefineModuleAsync(builder", generated, StringComparison.Ordinal);
+        Assert.Contains("IDistributedApplicationModule module,", generated, StringComparison.Ordinal);
+        Assert.Contains("String.Equals(module.Name, \"advanced\"", generated, StringComparison.Ordinal);
+        Assert.Contains("String.Equals(module.Version, \"1\"", generated, StringComparison.Ordinal);
+        Assert.Contains("Expected module 'advanced' with contract version '1'.", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generator_ignores_resource_calls_outside_the_conventional_definition()
+    {
+        const string source = """
+            using System;
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("focused")]
+            public static partial class FocusedModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("included", "redis");
+                }
+
+                public static void Unrelated(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("excluded-method", "redis");
+                }
+
+                public static Action<IDistributedApplicationModuleBuilder> CreateUnrelated() =>
+                    module => module.AddContainer("excluded-lambda", "redis");
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains("> Included =>", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcludedMethod", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcludedLambda", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generator_discovers_resources_in_an_advanced_export_lambda()
+    {
+        const string source = """
+            using Aspire.Hosting;
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("advanced")]
+            public static partial class AdvancedModule
+            {
+                public static global::System.Threading.Tasks.Task<IDistributedApplicationModule> RegisterAsync(
+                    IDistributedApplicationBuilder builder) =>
+                    builder.ExportModuleAsync("advanced", module =>
+                        module.AddContainer("cache", "redis"));
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains("> Cache =>", generated, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -190,6 +255,34 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var result = RunGenerator(source);
 
         Assert.Contains(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "SAMHSG003");
+    }
+
+    [Fact]
+    public void Generator_reports_an_inaccessible_custom_resource_type()
+    {
+        const string source = """
+            using Aspire.Hosting.ApplicationModel;
+            using Aspire.Hosting.ModularAppHosts;
+
+            internal sealed class HiddenResource(string name) : Resource(name);
+
+            [GenerateDistributedApplicationModule("invalid")]
+            public static partial class InvalidModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddResource<HiddenResource>("hidden", context =>
+                        context.ApplicationBuilder.AddResource(new HiddenResource(context.ResourceName)));
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        var diagnostic = Assert.Single(
+            result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Id == "SAMHSG008"));
+        Assert.Contains("HiddenResource", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain(result.CompilationDiagnostics, diagnostic => diagnostic.Id == "CS0053");
     }
 
     [Fact]
@@ -240,8 +333,8 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Theory]
-    [InlineData("public static void AddModule() { }", "AddModule")]
-    [InlineData("public static int ImportModule => 0;", "ImportModule")]
+    [InlineData("public static void AddModuleAsync() { }", "AddModuleAsync")]
+    [InlineData("public static int ImportModuleAsync => 0;", "ImportModuleAsync")]
     [InlineData("public sealed class Module { }", "Module")]
     public void Generator_rejects_members_reserved_for_the_generated_api(
         string member,
@@ -288,7 +381,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
             result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Id == "SAMHSG006"));
         Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
         var generated = Assert.Single(result.GeneratedSources);
-        Assert.Contains("public static Module AddModule(", generated);
+        Assert.Contains("Task<Module> AddModuleAsync(", generated);
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
     }
 
@@ -323,7 +416,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("> _2faService =>", generated);
         Assert.Contains("> OrderItems =>", generated);
         Assert.Contains("> Resource =>", generated);
-        Assert.Contains("ImportModule(builder, \"orders\\\"north\\\\region\\n\", options)", generated);
+        Assert.Contains("ImportModuleAsync(builder, \"orders\\\"north\\\\region\\n\", options, cancellationToken)", generated);
     }
 
     [Fact]

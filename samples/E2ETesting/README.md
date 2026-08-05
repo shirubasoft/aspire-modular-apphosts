@@ -17,6 +17,12 @@ The E2E AppHost and test project reference `Shirubasoft.Aspire.ModularAppHosts.T
 
 ## Run through the AppHost
 
+Run these commands from the repository root, starting by entering the sample directory:
+
+```bash
+cd samples/E2ETesting
+```
+
 The default mode starts and disposes the AppHost with `DistributedApplicationTestingBuilder`:
 
 ```bash
@@ -33,10 +39,10 @@ Install the Aspire CLI, ensure Docker or Podman is running, and run the test:
 ```bash
 Parameters__orders_api_key=e2e-orders-key \
 ESHOP_E2E_MODE=compose \
-dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj --no-build
+dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
 ```
 
-`DockerComposeDeploymentTestingBuilder.DeployAsync` runs `aspire deploy`, imports the generated `.env.<environment>` file, and returns the same testing-builder contract used by AppHost mode. Disposing the builder runs `aspire destroy` and removes its temporary output directory.
+`DockerComposeDeploymentTestingBuilder.DeployAsync` runs `aspire deploy`, imports the generated `.env.<environment>` file, and returns the same testing-builder contract used by AppHost mode. The exported HTTP endpoints allocate available host ports instead of reserving fixed sample ports. Disposing the builder runs `aspire destroy` and removes its temporary output directory after a successful teardown; failed teardown retains deployment state for recovery.
 
 CI uses a known output path so its fallback teardown can locate deployment state if the test process is interrupted. Local runs use an automatically cleaned temporary directory.
 

@@ -30,6 +30,32 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public void Repository_identity_includes_non_default_ports()
+    {
+        Assert.False(GitHubRepositoryCloner.RefersToSameRepository(
+            "ssh://git@example.test:2222/acme/orders.git",
+            "ssh://git@example.test:3333/acme/orders.git",
+            Path.GetTempPath()));
+        Assert.True(GitHubRepositoryCloner.RefersToSameRepository(
+            "ssh://git@example.test:22/acme/orders.git",
+            "git@example.test:acme/orders.git",
+            Path.GetTempPath()));
+    }
+
+    [Fact]
+    public void Repository_path_casing_is_host_specific()
+    {
+        Assert.True(GitHubRepositoryCloner.RefersToSameRepository(
+            "https://github.com/Acme/Orders.git",
+            "git@github.com:acme/orders.git",
+            Path.GetTempPath()));
+        Assert.False(GitHubRepositoryCloner.RefersToSameRepository(
+            "https://git.example.test/Acme/Orders.git",
+            "git@git.example.test:acme/orders.git",
+            Path.GetTempPath()));
+    }
+
+    [Fact]
     public void GitHub_clone_command_forwards_submodule_checkout_to_gh()
     {
         var target = Path.Combine(Path.GetTempPath(), "modules", "orders");
@@ -71,7 +97,7 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public void Same_git_repository_preserves_module_root_and_never_invokes_gh()
+    public async Task Same_git_repository_preserves_module_root_and_never_invokes_gh()
     {
         using var workspace = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(workspace.Path, "apphost");
@@ -80,67 +106,67 @@ public sealed class ModuleRepositoryDiscoveryTests
         Directory.CreateDirectory(appHostDirectory);
         Directory.CreateDirectory(moduleRoot);
         File.WriteAllText(projectPath, ProjectContents);
-        InitializeGit(workspace.Path, "feature/same-repository");
+        await InitializeGitAsync(workspace.Path, "feature/same-repository");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(workspace.Path, "missing-gh");
-        var module = builder.ExportModule("orders", definition =>
+        var module = await builder.ExportModuleAsync("orders", definition =>
         {
             definition.WithRepository(moduleRoot);
             definition.AddProject("orders-api", projectPath)
                 .ExportAsContainer("orders-api", "dotnet", ["publish"]);
         });
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(moduleRoot, annotation.RepositoryPath);
-        Assert.Equal(ExpectedTag(workspace.Path, "feature/same-repository"), image.Tag);
+        Assert.Equal(await ExpectedTagAsync(workspace.Path, "feature/same-repository"), image.Tag);
     }
 
     [Fact]
-    public void Same_git_repository_dirty_state_is_applied_to_branch_tag()
+    public async Task Same_git_repository_dirty_state_is_applied_to_branch_tag()
     {
         using var workspace = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(workspace.Path, "apphost");
         var projectPath = Path.Combine(workspace.Path, "Orders.Api.csproj");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(projectPath, ProjectContents);
-        InitializeGit(workspace.Path, "feature/dirty-image");
+        await InitializeGitAsync(workspace.Path, "feature/dirty-image");
         File.AppendAllText(projectPath, Environment.NewLine + "<!-- dirty -->");
 
         var builder = CreateBuilder(appHostDirectory, publishMode: false);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
-        var module = builder.ExportModule("orders", definition =>
+        var module = await builder.ExportModuleAsync("orders", definition =>
         {
             definition.WithRepository(workspace.Path);
             definition.AddProject("orders-api", projectPath)
                 .ExportAsContainer("orders-api", "dotnet", ["publish"]);
         });
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal($"{ExpectedTag(workspace.Path, "feature/dirty-image")}-dirty", image.Tag);
+        Assert.Equal($"{await ExpectedTagAsync(workspace.Path, "feature/dirty-image")}-dirty", image.Tag);
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         Assert.True(installer.RepositoryDirty);
     }
 
     [Fact]
-    public void Same_repository_remote_is_discovered_without_cloning()
+    public async Task Same_repository_remote_is_discovered_without_cloning()
     {
         using var repository = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(repository.Path, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(repository.Path, "README.md"), "consumer");
-        InitializeGit(repository.Path, "main");
-        RunGit(
+        await InitializeGitAsync(repository.Path, "main");
+        await RunGitAsync(
             repository.Path,
             "remote",
             "add",
@@ -151,13 +177,13 @@ public sealed class ModuleRepositoryDiscoveryTests
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(repository.Path, "missing-gh");
-        var module = builder.ExportModule("consumer", definition =>
+        var module = await builder.ExportModuleAsync("consumer", definition =>
         {
             definition.WithRepository("https://github.com/acme/consumer.git");
             definition.AddContainer("consumer-cache", "redis", "alpine");
         });
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(
@@ -166,22 +192,22 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public void Repository_independent_module_ignores_global_auto_clone()
+    public async Task Repository_independent_module_ignores_global_auto_clone()
     {
         using var repository = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(repository.Path, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(repository.Path, "README.md"), "consumer");
-        InitializeGit(repository.Path, "main");
+        await InitializeGitAsync(repository.Path, "main");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(repository.Path, "missing-gh");
-        var module = builder.ExportModule("portable", definition =>
+        var module = await builder.ExportModuleAsync("portable", definition =>
             definition.AddContainer("portable-cache", "redis", "alpine"));
 
-        builder.ImportModule("portable");
+        await builder.ImportModuleAsync("portable");
 
         Assert.Empty(builder.Resources.OfType<ParameterResource>());
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
@@ -191,22 +217,22 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public void Imported_same_worktree_without_remote_does_not_request_repository_parameter()
+    public async Task Imported_same_worktree_without_remote_does_not_request_repository_parameter()
     {
         using var repository = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(repository.Path, "AppHost");
         var projectPath = Path.Combine(repository.Path, "Orders.Api.csproj");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(projectPath, ProjectContents);
-        InitializeGit(repository.Path, "feature/local-import");
+        await InitializeGitAsync(repository.Path, "feature/local-import");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
-        builder.ExportModule("orders", definition =>
+        await builder.ExportModuleAsync("orders", definition =>
             definition.AddProject("orders-api", projectPath)
                 .ExportAsContainer("orders-api", "dotnet", ["publish"]));
 
-        builder.ImportModule("orders");
+        await builder.ImportModuleAsync("orders");
 
         Assert.Empty(builder.Resources.OfType<ParameterResource>());
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
@@ -217,7 +243,7 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public void Existing_sibling_repository_is_discovered_without_invoking_gh()
+    public async Task Existing_sibling_repository_is_discovered_without_invoking_gh()
     {
         using var parent = TemporaryDirectory.Create();
         var appHostRoot = Path.Combine(parent.Path, "consumer");
@@ -226,30 +252,30 @@ public sealed class ModuleRepositoryDiscoveryTests
         var projectPath = Path.Combine(moduleRoot, "src", "Orders.Api", "Orders.Api.csproj");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
-        InitializeGit(appHostRoot, "consumer-branch");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
         Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
         File.WriteAllText(projectPath, ProjectContents);
-        InitializeGit(moduleRoot, "feature/orders-service");
-        RunGit(moduleRoot, "remote", "add", "origin", "https://github.com/acme/orders.git");
+        await InitializeGitAsync(moduleRoot, "feature/orders-service");
+        await RunGitAsync(moduleRoot, "remote", "add", "origin", "https://github.com/acme/orders.git");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(parent.Path, "missing-gh");
-        var module = ExportRemoteProject(builder, projectPath);
+        var module = await ExportRemoteProjectAsync(builder, projectPath);
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(moduleRoot, annotation.RepositoryPath);
-        Assert.Equal(ExpectedTag(moduleRoot, "feature/orders-service"), image.Tag);
+        Assert.Equal(await ExpectedTagAsync(moduleRoot, "feature/orders-service"), image.Tag);
     }
 
     [Fact]
-    public void Missing_sibling_repository_is_cloned_through_configured_gh_process()
+    public async Task Missing_sibling_repository_is_cloned_through_configured_gh_process()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -261,14 +287,14 @@ public sealed class ModuleRepositoryDiscoveryTests
         var sourceProject = Path.Combine(source.Path, "src", "Orders.Api", "Orders.Api.csproj");
         Directory.CreateDirectory(Path.GetDirectoryName(sourceProject)!);
         File.WriteAllText(sourceProject, ProjectContents);
-        InitializeGit(source.Path, "feature/cloned-service");
-        RunGit(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
+        await InitializeGitAsync(source.Path, "feature/cloned-service");
+        await RunGitAsync(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
 
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "src", "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
-        InitializeGit(appHostRoot, "consumer-branch");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
 
         var siblingProject = Path.Combine(
             parent.Path,
@@ -280,46 +306,48 @@ public sealed class ModuleRepositoryDiscoveryTests
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] = fakeGh;
-        var module = ExportRemoteProject(builder, siblingProject);
+        var module = await ExportRemoteProjectAsync(builder, siblingProject);
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var clonePath = Path.Combine(parent.Path, "orders");
-        Assert.True(RepositoryInspector.IsGitRepository(clonePath));
+        Assert.True(await RepositoryInspector.IsGitRepositoryAsync(
+            clonePath,
+            cancellationToken: TestContext.Current.CancellationToken));
         Assert.True(File.Exists(siblingProject));
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(clonePath, annotation.RepositoryPath);
-        Assert.Equal(ExpectedTag(clonePath, "feature/cloned-service"), image.Tag);
+        Assert.Equal(await ExpectedTagAsync(clonePath, "feature/cloned-service"), image.Tag);
     }
 
     [Fact]
-    public void Missing_gh_has_an_actionable_error_only_when_auto_clone_is_enabled()
+    public async Task Missing_gh_has_an_actionable_error_only_when_auto_clone_is_enabled()
     {
         using var parent = TemporaryDirectory.Create();
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
-        InitializeGit(appHostRoot, "main");
+        await InitializeGitAsync(appHostRoot, "main");
         var siblingProject = Path.Combine(parent.Path, "orders", "Orders.Api.csproj");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(parent.Path, "missing-gh");
-        var module = ExportRemoteProject(builder, siblingProject);
+        var module = await ExportRemoteProjectAsync(builder, siblingProject);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
 
         Assert.Contains("requires the GitHub CLI", exception.Message, StringComparison.Ordinal);
         Assert.Contains("AutoCloneRepositories", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void GitHub_cli_clone_failure_preserves_exit_code_and_diagnostic()
+    public async Task GitHub_cli_clone_failure_preserves_exit_code_and_diagnostic()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -337,33 +365,34 @@ public sealed class ModuleRepositoryDiscoveryTests
             UnixFileMode.UserWrite |
             UnixFileMode.UserExecute);
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            GitHubRepositoryCloner.Clone(
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GitHubRepositoryCloner.CloneAsync(
                 fakeGh,
                 "acme/orders",
-                Path.Combine(workspace.Path, "orders")));
+                Path.Combine(workspace.Path, "orders"),
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("exit code 23", exception.Message, StringComparison.Ordinal);
         Assert.Contains("authentication failed", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Disabled_auto_clone_reports_missing_service_without_invoking_gh()
+    public async Task Disabled_auto_clone_reports_missing_service_without_invoking_gh()
     {
         using var parent = TemporaryDirectory.Create();
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
-        InitializeGit(appHostRoot, "consumer-branch");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
         var siblingProject = Path.Combine(parent.Path, "orders", "Orders.Api.csproj");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(parent.Path, "missing-gh");
-        var module = ExportRemoteProject(builder, siblingProject);
+        var module = await ExportRemoteProjectAsync(builder, siblingProject);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
 
         Assert.False(Directory.Exists(Path.Combine(parent.Path, "orders")));
         Assert.Contains("project service 'orders-api'", exception.Message, StringComparison.Ordinal);
@@ -371,17 +400,17 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public void Published_container_without_explicit_tag_uses_sanitized_branch()
+    public async Task Published_container_without_explicit_tag_uses_sanitized_branch()
     {
         using var repository = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(repository.Path, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(repository.Path, "README.md"), "module");
-        InitializeGit(repository.Path, "feature/container-publisher");
+        await InitializeGitAsync(repository.Path, "feature/container-publisher");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
-        var module = builder.ExportModule("static", definition =>
+        var module = await builder.ExportModuleAsync("static", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer("static-site", "static-site", "dev")
@@ -392,15 +421,15 @@ public sealed class ModuleRepositoryDiscoveryTests
                     ModuleContainerExportOptions.ImageReferencePlaceholder));
         });
 
-        builder.Add(module);
+        await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal(ExpectedTag(repository.Path, "feature/container-publisher"), image.Tag);
+        Assert.Equal(await ExpectedTagAsync(repository.Path, "feature/container-publisher"), image.Tag);
     }
 
     [Fact]
-    public void Existing_non_git_sibling_breaks_with_discovery_diagnostic()
+    public async Task Existing_non_git_sibling_breaks_with_discovery_diagnostic()
     {
         using var parent = TemporaryDirectory.Create();
         var appHostRoot = Path.Combine(parent.Path, "consumer");
@@ -410,20 +439,20 @@ public sealed class ModuleRepositoryDiscoveryTests
         Directory.CreateDirectory(Path.GetDirectoryName(siblingProject)!);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
         File.WriteAllText(siblingProject, ProjectContents);
-        InitializeGit(appHostRoot, "main");
+        await InitializeGitAsync(appHostRoot, "main");
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
-        var module = ExportRemoteProject(builder, siblingProject);
+        var module = await ExportRemoteProjectAsync(builder, siblingProject);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
 
         Assert.Contains("orders", exception.Message, StringComparison.Ordinal);
         Assert.Contains("not a Git repository", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Missing_service_project_after_clone_breaks_with_module_and_service_names()
+    public async Task Missing_service_project_after_clone_breaks_with_module_and_service_names()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -433,22 +462,22 @@ public sealed class ModuleRepositoryDiscoveryTests
         using var parent = TemporaryDirectory.Create();
         using var source = TemporaryDirectory.Create();
         File.WriteAllText(Path.Combine(source.Path, "README.md"), "no project");
-        InitializeGit(source.Path, "main");
-        RunGit(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
+        await InitializeGitAsync(source.Path, "main");
+        await RunGitAsync(source.Path, "remote", "add", "origin", "https://github.com/acme/orders.git");
         var appHostRoot = Path.Combine(parent.Path, "consumer");
         var appHostDirectory = Path.Combine(appHostRoot, "AppHost");
         Directory.CreateDirectory(appHostDirectory);
         File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
-        InitializeGit(appHostRoot, "main");
+        await InitializeGitAsync(appHostRoot, "main");
 
         var siblingProject = Path.Combine(parent.Path, "orders", "Orders.Api.csproj");
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             CreateFakeGh(parent.Path, source.Path);
-        var module = ExportRemoteProject(builder, siblingProject);
+        var module = await ExportRemoteProjectAsync(builder, siblingProject);
 
-        var exception = Assert.Throws<InvalidOperationException>(() => builder.Add(module));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
 
         Assert.Contains("Module 'orders'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("project service 'orders-api'", exception.Message, StringComparison.Ordinal);
@@ -458,7 +487,7 @@ public sealed class ModuleRepositoryDiscoveryTests
     [Theory]
     [InlineData("Projects", "missing-project", "project service")]
     [InlineData("Containers", "missing-container", "container service")]
-    public void Unknown_configured_service_breaks_with_available_service_diagnostic(
+    public async Task Unknown_configured_service_breaks_with_available_service_diagnostic(
         string resourceKind,
         string missingName,
         string expectedKind)
@@ -470,8 +499,8 @@ public sealed class ModuleRepositoryDiscoveryTests
         builder.Configuration[
             $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:{resourceKind}:{missingName}:ImageTag"] =
             "debug";
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            builder.ExportModule("orders", definition =>
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.ExportModuleAsync("orders", definition =>
             {
                 definition.WithRepository(repository.Path);
                 definition.AddProject("orders-api", projectPath)
@@ -497,11 +526,11 @@ public sealed class ModuleRepositoryDiscoveryTests
         Assert.Contains("Available modules: (none)", exception.Message, StringComparison.Ordinal);
     }
 
-    private static IDistributedApplicationModule ExportRemoteProject(
+    private static async Task<IDistributedApplicationModule> ExportRemoteProjectAsync(
         IDistributedApplicationBuilder builder,
         string projectPath)
     {
-        return builder.ExportModule("orders", definition =>
+        return await builder.ExportModuleAsync("orders", definition =>
         {
             definition.WithRepository("https://github.com/acme/orders.git");
             definition.AddProject("orders-api", projectPath)
@@ -547,62 +576,35 @@ public sealed class ModuleRepositoryDiscoveryTests
         return path;
     }
 
-    private static void InitializeGit(string repositoryPath, string branch)
+    private static async Task InitializeGitAsync(string repositoryPath, string branch)
     {
-        RunGit(repositoryPath, "init", "--initial-branch", branch);
-        RunGit(repositoryPath, "config", "user.name", "Test User");
-        RunGit(repositoryPath, "config", "user.email", "test@example.test");
-        RunGit(repositoryPath, "add", ".");
-        RunGit(repositoryPath, "commit", "-m", "initial");
+        await RunGitAsync(repositoryPath, "init", "--initial-branch", branch);
+        await RunGitAsync(repositoryPath, "config", "user.name", "Test User");
+        await RunGitAsync(repositoryPath, "config", "user.email", "test@example.test");
+        await RunGitAsync(repositoryPath, "add", ".");
+        await RunGitAsync(repositoryPath, "commit", "-m", "initial");
     }
 
-    private static void RunGit(string workingDirectory, params string[] arguments)
+    private static async Task RunGitAsync(string workingDirectory, params string[] arguments)
     {
-        var result = CliCommand.Wrap("git")
+        var result = await CliCommand.Wrap("git")
             .WithArguments(arguments)
             .WithWorkingDirectory(workingDirectory)
             .WithValidation(CommandResultValidation.None)
             .ExecuteBufferedAsync()
-            .GetAwaiter()
-            .GetResult();
+            .ConfigureAwait(false);
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException(result.StandardError);
         }
     }
 
-    private static string ExpectedTag(string repositoryPath, string branch)
+    private static async Task<string> ExpectedTagAsync(string repositoryPath, string branch)
     {
-        return ModuleImageTag.FromRepository(branch, RepositoryInspector.TryGetCommit(repositoryPath));
+        return ModuleImageTag.FromRepository(branch, await RepositoryInspector.TryGetCommitAsync(repositoryPath));
     }
 
     private const string ProjectContents =
         "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>";
 
-    private sealed class TemporaryDirectory : IDisposable
-    {
-        private TemporaryDirectory(string path)
-        {
-            Path = path;
-        }
-
-        public string Path { get; }
-
-        public static TemporaryDirectory Create()
-        {
-            var path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                $"aspire-module-discovery-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(path);
-            return new TemporaryDirectory(path);
-        }
-
-        public void Dispose()
-        {
-            if (Directory.Exists(Path))
-            {
-                Directory.Delete(Path, recursive: true);
-            }
-        }
-    }
 }

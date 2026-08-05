@@ -2,9 +2,10 @@ using Aspire.Hosting.ModularAppHosts;
 using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
+builder.BuildModuleImages();
 
-var exported = AppHostAModule.Register(builder, builder.AppHostDirectory);
-var module = AppHostAModule.AddModule(builder, exported);
+var exported = await AppHostAModule.RegisterAsync(builder, builder.AppHostDirectory);
+var module = await AppHostAModule.AddModuleAsync(builder, exported);
 
 _ = module.Api;
 _ = module.Project;
@@ -19,4 +20,4 @@ _ = module.ExternalService;
 _ = module.ContainerRegistry;
 _ = module.Custom;
 
-builder.Build().Run();
+await builder.Build().RunAsync();

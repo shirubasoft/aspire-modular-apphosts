@@ -21,6 +21,11 @@ app.MapPost("/orders", async (
         return Results.Unauthorized();
     }
 
+    if (order.Quantity <= 0)
+    {
+        return Results.BadRequest(new { Error = "Quantity must be greater than zero." });
+    }
+
     var catalogEndpoint = configuration["Catalog:Endpoint"]
         ?? throw new InvalidOperationException("Catalog:Endpoint was not supplied by the AppHost.");
     var productUri = new Uri(

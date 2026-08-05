@@ -48,6 +48,17 @@ public sealed class EShopScenarioTests
         Assert.Equal(product.Id, order.ProductId);
         Assert.Equal(product.Name, order.ProductName);
         Assert.Equal(37.00m, order.Total);
+
+        using var invalidRequest = new HttpRequestMessage(HttpMethod.Post, "/orders")
+        {
+            Content = JsonContent.Create(new CreateOrderRequest(product.Id, Quantity: 0))
+        };
+        invalidRequest.Headers.Add(
+            "X-Orders-Api-Key",
+            configuration.GetRequiredSection("Parameters:orders-api-key").Value);
+
+        using var invalidResponse = await orders.SendAsync(invalidRequest, cancellationToken);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, invalidResponse.StatusCode);
     }
 
     private static async Task<IDistributedApplicationTestingBuilder> CreateBuilderAsync(

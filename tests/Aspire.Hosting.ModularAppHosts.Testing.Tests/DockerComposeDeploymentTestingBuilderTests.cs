@@ -44,21 +44,25 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
-    public async Task Create_parses_bom_comments_whitespace_duplicates_and_https_without_health_checks()
+    public async Task Create_parses_dotenv_quotes_exports_comments_and_https_without_health_checks()
     {
         var endpointName = Encode("orders-api");
         var configurationKey = Encode("Feature:Mode");
+        var literalKey = Encode("Feature:Literal");
+        var enabledKey = Encode("Feature:Enabled");
         using var file = TemporaryFile.Create(
             $"\uFEFF   # generated values{Environment.NewLine}" +
-            $"ignored line{Environment.NewLine}" +
-            $"  ASPIRE_TEST_VALUE__{configurationKey}=first{Environment.NewLine}" +
-            $"ASPIRE_TEST_VALUE__{configurationKey}=second=with=equals  {Environment.NewLine}" +
-            $" ASPIRE_TEST_ENDPOINT__{endpointName}=https://example.test:5443/base/{Environment.NewLine}");
+            $"export ASPIRE_TEST_VALUE__{configurationKey}=\"second=with=equals  \" # selected{Environment.NewLine}" +
+            $"ASPIRE_TEST_VALUE__{literalKey}='literal # value'{Environment.NewLine}" +
+            $"ASPIRE_TEST_VALUE__{enabledKey}=true # enabled{Environment.NewLine}" +
+            $" ASPIRE_TEST_ENDPOINT__{endpointName}=https://example.test:5443/{Environment.NewLine}");
 
         var builder = DockerComposeDeploymentTestingBuilder
             .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path);
 
         Assert.Equal("second=with=equals  ", builder.Configuration["Feature:Mode"]);
+        Assert.Equal("literal # value", builder.Configuration["Feature:Literal"]);
+        Assert.Equal("true", builder.Configuration["Feature:Enabled"]);
         Assert.True(builder.Resources.TryGetByName("orders-api", out var resource));
         var endpoint = Assert.Single(resource.Annotations.OfType<EndpointAnnotation>());
         Assert.Equal("https", endpoint.Name);
@@ -72,6 +76,8 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     [Theory]
     [InlineData("not-an-endpoint")]
     [InlineData("ftp://example.test:21/")]
+    [InlineData("https://example.test:5443/base/")]
+    [InlineData("https://user@example.test:5443/")]
     public void Create_rejects_an_invalid_or_unsupported_exported_uri(string uri)
     {
         var endpointName = Encode("catalog");
@@ -81,7 +87,55 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
             DockerComposeDeploymentTestingBuilder
                 .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path));
 
-        Assert.Contains("invalid HTTP URI", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("absolute HTTP(S) origin", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("missing separator")]
+    [InlineData("DUPLICATE=first\nDUPLICATE=second")]
+    [InlineData("BROKEN=\"unterminated")]
+    public void Create_rejects_malformed_dotenv_content(string content)
+    {
+        using var file = TemporaryFile.Create(content.Replace("\\n", Environment.NewLine, StringComparison.Ordinal));
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder
+                .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path));
+
+        Assert.Contains("environment file", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("line", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Create_rejects_a_health_check_without_its_endpoint()
+    {
+        using var file = TemporaryFile.Create(
+            $"ASPIRE_TEST_ENDPOINT_HEALTH_PATH__{Encode("catalog")}= /health");
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder
+                .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path));
+
+        Assert.Contains("without its endpoint", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("//evil.example/health")]
+    [InlineData("/\\evil.example/health")]
+    public void Create_rejects_a_health_check_that_can_replace_the_endpoint_authority(string healthPath)
+    {
+        var resourceName = Encode("catalog");
+        var endpointName = Encode("http");
+        using var file = TemporaryFile.Create($$"""
+            ASPIRE_TEST_ENDPOINT__{{resourceName}}__{{endpointName}}=http://localhost:5101/
+            ASPIRE_TEST_ENDPOINT_HEALTH_PATH__{{resourceName}}__{{endpointName}}={{healthPath}}
+            """);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder
+                .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path));
+
+        Assert.Contains("root-relative URI path", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -154,6 +208,83 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public async Task DeployAsync_rejects_a_negative_port_conflict_retry_count()
+    {
+        var options = new DockerComposeDeploymentOptions { PortConflictRetryCount = -1 };
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            DockerComposeDeploymentTestingBuilder.DeployAsync<DockerComposeDeploymentTestingBuilderTests>(
+                options,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("options", exception.ParamName);
+    }
+
+    [Fact]
+    public void Default_cli_resolution_prefers_a_restored_local_tool_manifest()
+    {
+        using var repository = TemporaryDirectory.Create();
+        var manifestDirectory = Path.Combine(repository.Path, ".config");
+        var appHostPath = Path.Combine(repository.Path, "src", "AppHost", "AppHost.csproj");
+        Directory.CreateDirectory(manifestDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(appHostPath)!);
+        File.WriteAllText(
+            Path.Combine(manifestDirectory, "dotnet-tools.json"),
+            """
+            {
+              "version": 1,
+              "isRoot": true,
+              "tools": {
+                "aspire.cli": {
+                  "version": "13.4.6",
+                  "commands": [ "aspire" ]
+                }
+              }
+            }
+            """);
+
+        var invocation = DockerComposeDeploymentTestingBuilder.ResolveAspireCliInvocation("aspire", appHostPath);
+
+        Assert.Equal("dotnet", invocation.Executable);
+        Assert.Equal(["tool", "run", "aspire", "--"], invocation.PrefixArguments);
+        var explicitInvocation = DockerComposeDeploymentTestingBuilder.ResolveAspireCliInvocation(
+            "custom-aspire",
+            appHostPath);
+        Assert.Equal("custom-aspire", explicitInvocation.Executable);
+        Assert.Empty(explicitInvocation.PrefixArguments);
+    }
+
+    [Fact]
+    public void Unrestored_local_cli_detection_only_falls_back_for_the_manifest_invocation()
+    {
+        var localInvocation = new AspireCliInvocation("dotnet", ["tool", "run", "aspire", "--"]);
+        var explicitInvocation = new AspireCliInvocation("custom-aspire", []);
+
+        Assert.True(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            localInvocation,
+            "Run \"dotnet tool restore\" to make the \"aspire\" command available."));
+        Assert.False(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            localInvocation,
+            "Deployment failed for another reason."));
+        Assert.False(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            explicitInvocation,
+            "Run \"dotnet tool restore\" to make the \"aspire\" command available."));
+    }
+
+    [Fact]
+    public void Deployment_options_use_unique_environment_names_by_default()
+    {
+        var first = new DockerComposeDeploymentOptions().EnvironmentName;
+        var second = new DockerComposeDeploymentOptions().EnvironmentName;
+
+        Assert.StartsWith(
+            DockerComposeDeploymentTestingBuilder.DefaultDeploymentEnvironmentName + "-",
+            first,
+            StringComparison.Ordinal);
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
     public async Task DeployAsync_owns_a_temporary_deployment_until_idempotent_disposal()
     {
         var runner = new RecordingAspireCommandRunner(WriteConfigurationOnDeploy);
@@ -173,6 +304,49 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
 
         Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
         Assert.False(Directory.Exists(deploy.OutputPath));
+    }
+
+    [Fact]
+    public async Task Concurrent_disposal_callers_share_cleanup_and_completion()
+    {
+        var destroyStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDestroy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new RecordingAspireCommandRunner(async invocation =>
+        {
+            await WriteConfigurationOnDeploy(invocation);
+            if (invocation.Command == "destroy")
+            {
+                destroyStarted.SetResult();
+                await releaseDestroy.Task;
+            }
+        });
+        var builder = await DeployAsync(
+            runner,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var first = builder.DisposeAsync().AsTask();
+        await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        var second = builder.DisposeAsync().AsTask();
+
+        Assert.Same(first, second);
+        Assert.False(second.IsCompleted);
+        Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
+
+        releaseDestroy.SetResult();
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
+    public async Task Synchronous_dispose_requires_the_async_disposal_contract()
+    {
+        var runner = new RecordingAspireCommandRunner(WriteConfigurationOnDeploy);
+        var builder = await DeployAsync(
+            runner,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var exception = Assert.Throws<InvalidOperationException>(() => ((IDisposable)builder).Dispose());
+
+        Assert.Contains("DisposeAsync", exception.Message, StringComparison.Ordinal);
+        await builder.DisposeAsync();
     }
 
     [Fact]
@@ -205,6 +379,30 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         Assert.Same(failure, exception);
         Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
         Assert.False(Directory.Exists(runner.Invocations[0].OutputPath));
+    }
+
+    [Fact]
+    public async Task DeployAsync_retries_after_cleaning_up_a_host_port_conflict()
+    {
+        var deployAttempts = 0;
+        var runner = new RecordingAspireCommandRunner(invocation =>
+        {
+            if (invocation.Command == "deploy" && deployAttempts++ == 0)
+            {
+                return Task.FromException(new InvalidOperationException(
+                    "Bind for 0.0.0.0:5101 failed: port is already allocated"));
+            }
+
+            return WriteConfigurationOnDeploy(invocation);
+        });
+
+        var builder = await DeployAsync(runner, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["deploy", "destroy", "deploy"], runner.Invocations.Select(invocation => invocation.Command));
+        await builder.DisposeAsync();
+        Assert.Equal(
+            ["deploy", "destroy", "deploy", "destroy"],
+            runner.Invocations.Select(invocation => invocation.Command));
     }
 
     [Fact]
@@ -263,7 +461,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
-    public async Task DisposeAsync_deletes_temporary_output_even_when_destroy_fails()
+    public async Task DisposeAsync_retains_temporary_output_when_destroy_fails()
     {
         var failure = new InvalidOperationException("destroy failed");
         var runner = new RecordingAspireCommandRunner(async invocation =>
@@ -283,7 +481,27 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
             () => builder.DisposeAsync().AsTask());
 
         Assert.Same(failure, exception);
-        Assert.False(Directory.Exists(outputPath));
+        Assert.True(Directory.Exists(outputPath));
+        Directory.Delete(outputPath, recursive: true);
+    }
+
+    [Fact]
+    public async Task DeployAsync_reports_deploy_and_destroy_failures_and_retains_recovery_state()
+    {
+        var deployFailure = new InvalidOperationException("deploy failed");
+        var destroyFailure = new InvalidOperationException("destroy failed");
+        var runner = new RecordingAspireCommandRunner(invocation =>
+            Task.FromException(invocation.Command == "deploy" ? deployFailure : destroyFailure));
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(() =>
+            DeployAsync(runner, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(deployFailure, exception.InnerExceptions);
+        Assert.Contains(destroyFailure, exception.InnerExceptions);
+        var outputPath = runner.Invocations[0].OutputPath;
+        Assert.Contains(outputPath, exception.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(outputPath));
+        Directory.Delete(outputPath, recursive: true);
     }
 
     [Fact]
@@ -315,7 +533,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
-    public async Task DisposeAsync_builds_an_unbuilt_application_and_is_idempotent()
+    public async Task DisposeAsync_does_not_build_an_unbuilt_application_and_is_idempotent()
     {
         using var file = TemporaryFile.Create(string.Empty);
         var builder = DockerComposeDeploymentTestingBuilder
@@ -324,7 +542,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         await builder.DisposeAsync();
         await builder.DisposeAsync();
 
-        Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Throws<ObjectDisposedException>(() => builder.Build());
     }
 
     private static Task<DockerComposeDeploymentTestingBuilder> DeployAsync(

@@ -2,6 +2,9 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal static class PathSafety
 {
+    public static StringComparer Comparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
@@ -89,6 +92,12 @@ internal static class PathSafety
         return Path.GetFullPath(entry.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? entry.FullName);
     }
 
-    private static string Normalize(string path) =>
-        Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    private static string Normalize(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        return root is not null && string.Equals(fullPath, root, PathComparison)
+            ? root
+            : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
 }

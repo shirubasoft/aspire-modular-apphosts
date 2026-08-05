@@ -2,16 +2,16 @@ using Aspire.Hosting.ModularAppHosts;
 using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
-builder.BuildModuleImages();
 
 var samplesRoot = Path.GetFullPath("..", builder.AppHostDirectory);
 var appHostASource = Path.Combine(samplesRoot, "AppHostA");
 builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = samplesRoot;
 builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(AppHostAModule.Name)] =
     appHostASource;
+builder.BuildModuleImages();
 
-AppHostAModule.Register(builder, appHostASource);
-var imported = AppHostAModule.ImportModule(builder);
+await AppHostAModule.RegisterAsync(builder, appHostASource);
+var imported = await AppHostAModule.ImportModuleAsync(builder);
 
 var api = imported.Api;
 var staticSite = imported.Static;
@@ -32,4 +32,4 @@ builder.AddDockerfile("dependency-gateway", "Gateway")
     .WaitFor(generatedStaticSite)
     .WithHttpHealthCheck("/health");
 
-builder.Build().Run();
+await builder.Build().RunAsync();

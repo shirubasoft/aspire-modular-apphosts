@@ -63,13 +63,18 @@ public interface IDistributedApplicationModuleBuilder
         string tag = "latest");
 
     /// <summary>
-    /// Overrides the Git repository used by <c>ImportModule</c>. When omitted, the origin remote is inferred
+    /// Overrides the Git repository used by <c>ImportModuleAsync</c>. When omitted, the origin remote is inferred
     /// from the projects' common Git worktree.
     /// </summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository);
 
     /// <summary>Overrides the Git repository and pins its imported branch, tag, or commit.</summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository, string revision);
+
+    /// <summary>
+    /// Marks generic resource factories as dependent on repository content when the module does not declare a project.
+    /// </summary>
+    IDistributedApplicationModuleBuilder RequiresRepository();
 }
 
 /// <summary>Describes a resource exported by a distributed application module.</summary>
@@ -187,7 +192,7 @@ public sealed class ModuleContainerExportOptions(
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
 
     /// <summary>
-    /// Gets or sets the clean image tag. When omitted, the current repository branch is sanitized and used.
+    /// Gets or sets the clean image tag. When omitted, the sanitized repository branch and 12-character commit are used.
     /// The effective tag has <c>-dirty</c> appended for a dirty repository.
     /// </summary>
     public string? ImageTag { get; set; }
