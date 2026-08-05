@@ -171,13 +171,15 @@ Modules containing only repository-independent resources, such as existing image
 
 ## Publishing module images
 
-The library does not infer how an image is built. `ExportAsContainer` publishes a project image, while `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource:
+The library does not infer how an image is built. `ExportAsContainer` publishes a project image, while `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
 
 ```csharp
+var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken);
+
 module.AddContainer("orders-static", "orders-static")
     .WithImagePublishCommand(new ModuleContainerExportOptions(
         imageName: "orders-static",
-        publishCommand: "podman",
+        publishCommand: containerRuntime,
         publishArguments:
         [
             "build",
@@ -186,6 +188,8 @@ module.AddContainer("orders-static", "orders-static")
             "."
         ]));
 ```
+
+`ASPIRE_CONTAINER_RUNTIME` takes precedence over the legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable. Without an explicit value, the resolver probes Docker and Podman in parallel, prefers a running runtime over one that is merely installed, and uses Docker as its tie-breaker and fallback.
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 

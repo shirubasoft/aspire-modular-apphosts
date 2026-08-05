@@ -170,30 +170,11 @@ internal static class ContainerImageInspector
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
 
-        var configuredRuntime = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME");
-        if (!string.IsNullOrWhiteSpace(configuredRuntime))
-        {
-            return await RunAsync(
-                configuredRuntime,
-                ["image", "inspect", imageReference],
-                cancellationToken).ConfigureAwait(false) == 0;
-        }
-
-        foreach (var runtime in new[] { "docker", "podman" })
-        {
-            if (await RunAsync(
-                    runtime,
-                    ["container", "ls", "-n", "1"],
-                    cancellationToken).ConfigureAwait(false) == 0)
-            {
-                return await RunAsync(
-                    runtime,
-                    ["image", "inspect", imageReference],
-                    cancellationToken).ConfigureAwait(false) == 0;
-            }
-        }
-
-        return false;
+        var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        return await RunAsync(
+            runtime,
+            ["image", "inspect", imageReference],
+            cancellationToken).ConfigureAwait(false) == 0;
     }
 
     private static async Task<int?> RunAsync(
