@@ -30,8 +30,8 @@ AppHost B imports every resource
 The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project and generated-container exports supply the exact commands that produce their configured images:
 
 ```text
-docker build --tag modular-sample-api:<sanitized-branch> .
-docker build --tag modular-sample-static:<sanitized-branch> .
+<docker|podman> build --tag modular-sample-api:<sanitized-branch> .
+<docker|podman> build --tag modular-sample-static:<sanitized-branch> .
 ```
 
 For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
@@ -44,7 +44,7 @@ For a dirty repository, the exact image-reference argument is changed to its `-d
 - Aspire CLI 13.4 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The explicit sample image commands use Docker by default. Set `ASPIRE_CONTAINER_RUNTIME=podman` to use Podman for both the sample publishers and Aspire-managed containers.
+The sample publishers follow Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker. The legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable is also honored.
 
 ## Run AppHost A
 

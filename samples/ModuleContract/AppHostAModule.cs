@@ -26,7 +26,7 @@ public static partial class AppHostAModule
         string sourceRoot)
     {
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
-        var containerRuntime = GetContainerRuntime();
+        var containerRuntime = SampleContainerRuntime.Resolve();
 
         return builder.ExportModule(Name, module =>
         {
@@ -133,21 +133,4 @@ public static partial class AppHostAModule
         });
     }
 
-    private static string GetContainerRuntime()
-    {
-        var configured = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME")?.Trim();
-        if (string.IsNullOrEmpty(configured) ||
-            string.Equals(configured, "docker", StringComparison.OrdinalIgnoreCase))
-        {
-            return "docker";
-        }
-
-        if (string.Equals(configured, "podman", StringComparison.OrdinalIgnoreCase))
-        {
-            return "podman";
-        }
-
-        throw new InvalidOperationException(
-            "ASPIRE_CONTAINER_RUNTIME must be either 'docker' or 'podman' for the modular AppHost sample.");
-    }
 }
