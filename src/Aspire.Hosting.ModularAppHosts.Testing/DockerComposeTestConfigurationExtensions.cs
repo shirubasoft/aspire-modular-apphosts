@@ -39,7 +39,8 @@ public static class DockerComposeTestConfigurationExtensions
                 $"Endpoint '{endpoint.Resource.Name}/{endpoint.EndpointName}' must have an explicit host port before it can be exported to tests.");
         }
 
-        var variableName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName(resourceName);
+        var endpointName = endpoint.EndpointName;
+        var variableName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName(resourceName, endpointName);
         var endpointValue = new UriBuilder(annotation.UriScheme, host, port).Uri.AbsoluteUri;
 
         return environment.ConfigureEnvFile(values =>
@@ -47,7 +48,7 @@ public static class DockerComposeTestConfigurationExtensions
             values[variableName] = new CapturedEnvironmentVariable
             {
                 Name = variableName,
-                Description = $"External test endpoint {resourceName}",
+                Description = $"External test endpoint {resourceName}/{endpointName}",
                 DefaultValue = endpointValue,
                 Resource = endpoint.Resource
             };
@@ -55,11 +56,11 @@ public static class DockerComposeTestConfigurationExtensions
             if (healthCheckPath is not null)
             {
                 var healthPathVariableName = DockerComposeDeploymentTestingBuilder
-                    .GetEndpointHealthPathVariableName(resourceName);
+                    .GetEndpointHealthPathVariableName(resourceName, endpointName);
                 values[healthPathVariableName] = new CapturedEnvironmentVariable
                 {
                     Name = healthPathVariableName,
-                    Description = $"External test endpoint health check {resourceName}",
+                    Description = $"External test endpoint health check {resourceName}/{endpointName}",
                     DefaultValue = healthCheckPath,
                     Resource = endpoint.Resource
                 };
@@ -88,6 +89,33 @@ public static class DockerComposeTestConfigurationExtensions
                 Description = $"External test configuration value {configurationKey}",
                 Source = value,
                 Resource = value as IResource
+            };
+        });
+    }
+
+    /// <summary>
+    /// Exports a resource connection string to the environment-specific Docker Compose environment file.
+    /// </summary>
+    public static IResourceBuilder<DockerComposeEnvironmentResource> WithTestConnectionString<T>(
+        this IResourceBuilder<DockerComposeEnvironmentResource> environment,
+        string connectionName,
+        IResourceBuilder<T> resource)
+        where T : IResourceWithConnectionString
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionName);
+        ArgumentNullException.ThrowIfNull(resource);
+
+        var configurationKey = $"ConnectionStrings:{connectionName}";
+        var variableName = DockerComposeDeploymentTestingBuilder.GetValueVariableName(configurationKey);
+        return environment.ConfigureEnvFile(values =>
+        {
+            values[variableName] = new CapturedEnvironmentVariable
+            {
+                Name = variableName,
+                Description = $"External test connection string {connectionName}",
+                Source = resource.Resource.ConnectionStringExpression,
+                Resource = resource.Resource
             };
         });
     }

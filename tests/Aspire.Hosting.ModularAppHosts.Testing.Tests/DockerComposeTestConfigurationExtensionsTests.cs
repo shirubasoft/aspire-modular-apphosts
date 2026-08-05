@@ -24,9 +24,9 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
         var values = CaptureEnvironmentVariables(environment.Resource);
 
         Assert.Same(environment, result);
-        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog-api");
+        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog-api", "http");
         var healthName = DockerComposeDeploymentTestingBuilder
-            .GetEndpointHealthPathVariableName("catalog-api");
+            .GetEndpointHealthPathVariableName("catalog-api", "http");
         Assert.Equal("http://localhost:5101/", values[endpointName].DefaultValue);
         Assert.Equal("/health/ready", values[healthName].DefaultValue);
         Assert.Same(api.Resource, values[endpointName].Resource);
@@ -45,11 +45,34 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
         environment.WithTestEndpoint("orders-api", api.GetEndpoint("https"), host: "test-host");
         var values = CaptureEnvironmentVariables(environment.Resource);
 
-        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("orders-api");
+        var endpointName = DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("orders-api", "https");
         Assert.Equal("https://test-host:5443/", values[endpointName].DefaultValue);
         Assert.DoesNotContain(
-            DockerComposeDeploymentTestingBuilder.GetEndpointHealthPathVariableName("orders-api"),
+            DockerComposeDeploymentTestingBuilder.GetEndpointHealthPathVariableName("orders-api", "https"),
             values.Keys);
+    }
+
+    [Fact]
+    public void WithTestEndpoint_preserves_multiple_named_endpoints_for_one_resource()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var api = builder.AddContainer("catalog", "nginx")
+            .WithHttpEndpoint(targetPort: 80, port: 5101, name: "public")
+            .WithHttpEndpoint(targetPort: 81, port: 5102, name: "admin")
+            .WithExternalHttpEndpoints();
+
+        environment
+            .WithTestEndpoint("catalog-api", api.GetEndpoint("public"))
+            .WithTestEndpoint("catalog-api", api.GetEndpoint("admin"));
+        var values = CaptureEnvironmentVariables(environment.Resource);
+
+        Assert.Equal(
+            "http://localhost:5101/",
+            values[DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog-api", "public")].DefaultValue);
+        Assert.Equal(
+            "http://localhost:5102/",
+            values[DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog-api", "admin")].DefaultValue);
     }
 
     [Fact]
@@ -70,6 +93,27 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
         Assert.Equal(variableName, captured.Value.Name);
         Assert.Same(parameter.Resource, captured.Value.Source);
         Assert.Same(parameter.Resource, captured.Value.Resource);
+    }
+
+    [Fact]
+    public void WithTestConnectionString_exports_the_standard_configuration_key()
+    {
+        var builder = CreateBuilder();
+        var environment = builder.AddDockerComposeEnvironment("compose");
+        var connectionString = builder.AddConnectionString("catalog-database");
+
+        var result = environment.WithTestConnectionString("catalog", connectionString);
+        var values = CaptureEnvironmentVariables(environment.Resource);
+
+        Assert.Same(environment, result);
+        var variableName = DockerComposeDeploymentTestingBuilder
+            .GetValueVariableName("ConnectionStrings:catalog");
+        var captured = Assert.Single(values);
+        Assert.Equal(variableName, captured.Key);
+        Assert.Equal(
+            connectionString.Resource.ConnectionStringExpression.ValueExpression,
+            Assert.IsType<ReferenceExpression>(captured.Value.Source).ValueExpression);
+        Assert.Same(connectionString.Resource, captured.Value.Resource);
     }
 
     [Fact]

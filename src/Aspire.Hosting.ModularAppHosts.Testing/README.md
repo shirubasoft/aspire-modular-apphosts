@@ -14,7 +14,8 @@ compose
         "catalog-api",
         catalog.Api.GetEndpoint("http"),
         healthCheckPath: "/health")
-    .WithTestValue("Parameters:api-key", apiKey.Resource);
+    .WithTestValue("Parameters:api-key", apiKey.Resource)
+    .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
 Then select either testing builder while keeping the application lifecycle and assertions shared:
@@ -35,5 +36,7 @@ await app.ResourceNotifications.WaitForResourceHealthyAsync("catalog-api");
 ```
 
 `DeployAsync` deploys through Aspire, imports the resolved endpoints and configuration, and destroys the deployment when the builder is disposed. `Create` and `CreateFromEnvironment` import a deployment owned by another system.
+
+Endpoint names and multiple endpoints per resource are preserved, so the same `CreateHttpClient(resourceName, endpointName)` calls work in both modes. Pass `DockerComposeDeploymentOptions` when CI needs an explicit environment, output path, Aspire CLI path, or deploy/cleanup timeouts. Aspire CLI output is streamed during deployment and cleanup.
 
 Read the [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md) for endpoint requirements, lifecycle options, and CI configuration. The repository also includes a complete [catalog-and-orders sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting).

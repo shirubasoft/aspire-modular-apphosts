@@ -31,10 +31,11 @@ compose
         "orders-api",
         orders.Api.GetEndpoint("http"),
         healthCheckPath: "/health")
-    .WithTestValue("Parameters:orders-api-key", apiKey.Resource);
+    .WithTestValue("Parameters:orders-api-key", apiKey.Resource)
+    .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
-`WithTestEndpoint` requires an external endpoint with an explicit host port. The optional health path becomes Aspire resource health in the imported testing model. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters.
+`WithTestEndpoint` requires an external endpoint with an explicit host port. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path becomes Aspire resource health in the imported testing model. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
 
 ## Use one test lifecycle
 
@@ -69,6 +70,22 @@ In AppHost mode, Aspire starts the project resources and allocates their endpoin
 | `ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH` | Directory for generated Compose files and environment configuration. | A temporary directory removed during disposal. |
 
 Use an explicit output path in CI when an emergency teardown step needs to locate deployment state after a cancelled test process.
+
+For code-owned configuration, pass `DockerComposeDeploymentOptions`:
+
+```csharp
+var builder = await DockerComposeDeploymentTestingBuilder
+    .DeployAsync<Projects.EShop_E2E_AppHost>(new DockerComposeDeploymentOptions
+    {
+        EnvironmentName = "CI",
+        OutputPath = artifactsPath,
+        AspireCliPath = toolPath,
+        DeploymentTimeout = TimeSpan.FromMinutes(15),
+        CleanupTimeout = TimeSpan.FromMinutes(3)
+    });
+```
+
+The Aspire CLI output is streamed while deploy and destroy run. A timed-out deploy still receives a best-effort destroy, and a temporary output directory is removed.
 
 When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. These modes import configuration without deploying or destroying the external environment.
 

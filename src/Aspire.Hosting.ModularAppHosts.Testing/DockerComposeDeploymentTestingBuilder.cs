@@ -40,7 +40,6 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     private const string EndpointPrefix = "ASPIRE_TEST_ENDPOINT__";
     private const string EndpointHealthPathPrefix = "ASPIRE_TEST_ENDPOINT_HEALTH_PATH__";
     private const string ValuePrefix = "ASPIRE_TEST_VALUE__";
-    private static readonly TimeSpan CleanupTimeout = TimeSpan.FromMinutes(2);
     private readonly IDistributedApplicationBuilder _innerBuilder;
     private readonly OwnedDeployment? _ownedDeployment;
     private DistributedApplication? _application;
@@ -79,9 +78,32 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         var environmentName = System.Environment.GetEnvironmentVariable(DeploymentEnvironmentVariableName);
         var outputPath = System.Environment.GetEnvironmentVariable(DeploymentOutputPathEnvironmentVariableName);
-        return DeployAsync<TEntryPoint>(
-            environmentName ?? DefaultDeploymentEnvironmentName,
-            outputPath,
+        return DeployAsync<TEntryPoint>(new DockerComposeDeploymentOptions
+        {
+            EnvironmentName = environmentName ?? DefaultDeploymentEnvironmentName,
+            OutputPath = outputPath
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Deploys the AppHost to Docker Compose with explicit deployment options and creates a testing builder that owns it.
+    /// </summary>
+    /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
+    /// <param name="options">The deployment options.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
+        DockerComposeDeploymentOptions options,
+        CancellationToken cancellationToken = default)
+        where TEntryPoint : class
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ValidateOptions(options);
+        var appHostPath = ResolveAppHostPath(typeof(TEntryPoint).Assembly);
+        return DeployCoreAsync<TEntryPoint>(
+            Snapshot(options),
+            appHostPath,
+            CliWrapAspireCommandRunner.Instance,
             cancellationToken);
     }
 
@@ -101,60 +123,55 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         CancellationToken cancellationToken = default)
         where TEntryPoint : class
     {
-        ValidateEnvironmentName(environmentName);
-        var appHostPath = ResolveAppHostPath(typeof(TEntryPoint).Assembly);
-        return DeployCoreAsync<TEntryPoint>(
-            environmentName,
-            outputPath,
-            appHostPath,
-            CliWrapAspireCommandRunner.Instance,
-            cancellationToken);
+        return DeployAsync<TEntryPoint>(new DockerComposeDeploymentOptions
+        {
+            EnvironmentName = environmentName,
+            OutputPath = outputPath
+        }, cancellationToken);
     }
 
     internal static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
-        string environmentName,
-        string? outputPath,
+        DockerComposeDeploymentOptions options,
         string appHostPath,
         IAspireCommandRunner commandRunner,
         CancellationToken cancellationToken = default)
         where TEntryPoint : class
     {
-        ValidateEnvironmentName(environmentName);
+        ArgumentNullException.ThrowIfNull(options);
+        ValidateOptions(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostPath);
         ArgumentNullException.ThrowIfNull(commandRunner);
         return DeployCoreAsync<TEntryPoint>(
-            environmentName,
-            outputPath,
+            Snapshot(options),
             Path.GetFullPath(appHostPath),
             commandRunner,
             cancellationToken);
     }
 
     private static async Task<DockerComposeDeploymentTestingBuilder> DeployCoreAsync<TEntryPoint>(
-        string environmentName,
-        string? outputPath,
+        DockerComposeDeploymentOptions options,
         string appHostPath,
         IAspireCommandRunner commandRunner,
         CancellationToken cancellationToken)
         where TEntryPoint : class
     {
-        var deleteOutputDirectory = string.IsNullOrWhiteSpace(outputPath);
+        var deleteOutputDirectory = string.IsNullOrWhiteSpace(options.OutputPath);
         var absoluteOutputPath = deleteOutputDirectory
             ? CreateTemporaryOutputPath(appHostPath)
-            : Path.GetFullPath(outputPath!);
+            : Path.GetFullPath(options.OutputPath!);
         Directory.CreateDirectory(absoluteOutputPath);
 
         var deployment = new OwnedDeployment(
             appHostPath,
             absoluteOutputPath,
-            environmentName,
+            options,
             deleteOutputDirectory,
             commandRunner);
 
         try
         {
             await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
-            var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{environmentName}");
+            var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
             return Create<TEntryPoint>(configurationFilePath, deployment);
         }
         catch
@@ -309,8 +326,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         {
             try
             {
-                using var timeout = new CancellationTokenSource(CleanupTimeout);
-                await RunAspireCommandAsync("destroy", _ownedDeployment, timeout.Token).ConfigureAwait(false);
+                await RunAspireCommandAsync("destroy", _ownedDeployment, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -337,11 +353,16 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    internal static string GetEndpointVariableName(string resourceName) =>
-        EndpointPrefix + EncodeName(resourceName);
+    internal static string GetEndpointVariableName(string resourceName) => EndpointPrefix + EncodeName(resourceName);
+
+    internal static string GetEndpointVariableName(string resourceName, string endpointName) =>
+        EndpointPrefix + EncodeName(resourceName) + "__" + EncodeName(endpointName);
 
     internal static string GetEndpointHealthPathVariableName(string resourceName) =>
         EndpointHealthPathPrefix + EncodeName(resourceName);
+
+    internal static string GetEndpointHealthPathVariableName(string resourceName, string endpointName) =>
+        EndpointHealthPathPrefix + EncodeName(resourceName) + "__" + EncodeName(endpointName);
 
     internal static string GetValueVariableName(string configurationKey) =>
         ValuePrefix + EncodeName(configurationKey);
@@ -429,18 +450,68 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    private static Task RunAspireCommandAsync(
+    private static void ValidateOptions(DockerComposeDeploymentOptions options)
+    {
+        ValidateEnvironmentName(options.EnvironmentName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.AspireCliPath);
+        if (options.DeploymentTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.DeploymentTimeout,
+                "The deployment timeout must be positive.");
+        }
+
+        if (options.CleanupTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.CleanupTimeout,
+                "The cleanup timeout must be positive.");
+        }
+    }
+
+    private static DockerComposeDeploymentOptions Snapshot(DockerComposeDeploymentOptions options) => new()
+    {
+        EnvironmentName = options.EnvironmentName,
+        OutputPath = options.OutputPath,
+        AspireCliPath = options.AspireCliPath,
+        DeploymentTimeout = options.DeploymentTimeout,
+        CleanupTimeout = options.CleanupTimeout
+    };
+
+    private static async Task RunAspireCommandAsync(
         string command,
         OwnedDeployment deployment,
-        CancellationToken cancellationToken) =>
-        deployment.CommandRunner.RunAsync(
-            command,
-            deployment.AppHostPath,
-            deployment.OutputPath,
-            deployment.EnvironmentName,
-            cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        var timeout = string.Equals(command, "deploy", StringComparison.Ordinal)
+            ? deployment.Options.DeploymentTimeout
+            : deployment.Options.CleanupTimeout;
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+        try
+        {
+            await deployment.CommandRunner.RunAsync(
+                deployment.Options.AspireCliPath,
+                command,
+                deployment.AppHostPath,
+                deployment.OutputPath,
+                deployment.Options.EnvironmentName,
+                linkedSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"'aspire {command}' exceeded the configured timeout of {timeout}.",
+                exception);
+        }
+    }
 
     private static async Task RunAspireCliAsync(
+        string aspireCliPath,
         string command,
         string appHostPath,
         string outputPath,
@@ -463,31 +534,23 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
 
         arguments.Add("--non-interactive");
-        var standardOutput = new StringBuilder();
-        var standardError = new StringBuilder();
-        CommandResult result;
-        try
+        var outputLock = new object();
+        void ReportOutput(string line)
         {
-            result = await CliCommand.Wrap("aspire")
-                .WithArguments(arguments)
-                .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
-                .WithValidation(CommandResultValidation.None)
-                .WithStandardOutputPipe(PipeTarget.ToStringBuilder(standardOutput))
-                .WithStandardErrorPipe(PipeTarget.ToStringBuilder(standardError))
-                .ExecuteAsync(cancellationToken);
-        }
-        finally
-        {
-            if (standardOutput.Length > 0)
+            lock (outputLock)
             {
-                await Console.Out.WriteAsync(standardOutput.ToString()).ConfigureAwait(false);
+                Console.WriteLine($"[aspire {command}] {line}");
             }
+        }
 
-            if (standardError.Length > 0)
-            {
-                await Console.Error.WriteAsync(standardError.ToString()).ConfigureAwait(false);
-            }
-        }
+        CommandResult result;
+        result = await CliCommand.Wrap(aspireCliPath)
+            .WithArguments(arguments)
+            .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
+            .WithValidation(CommandResultValidation.None)
+            .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportOutput))
+            .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportOutput))
+            .ExecuteAsync(cancellationToken);
 
         if (!result.IsSuccess)
         {
@@ -504,8 +567,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         try
         {
-            using var timeout = new CancellationTokenSource(CleanupTimeout);
-            await RunAspireCommandAsync("destroy", deployment, timeout.Token).ConfigureAwait(false);
+            await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
         }
         catch
         {
@@ -579,10 +641,17 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         IDistributedApplicationBuilder builder,
         Dictionary<string, string> values)
     {
+        var resources = new Dictionary<string, (DeployedEndpointResource Resource, IResourceBuilder<DeployedEndpointResource> Builder)>(
+            StringComparer.Ordinal);
         foreach (var pair in values.Where(pair => pair.Key.StartsWith(EndpointPrefix, StringComparison.Ordinal)))
         {
-            var encodedResourceName = pair.Key[EndpointPrefix.Length..];
+            var encodedEndpoint = pair.Key[EndpointPrefix.Length..];
+            var separator = encodedEndpoint.IndexOf("__", StringComparison.Ordinal);
+            var encodedResourceName = separator < 0 ? encodedEndpoint : encodedEndpoint[..separator];
             var resourceName = DecodeName(encodedResourceName);
+            var endpointName = separator < 0
+                ? null
+                : DecodeName(encodedEndpoint[(separator + 2)..]);
             if (!Uri.TryCreate(pair.Value, UriKind.Absolute, out var endpoint)
                 || !(string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
@@ -591,12 +660,34 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                     $"The exported test endpoint '{resourceName}' has invalid HTTP URI value '{pair.Value}'.");
             }
 
-            var resource = new DeployedEndpointResource(resourceName);
+            endpointName ??= endpoint.Scheme;
+            if (!resources.TryGetValue(resourceName, out var imported))
+            {
+                var resource = new DeployedEndpointResource(resourceName);
+                var resourceBuilder = builder.AddResource(resource)
+                    .WithInitialState(new CustomResourceSnapshot
+                    {
+                        ResourceType = "ExternalService",
+                        State = KnownResourceStates.Running,
+                        Properties = []
+                    })
+                    .ExcludeFromManifest();
+                imported = (resource, resourceBuilder);
+                resources.Add(resourceName, imported);
+            }
+
+            if (imported.Resource.Annotations.OfType<EndpointAnnotation>().Any(annotation =>
+                string.Equals(annotation.Name, endpointName, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"The exported test endpoint '{resourceName}/{endpointName}' is defined more than once.");
+            }
+
             var annotation = new EndpointAnnotation(
                 ProtocolType.Tcp,
                 uriScheme: endpoint.Scheme,
                 transport: endpoint.Scheme,
-                name: endpoint.Scheme,
+                name: endpointName,
                 port: endpoint.Port,
                 targetPort: endpoint.Port,
                 isExternal: true,
@@ -605,26 +696,18 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 TargetHost = endpoint.Host
             };
             annotation.AllocatedEndpoint = new AllocatedEndpoint(annotation, endpoint.Host, endpoint.Port);
-            resource.Annotations.Add(annotation);
+            imported.Resource.Annotations.Add(annotation);
+            imported.Builder.WithUrl(endpoint.AbsoluteUri);
 
-            var resourceBuilder = builder.AddResource(resource)
-                .WithInitialState(new CustomResourceSnapshot
-                {
-                    ResourceType = "ExternalService",
-                    State = KnownResourceStates.Running,
-                    Properties = []
-                })
-                .ExcludeFromManifest()
-                .WithUrl(endpoint.AbsoluteUri);
-
-            if (values.TryGetValue(EndpointHealthPathPrefix + encodedResourceName, out var healthPath))
+            var healthKey = EndpointHealthPathPrefix + encodedEndpoint;
+            if (values.TryGetValue(healthKey, out var healthPath))
             {
-                var healthCheckKey = $"{resourceName}_deployment_{healthPath}_check";
+                var healthCheckKey = $"{resourceName}_{endpointName}_deployment_check";
                 var healthCheckUri = new Uri(endpoint, healthPath);
                 builder.Services.AddHealthChecks().AddUrlGroup(
                     options => options.AddUri(healthCheckUri),
                     healthCheckKey);
-                resourceBuilder.WithHealthCheck(healthCheckKey);
+                imported.Builder.WithHealthCheck(healthCheckKey);
             }
         }
     }
@@ -677,12 +760,14 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         public static CliWrapAspireCommandRunner Instance { get; } = new();
 
         public Task RunAsync(
+            string aspireCliPath,
             string command,
             string appHostPath,
             string outputPath,
             string environmentName,
             CancellationToken cancellationToken) =>
             RunAspireCliAsync(
+                aspireCliPath,
                 command,
                 appHostPath,
                 outputPath,
@@ -693,7 +778,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     private sealed record OwnedDeployment(
         string AppHostPath,
         string OutputPath,
-        string EnvironmentName,
+        DockerComposeDeploymentOptions Options,
         bool DeleteOutputDirectory,
         IAspireCommandRunner CommandRunner);
 }
@@ -701,6 +786,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 internal interface IAspireCommandRunner
 {
     Task RunAsync(
+        string aspireCliPath,
         string command,
         string appHostPath,
         string outputPath,

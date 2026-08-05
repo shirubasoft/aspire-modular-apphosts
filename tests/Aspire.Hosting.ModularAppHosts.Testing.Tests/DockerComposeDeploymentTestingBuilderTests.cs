@@ -12,11 +12,14 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     public async Task Create_imports_endpoints_and_configuration_into_an_Aspire_testing_builder()
     {
         var endpointName = Encode("catalog-api");
+        var httpEndpointName = Encode("public");
+        var adminEndpointName = Encode("admin");
         var configurationKey = Encode("Parameters:orders-api-key");
         using var file = TemporaryFile.Create($$"""
             # External test endpoint catalog-api
-            ASPIRE_TEST_ENDPOINT__{{endpointName}}=http://localhost:5101/
-            ASPIRE_TEST_ENDPOINT_HEALTH_PATH__{{endpointName}}=/health
+            ASPIRE_TEST_ENDPOINT__{{endpointName}}__{{httpEndpointName}}=http://localhost:5101/
+            ASPIRE_TEST_ENDPOINT_HEALTH_PATH__{{endpointName}}__{{httpEndpointName}}=/health
+            ASPIRE_TEST_ENDPOINT__{{endpointName}}__{{adminEndpointName}}=https://localhost:5102/
 
             # External test configuration value Parameters:orders-api-key
             ASPIRE_TEST_VALUE__{{configurationKey}}=secret=with=separators
@@ -30,10 +33,11 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         Assert.True(builder.Resources.TryGetByName("catalog-api", out var resource));
         Assert.IsAssignableFrom<IResourceWithEndpoints>(resource);
 
-        var endpoint = Assert.Single(resource.Annotations.OfType<EndpointAnnotation>());
-        Assert.Equal("http", endpoint.Name);
-        Assert.Equal("localhost", endpoint.AllocatedEndpoint?.Address);
-        Assert.Equal(5101, endpoint.AllocatedEndpoint?.Port);
+        var endpoints = resource.Annotations.OfType<EndpointAnnotation>().ToDictionary(endpoint => endpoint.Name);
+        Assert.Equal(["admin", "public"], endpoints.Keys.Order());
+        Assert.Equal("localhost", endpoints["public"].AllocatedEndpoint?.Address);
+        Assert.Equal(5101, endpoints["public"].AllocatedEndpoint?.Port);
+        Assert.Equal(5102, endpoints["admin"].AllocatedEndpoint?.Port);
         Assert.Contains(resource.Annotations, annotation => annotation is HealthCheckAnnotation);
 
         await using var application = await builder.BuildAsync(TestContext.Current.CancellationToken);
@@ -137,6 +141,19 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public async Task DeployAsync_rejects_non_positive_timeouts()
+    {
+        var options = new DockerComposeDeploymentOptions { DeploymentTimeout = TimeSpan.Zero };
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            DockerComposeDeploymentTestingBuilder.DeployAsync<DockerComposeDeploymentTestingBuilderTests>(
+                options,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("options", exception.ParamName);
+    }
+
+    [Fact]
     public async Task DeployAsync_owns_a_temporary_deployment_until_idempotent_disposal()
     {
         var runner = new RecordingAspireCommandRunner(WriteConfigurationOnDeploy);
@@ -147,6 +164,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
 
         Assert.Equal("deploy", deploy.Command);
         Assert.Equal("CI", deploy.EnvironmentName);
+        Assert.Equal("aspire-under-test", deploy.AspireCliPath);
         Assert.Equal(GetAppHostPath(), deploy.AppHostPath);
         Assert.True(Directory.Exists(deploy.OutputPath));
 
@@ -227,6 +245,24 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public async Task DeployAsync_applies_the_deployment_timeout_and_still_cleans_up()
+    {
+        var runner = new RecordingAspireCommandRunner(invocation =>
+            invocation.Command == "deploy"
+                ? Task.Delay(Timeout.InfiniteTimeSpan, invocation.CancellationToken)
+                : Task.CompletedTask);
+        var options = CreateOptions();
+        options.DeploymentTimeout = TimeSpan.FromMilliseconds(20);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            DeployAsync(runner, options, TestContext.Current.CancellationToken));
+
+        Assert.Contains("aspire deploy", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
+        Assert.False(Directory.Exists(runner.Invocations[0].OutputPath));
+    }
+
+    [Fact]
     public async Task DisposeAsync_deletes_temporary_output_even_when_destroy_fails()
     {
         var failure = new InvalidOperationException("destroy failed");
@@ -294,13 +330,28 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     private static Task<DockerComposeDeploymentTestingBuilder> DeployAsync(
         IAspireCommandRunner runner,
         string? outputPath = null,
+        CancellationToken cancellationToken = default)
+    {
+        var options = CreateOptions();
+        options.OutputPath = outputPath;
+        return DeployAsync(runner, options, cancellationToken);
+    }
+
+    private static Task<DockerComposeDeploymentTestingBuilder> DeployAsync(
+        IAspireCommandRunner runner,
+        DockerComposeDeploymentOptions options,
         CancellationToken cancellationToken = default) =>
         DockerComposeDeploymentTestingBuilder.DeployAsync<DockerComposeDeploymentTestingBuilderTests>(
-            "CI",
-            outputPath,
+            options,
             GetAppHostPath(),
             runner,
             cancellationToken);
+
+    private static DockerComposeDeploymentOptions CreateOptions() => new()
+    {
+        EnvironmentName = "CI",
+        AspireCliPath = "aspire-under-test"
+    };
 
     private static Task WriteConfigurationOnDeploy(AspireCommandInvocation invocation)
     {
@@ -327,6 +378,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         public List<AspireCommandInvocation> Invocations { get; } = [];
 
         public Task RunAsync(
+            string aspireCliPath,
             string command,
             string appHostPath,
             string outputPath,
@@ -334,6 +386,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
             CancellationToken cancellationToken)
         {
             var invocation = new AspireCommandInvocation(
+                aspireCliPath,
                 command,
                 appHostPath,
                 outputPath,
@@ -345,6 +398,7 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     private sealed record AspireCommandInvocation(
+        string AspireCliPath,
         string Command,
         string AppHostPath,
         string OutputPath,
