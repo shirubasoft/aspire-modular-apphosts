@@ -20,10 +20,7 @@ var catalog = await builder.AddCatalogModuleAsync();
 var orders = await builder.AddOrdersModuleAsync();
 
 orders.Api
-    .WithReference(catalog.Api.GetEndpoint("http"))
-    .WithEnvironment("Catalog__Endpoint", catalog.Api.GetEndpoint("http"))
-    .WithEnvironment("Orders__ApiKey", ordersApiKey)
-    .WaitFor(catalog.Api);
+    .WithEnvironment("Orders__ApiKey", ordersApiKey);
 
 compose
     .WithTestEndpoint(

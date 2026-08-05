@@ -9,7 +9,7 @@ catalog module ──> catalog-api <── orders-api <── scenario tests
                                orders module
 ```
 
-`EShop.E2E.AppHost` adds both modules, wires the orders API to the catalog endpoint, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
+`EShop.E2E.AppHost` adds both modules, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. `OrdersModule.Define` obtains a strongly typed `CatalogModule` reference and owns the orders-to-catalog endpoint and startup relationships. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
 
 The AppHost also enables module auto-cloning while deliberately configuring a nonexistent GitHub CLI executable. Both modules live in the current Git worktree, so the AppHost and Compose CI modes prove that same-repository discovery bypasses cloning.
 
@@ -37,7 +37,6 @@ Aspire allocates the runtime addresses, waits for both project resources to beco
 Install the Aspire CLI, ensure Docker or Podman is running, and run the test:
 
 ```bash
-Parameters__orders_api_key=e2e-orders-key \
 ESHOP_E2E_MODE=compose \
 dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
 ```

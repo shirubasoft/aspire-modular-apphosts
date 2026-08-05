@@ -94,6 +94,68 @@ var api = orders.GetResource<ProjectResource>("orders-api");
 
 Unlike the generated `builder.ImportOrdersModuleAsync()` extension, the raw untyped import does not register the definition for you; call `DefineModuleAsync` or `ExportModuleAsync` first.
 
+### Reference another module
+
+Generated contracts expose `Reference`, which resolves another module by its generated name and contract version and returns its strongly typed resource API. Request dependencies in `Define` and use them exactly as an AppHost would:
+
+```csharp
+public static void Define(IDistributedApplicationModuleBuilder module)
+{
+    var catalog = CatalogModule.Reference(module);
+
+    module.AddResource<ProjectResource>(ApiResourceName, context =>
+        context.ApplicationBuilder
+            .AddProject(context.ResourceName, "src/Orders.Api/Orders.Api.csproj")
+            .WithEnvironment("Catalog__Endpoint", catalog.Api.GetEndpoint("http"))
+            .WaitFor(catalog.Api));
+}
+```
+
+Add or import dependencies before the dependent module so their definitions and resources are available:
+
+```csharp
+var catalog = await builder.AddCatalogModuleAsync();
+var orders = await builder.AddOrdersModuleAsync();
+```
+
+A missing definition or incompatible contract version fails while the dependent module is defined. The generated reference preserves resource aliases and prefixes because it delegates to the dependency's materialized module.
+
+### Module configuration and options
+
+Definitions receive the AppHost's complete `IConfiguration` through `module.Configuration`. `module.ConfigurationSection` is the conventional `Aspire:ModularAppHosts:Modules:<module-name>` section, and `module.GetOptions<T>()` binds that section to an `IOptions<T>` value while preserving property defaults:
+
+```csharp
+public sealed class OrdersModuleOptions
+{
+    public string Region { get; set; } = "local";
+}
+
+public static void Define(IDistributedApplicationModuleBuilder module)
+{
+    var options = module.GetOptions<OrdersModuleOptions>().Value;
+    module.AddContainer("orders-api", "example/orders-api")
+        .Configure(container => container.WithEnvironment("REGION", options.Region));
+}
+```
+
+Configure it through any normal .NET configuration provider:
+
+```json
+{
+  "Aspire": {
+    "ModularAppHosts": {
+      "Modules": {
+        "orders": {
+          "Region": "south-america"
+        }
+      }
+    }
+  }
+}
+```
+
+Use `DistributedApplicationModuleExtensions.GetModuleConfigurationKey(moduleName)` when constructing the same section key programmatically. Options are bound when the module definition is first registered, so configure the builder before adding or importing it.
+
 ### Resource prefixes and aliases
 
 An import can adapt contract names without changing typed lookups:

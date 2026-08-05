@@ -173,7 +173,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         var extensionMethodStem = char.ToUpperInvariant(symbol.Name[0]) + symbol.Name.Substring(1);
         var addExtensionMethodName = "Add" + extensionMethodStem + "Async";
         var importExtensionMethodName = "Import" + extensionMethodStem + "Async";
-        foreach (var reservedMemberName in new[] { addExtensionMethodName, importExtensionMethodName, "Module" })
+        foreach (var reservedMemberName in new[] { addExtensionMethodName, importExtensionMethodName, "Reference", "Module" })
         {
             if (symbol.GetMembers(reservedMemberName).Length > 0)
             {
@@ -522,6 +522,18 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .Append(module.TypeName)
             .AppendLine();
         source.AppendLine("{");
+        source.AppendLine("    /// <summary>Gets a strongly typed reference to this module from another module definition.</summary>");
+        source.AppendLine("    public static Module Reference(");
+        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder moduleBuilder)");
+        source.AppendLine("    {");
+        source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(moduleBuilder);");
+        source.Append("        return new Module(moduleBuilder.GetRequiredModule(")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+            .Append(", ")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+            .AppendLine("));");
+        source.AppendLine("    }");
+        source.AppendLine();
         if (module.HasConventionalDefineMethod)
         {
             source.AppendLine("    /// <summary>Defines and adds the module in one call and returns its typed resources.</summary>");

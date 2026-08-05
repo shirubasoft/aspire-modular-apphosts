@@ -63,6 +63,44 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Fact]
+    public void Generator_creates_a_strongly_typed_reference_for_use_in_other_module_definitions()
+    {
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            namespace GeneratedSample;
+
+            [GenerateDistributedApplicationModule("catalog", Version = "2")]
+            public static partial class CatalogModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("api", "catalog");
+                }
+            }
+
+            [GenerateDistributedApplicationModule("orders")]
+            public static partial class OrdersModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    var catalog = CatalogModule.Reference(module);
+                    _ = catalog.Api;
+                    module.AddContainer("api", "orders");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Contains(result.GeneratedSources, generated =>
+            generated.Contains("public static Module Reference(", StringComparison.Ordinal) &&
+            generated.Contains("GetRequiredModule(\"catalog\", \"2\")", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Generator_requires_a_static_partial_top_level_class()
     {
         const string source = """
@@ -343,6 +381,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     [Theory]
     [InlineData("public static void AddInvalidModuleAsync() { }", "AddInvalidModuleAsync")]
     [InlineData("public static int ImportInvalidModuleAsync => 0;", "ImportInvalidModuleAsync")]
+    [InlineData("public static void Reference() { }", "Reference")]
     [InlineData("public sealed class Module { }", "Module")]
     public void Generator_rejects_members_reserved_for_the_generated_api(
         string member,

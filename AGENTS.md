@@ -5,3 +5,5 @@ Backward compatibility is not a constraint. When the best implementation of a fe
 Mark every breaking change with Conventional Commits syntax (for example, `feat!:` or `fix!:`) and include a `BREAKING CHANGE:` footer that explains the impact and migration path. A plain `feat:` or `fix:` commit does not trigger a major release.
 
 Samples should work by default by just executing `aspire` running the sample.
+
+Prefer standard configuration APIs (`IConfiguration`/`IOptions<T>`) over reading environment variables directly.
