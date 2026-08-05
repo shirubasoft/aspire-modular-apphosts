@@ -173,6 +173,9 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var generated = Assert.Single(result.GeneratedSources);
         Assert.DoesNotContain("DefineModule(builder", generated, StringComparison.Ordinal);
         Assert.Contains("IDistributedApplicationModule module)", generated, StringComparison.Ordinal);
+        Assert.Contains("String.Equals(module.Name, \"advanced\"", generated, StringComparison.Ordinal);
+        Assert.Contains("String.Equals(module.Version, \"1\"", generated, StringComparison.Ordinal);
+        Assert.Contains("Expected module 'advanced' with contract version '1'.", generated, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -29,6 +29,17 @@ public sealed class PathSafetyTests
     }
 
     [Fact]
+    public void Containment_preserves_the_filesystem_root()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var root = Assert.IsType<string>(Path.GetPathRoot(directory.Path));
+
+        Assert.True(PathSafety.AreEqual(root, root));
+        Assert.True(PathSafety.IsContainedBy(root, directory.Path));
+        Assert.Equal(directory.Path, PathSafety.GetContainedPath(root, directory.Path, "path"));
+    }
+
+    [Fact]
     public void Containment_rejects_a_symbolic_link_that_escapes_the_repository()
     {
         if (OperatingSystem.IsWindows())

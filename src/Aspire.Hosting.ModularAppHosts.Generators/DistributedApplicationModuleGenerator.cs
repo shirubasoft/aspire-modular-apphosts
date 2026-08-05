@@ -474,6 +474,20 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(module);");
+        source.Append("        if (!global::System.String.Equals(module.Name, ")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+            .AppendLine(", global::System.StringComparison.Ordinal) ||");
+        source.Append("            !global::System.String.Equals(module.Version, ")
+            .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+            .AppendLine(", global::System.StringComparison.Ordinal))");
+        source.AppendLine("        {");
+        source.Append("            throw new global::System.ArgumentException(")
+            .Append(SymbolDisplay.FormatLiteral(
+                $"Expected module '{module.ModuleName}' with contract version '{module.ModuleVersion}'.",
+                quote: true))
+            .AppendLine(", nameof(module));");
+        source.AppendLine("        }");
+        source.AppendLine();
         source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.Add(builder, module);");
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
