@@ -1,8 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="CliWrap" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="../../src/Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />

@@ -27,7 +27,7 @@ public static partial class AppHostAModule
         CancellationToken cancellationToken = default)
     {
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
-        var containerRuntime = await SampleContainerRuntime.ResolveAsync(cancellationToken).ConfigureAwait(false);
+        var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         return await builder.ExportModuleAsync(Name, module =>
         {

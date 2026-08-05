@@ -1,9 +1,9 @@
-using ModularSample.ModuleContract;
+using Aspire.Hosting.ModularAppHosts;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
-public sealed class SampleContainerRuntimeTests
+public sealed class ContainerRuntimeResolverTests
 {
     [Theory]
     [InlineData("docker", "docker")]
@@ -12,9 +12,10 @@ public sealed class SampleContainerRuntimeTests
     [InlineData(" PODMAN ", "podman")]
     public async Task Explicit_runtime_bypasses_detection(string configuredRuntime, string expected)
     {
-        var result = await SampleContainerRuntime.ResolveAsync(
+        var result = await ContainerRuntimeResolver.ResolveAsync(
             configuredRuntime,
-            (_, _) => throw new InvalidOperationException("An explicit runtime must not be probed."));
+            (_, _, _) => throw new InvalidOperationException("An explicit runtime must not be probed."),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(expected, result);
     }
@@ -23,9 +24,10 @@ public sealed class SampleContainerRuntimeTests
     public async Task Unsupported_explicit_runtime_fails_before_detection()
     {
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            SampleContainerRuntime.ResolveAsync(
+            ContainerRuntimeResolver.ResolveAsync(
                 "containerd",
-                (_, _) => throw new InvalidOperationException("An explicit runtime must not be probed.")));
+                (_, _, _) => throw new InvalidOperationException("An explicit runtime must not be probed."),
+                TestContext.Current.CancellationToken));
 
         Assert.Contains("docker", exception.Message, StringComparison.Ordinal);
         Assert.Contains("podman", exception.Message, StringComparison.Ordinal);
@@ -34,9 +36,10 @@ public sealed class SampleContainerRuntimeTests
     [Fact]
     public async Task Docker_is_the_tiebreaker_when_both_runtimes_are_running()
     {
-        var result = await SampleContainerRuntime.ResolveAsync(
+        var result = await ContainerRuntimeResolver.ResolveAsync(
             configuredRuntime: null,
-            (_, arguments) => Task.FromResult<int?>(IsStatusCommand(arguments) ? 0 : null));
+            (_, arguments, _) => Task.FromResult<int?>(IsStatusCommand(arguments) ? 0 : null),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("docker", result);
     }
@@ -44,16 +47,17 @@ public sealed class SampleContainerRuntimeTests
     [Fact]
     public async Task Running_podman_is_preferred_over_installed_but_stopped_docker()
     {
-        var result = await SampleContainerRuntime.ResolveAsync(
+        var result = await ContainerRuntimeResolver.ResolveAsync(
             configuredRuntime: null,
-            (executable, arguments) => Task.FromResult<int?>(
+            (executable, arguments, _) => Task.FromResult<int?>(
                 (executable, GetCommand(arguments)) switch
                 {
                     ("docker", "container ls -n 1") => 1,
                     ("docker", "--version") => 0,
                     ("podman", "container ls -n 1") => 0,
                     _ => null
-                }));
+                }),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("podman", result);
     }
@@ -61,15 +65,16 @@ public sealed class SampleContainerRuntimeTests
     [Fact]
     public async Task Installed_podman_is_preferred_when_docker_is_not_installed()
     {
-        var result = await SampleContainerRuntime.ResolveAsync(
+        var result = await ContainerRuntimeResolver.ResolveAsync(
             configuredRuntime: null,
-            (executable, arguments) => Task.FromResult<int?>(
+            (executable, arguments, _) => Task.FromResult<int?>(
                 (executable, GetCommand(arguments)) switch
                 {
                     ("podman", "container ls -n 1") => 1,
                     ("podman", "--version") => 0,
                     _ => null
-                }));
+                }),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("podman", result);
     }
@@ -77,9 +82,10 @@ public sealed class SampleContainerRuntimeTests
     [Fact]
     public async Task Docker_is_the_fallback_when_no_runtime_is_available()
     {
-        var result = await SampleContainerRuntime.ResolveAsync(
+        var result = await ContainerRuntimeResolver.ResolveAsync(
             configuredRuntime: null,
-            (_, _) => Task.FromResult<int?>(null));
+            (_, _, _) => Task.FromResult<int?>(null),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("docker", result);
     }
@@ -91,8 +97,10 @@ public sealed class SampleContainerRuntimeTests
         var releaseProbes = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedCount = 0;
 
-        Task<int?> Run(string _, IReadOnlyList<string> arguments)
+        Task<int?> Run(string _, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {
+            Assert.Equal(TestContext.Current.CancellationToken, cancellationToken);
+
             if (!IsStatusCommand(arguments))
             {
                 return Task.FromResult<int?>(null);
@@ -106,7 +114,10 @@ public sealed class SampleContainerRuntimeTests
             return releaseProbes.Task;
         }
 
-        var resolution = SampleContainerRuntime.ResolveAsync(configuredRuntime: null, Run);
+        var resolution = ContainerRuntimeResolver.ResolveAsync(
+            configuredRuntime: null,
+            Run,
+            TestContext.Current.CancellationToken);
         await probesStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
         releaseProbes.SetResult(0);
 

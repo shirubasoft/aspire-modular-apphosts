@@ -44,7 +44,7 @@ For a dirty repository, the exact image-reference argument is changed to its `-d
 - Aspire CLI 13.4 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers follow Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker. The legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable is also honored.
+The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker. The legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable is also honored.
 
 ## Run AppHost A
 

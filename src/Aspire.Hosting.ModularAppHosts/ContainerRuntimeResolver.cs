@@ -1,9 +1,10 @@
 using CliWrap;
 using CliCommand = global::CliWrap.Cli;
 
-namespace ModularSample.ModuleContract;
+namespace Aspire.Hosting.ModularAppHosts;
 
-internal static class SampleContainerRuntime
+/// <summary>Resolves the container runtime used by Aspire module image commands.</summary>
+public static class ContainerRuntimeResolver
 {
     private const string Docker = "docker";
     private const string Podman = "podman";
@@ -14,20 +15,30 @@ internal static class SampleContainerRuntime
         new(Podman, IsDefault: false)
     ];
 
+    /// <summary>
+    /// Resolves Docker or Podman from Aspire's container-runtime environment variables and local availability.
+    /// </summary>
+    /// <remarks>
+    /// <c>ASPIRE_CONTAINER_RUNTIME</c> takes precedence over the legacy
+    /// <c>DOTNET_ASPIRE_CONTAINER_RUNTIME</c> variable. Without an explicit value, Docker and Podman are
+    /// probed in parallel. A running runtime is preferred over one that is merely installed, and Docker is
+    /// used as the tie-breaker and final fallback.
+    /// </remarks>
+    /// <param name="cancellationToken">A token that cancels container-runtime probes.</param>
+    /// <returns>The <c>docker</c> or <c>podman</c> executable name.</returns>
     public static Task<string> ResolveAsync(CancellationToken cancellationToken = default)
     {
         var configuredRuntime = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME") ??
             Environment.GetEnvironmentVariable("DOTNET_ASPIRE_CONTAINER_RUNTIME");
-        return ResolveAsync(
-            configuredRuntime,
-            (executable, arguments) => RunAsync(executable, arguments, cancellationToken));
+        return ResolveAsync(configuredRuntime, RunAsync, cancellationToken);
     }
 
     internal static async Task<string> ResolveAsync(
         string? configuredRuntime,
-        Func<string, IReadOnlyList<string>, Task<int?>> run)
+        Func<string, IReadOnlyList<string>, CancellationToken, Task<int?>> runCommandAsync,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(runCommandAsync);
 
         if (!string.IsNullOrWhiteSpace(configuredRuntime))
         {
@@ -35,7 +46,7 @@ internal static class SampleContainerRuntime
         }
 
         var checks = KnownRuntimes
-            .Select(runtime => CheckRuntimeAsync(runtime, run))
+            .Select(runtime => CheckRuntimeAsync(runtime, runCommandAsync, cancellationToken))
             .ToArray();
         var runtimes = await Task.WhenAll(checks).ConfigureAwait(false);
 
@@ -56,21 +67,26 @@ internal static class SampleContainerRuntime
         }
 
         throw new InvalidOperationException(
-            "ASPIRE_CONTAINER_RUNTIME must be either 'docker' or 'podman' for the modular AppHost sample.");
+            "ASPIRE_CONTAINER_RUNTIME must be either 'docker' or 'podman'.");
     }
 
     private static async Task<RuntimeAvailability> CheckRuntimeAsync(
         RuntimeDefinition runtime,
-        Func<string, IReadOnlyList<string>, Task<int?>> run)
+        Func<string, IReadOnlyList<string>, CancellationToken, Task<int?>> runCommandAsync,
+        CancellationToken cancellationToken)
     {
-        var statusExitCode = await run(runtime.Executable, ["container", "ls", "-n", "1"])
+        var statusExitCode = await runCommandAsync(
+                runtime.Executable,
+                ["container", "ls", "-n", "1"],
+                cancellationToken)
             .ConfigureAwait(false);
         if (statusExitCode == 0)
         {
             return new RuntimeAvailability(runtime.Executable, IsInstalled: true, IsRunning: true, runtime.IsDefault);
         }
 
-        var versionExitCode = await run(runtime.Executable, ["--version"]).ConfigureAwait(false);
+        var versionExitCode = await runCommandAsync(runtime.Executable, ["--version"], cancellationToken)
+            .ConfigureAwait(false);
         return new RuntimeAvailability(
             runtime.Executable,
             IsInstalled: versionExitCode == 0,
