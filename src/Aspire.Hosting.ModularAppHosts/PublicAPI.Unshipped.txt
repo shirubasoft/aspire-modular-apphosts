@@ -36,6 +36,14 @@ Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RunProjectsAs
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.RunProjectsAsContainers.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.UpdateRepository.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.UpdateRepository.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.DistributedApplicationModuleReference(Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule! module) -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.Containers.get -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainer!>!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.GetResource<TResource>(string! name) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource>!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.Name.get -> string!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.Projects.get -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject!>!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.Resources.get -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResource!>!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.Version.get -> string!
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.DistributedApplicationModuleProjectOptions() -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.ExcludeKestrelEndpoints.get -> bool?

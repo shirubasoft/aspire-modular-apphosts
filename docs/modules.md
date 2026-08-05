@@ -75,11 +75,11 @@ builder.AddContainer("consumer", "example/consumer", "latest")
 
 ## Generated resource API
 
-`GenerateDistributedApplicationModule` generates one-call `AddModule` and `ImportModule` methods plus a `Module` wrapper with one typed property per declared resource. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract; defining the same module name with another version fails with both versions in the diagnostic.
+`GenerateDistributedApplicationModule` generates one-call `AddModule` and `ImportModule` methods plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract; defining the same module name with another version fails with both versions in the diagnostic.
 
 Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModule`/`ExportModule`, and pass the resulting definition to the generated `AddModule(builder, definition)` overload.
 
-The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings. Invalid declarations, unsupported names, and generated-member collisions are reported as build diagnostics.
+The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings inside the conventional `Define` method. Advanced contracts are scanned in module-builder definition methods or a lambda passed directly to `DefineModule`/`ExportModule`. Calls in unrelated helpers are ignored so the typed API cannot advertise resources the selected definition never materializes. Invalid declarations, unsupported names, and generated-member collisions are reported as build diagnostics.
 
 The untyped API remains available when a generated contract is unnecessary. Generated `AddProject` properties use `IResourceWithEndpoints` because configuration can select a `ProjectResource` or `ContainerResource` at run time:
 

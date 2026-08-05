@@ -43,11 +43,15 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("public static Module AddModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)", generated);
         Assert.Contains("public static Module ImportModule(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
-        Assert.Contains("public string Version => _module.Version", generated);
+        Assert.Contains("Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Cache", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
         Assert.Contains("ImportModule(builder, \"orders\", options)", generated);
+        Assert.Contains(
+            typeof(DistributedApplicationModuleGenerator).Assembly.GetName().Version!.ToString(),
+            generated,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -169,6 +173,63 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var generated = Assert.Single(result.GeneratedSources);
         Assert.DoesNotContain("DefineModule(builder", generated, StringComparison.Ordinal);
         Assert.Contains("IDistributedApplicationModule module)", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generator_ignores_resource_calls_outside_the_conventional_definition()
+    {
+        const string source = """
+            using System;
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("focused")]
+            public static partial class FocusedModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("included", "redis");
+                }
+
+                public static void Unrelated(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("excluded-method", "redis");
+                }
+
+                public static Action<IDistributedApplicationModuleBuilder> CreateUnrelated() =>
+                    module => module.AddContainer("excluded-lambda", "redis");
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains("> Included =>", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcludedMethod", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcludedLambda", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generator_discovers_resources_in_an_advanced_export_lambda()
+    {
+        const string source = """
+            using Aspire.Hosting;
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("advanced")]
+            public static partial class AdvancedModule
+            {
+                public static IDistributedApplicationModule Register(IDistributedApplicationBuilder builder) =>
+                    builder.ExportModule("advanced", module =>
+                        module.AddContainer("cache", "redis"));
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains("> Cache =>", generated, StringComparison.Ordinal);
     }
 
     [Fact]
