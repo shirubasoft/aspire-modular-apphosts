@@ -15,8 +15,8 @@ The generated contract starts at version `1` with one container-backed API. Repl
 
 The generated API defines and materializes a conventional `Define(IDistributedApplicationModuleBuilder)` contract in one call:
 
-- `await OrdersModule.AddModuleAsync(builder)` uses the definition in the current application.
-- `await OrdersModule.ImportModuleAsync(builder)` uses a managed checkout when the module configures a repository.
+- `await builder.AddOrdersModuleAsync()` uses the definition in the current application.
+- `await builder.ImportOrdersModuleAsync()` uses a managed checkout when the module configures a repository.
 
 Keep the definition in a project referenced by every participating AppHost:
 
@@ -55,7 +55,7 @@ An AppHost using the local definition adds it directly:
 ```csharp
 builder.Configuration[
     DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] = sourcePath;
-var orders = await OrdersModule.AddModuleAsync(builder);
+var orders = await builder.AddOrdersModuleAsync();
 ```
 
 An importing AppHost registers the contract and imports by name:
@@ -64,7 +64,7 @@ An importing AppHost registers the contract and imports by name:
 builder.Configuration[
     DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] =
     "https://github.com/example/orders.git";
-var orders = await OrdersModule.ImportModuleAsync(builder);
+var orders = await builder.ImportOrdersModuleAsync();
 ```
 
 Both paths return the same generated `OrdersModule.Module` API:
@@ -78,9 +78,9 @@ builder.AddContainer("consumer", "example/consumer", "latest")
 
 ## Generated resource API
 
-`GenerateDistributedApplicationModule` generates one-call `AddModuleAsync` and `ImportModuleAsync` methods plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. Publish the updated contract package and update participating AppHosts together when a version changes.
+`GenerateDistributedApplicationModule` generates module-specific builder extensions such as `AddOrdersModuleAsync` and `ImportOrdersModuleAsync`, plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. Publish the updated contract package and update participating AppHosts together when a version changes.
 
-Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModuleAsync`/`ExportModuleAsync`, and pass the resulting definition to the generated `AddModuleAsync(builder, definition)` overload.
+Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModuleAsync`/`ExportModuleAsync`, and pass the resulting definition to the generated `builder.AddOrdersModuleAsync(definition)` overload.
 
 The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings inside the conventional `Define` method. Advanced contracts are scanned in module-builder definition methods or a lambda passed directly to `DefineModuleAsync`/`ExportModuleAsync`. Calls in unrelated helpers are ignored so the typed API cannot advertise resources the selected definition never materializes. Invalid declarations, unsupported names, generated-member collisions, and custom resource types that are less accessible than the generated module API are reported as build diagnostics.
 
@@ -92,7 +92,7 @@ var orders = await builder.ImportModuleAsync("orders");
 var api = orders.GetResource<ProjectResource>("orders-api");
 ```
 
-Unlike the generated `OrdersModule.ImportModuleAsync` helper, the raw untyped import does not register the definition for you; call `DefineModuleAsync` or `ExportModuleAsync` first.
+Unlike the generated `builder.ImportOrdersModuleAsync()` extension, the raw untyped import does not register the definition for you; call `DefineModuleAsync` or `ExportModuleAsync` first.
 
 ### Resource prefixes and aliases
 
@@ -102,7 +102,7 @@ An import can adapt contract names without changing typed lookups:
 var import = new ModuleImportOptions { ResourcePrefix = "sales-" };
 import.ResourceAliases[OrdersModule.CacheResourceName] = "shared-cache";
 
-var orders = await OrdersModule.ImportModuleAsync(builder, import);
+var orders = await builder.ImportOrdersModuleAsync(import);
 // orders.Api resolves the Aspire resource "sales-orders-api".
 // orders.Cache resolves "shared-cache".
 ```

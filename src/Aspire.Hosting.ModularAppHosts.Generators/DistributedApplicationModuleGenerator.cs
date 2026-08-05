@@ -170,7 +170,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                     SymbolEqualityComparer.Default.Equals(parameter.Type, moduleBuilderType)))
                 .ToImmutableArray();
 
-        foreach (var reservedMemberName in new[] { "AddModuleAsync", "ImportModuleAsync", "Module" })
+        var extensionMethodStem = char.ToUpperInvariant(symbol.Name[0]) + symbol.Name.Substring(1);
+        var addExtensionMethodName = "Add" + extensionMethodStem + "Async";
+        var importExtensionMethodName = "Import" + extensionMethodStem + "Async";
+        foreach (var reservedMemberName in new[] { addExtensionMethodName, importExtensionMethodName, "Module" })
         {
             if (symbol.GetMembers(reservedMemberName).Length > 0)
             {
@@ -213,6 +216,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 ? null
                 : symbol.ContainingNamespace.ToDisplayString(),
             EscapeIdentifier(symbol.Name),
+            addExtensionMethodName,
+            importExtensionMethodName,
             symbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal",
             moduleName ?? string.Empty,
             moduleVersion,
@@ -520,8 +525,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         if (module.HasConventionalDefineMethod)
         {
             source.AppendLine("    /// <summary>Defines and adds the module in one call and returns its typed resources.</summary>");
-            source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> AddModuleAsync(");
-            source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+            source.Append("    public static async global::System.Threading.Tasks.Task<Module> ")
+                .Append(module.AddExtensionMethodName)
+                .AppendLine("(");
+            source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
             source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
             source.AppendLine("    {");
             source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
@@ -530,14 +537,18 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
                 .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
-            source.AppendLine("        return await AddModuleAsync(builder, module, cancellationToken).ConfigureAwait(false);");
+            source.Append("        return await ")
+                .Append(module.AddExtensionMethodName)
+                .AppendLine("(builder, module, cancellationToken).ConfigureAwait(false);");
             source.AppendLine("    }");
             source.AppendLine();
         }
 
         source.AppendLine("    /// <summary>Adds the exported module to the AppHost and returns its typed resources.</summary>");
-        source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> AddModuleAsync(");
-        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+        source.Append("    public static async global::System.Threading.Tasks.Task<Module> ")
+            .Append(module.AddExtensionMethodName)
+            .AppendLine("(");
+        source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
         source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module,");
         source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
@@ -562,17 +573,23 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>Imports the module and returns its typed resources.</summary>");
-        source.AppendLine("    public static global::System.Threading.Tasks.Task<Module> ImportModuleAsync(");
-        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+        source.Append("    public static global::System.Threading.Tasks.Task<Module> ")
+            .Append(module.ImportExtensionMethodName)
+            .AppendLine("(");
+        source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
         source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
-        source.AppendLine("        return ImportModuleAsync(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions(), cancellationToken);");
+        source.Append("        return ")
+            .Append(module.ImportExtensionMethodName)
+            .AppendLine("(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions(), cancellationToken);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>Imports the module with resource naming options and returns its typed resources.</summary>");
-        source.AppendLine("    public static async global::System.Threading.Tasks.Task<Module> ImportModuleAsync(");
-        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+        source.Append("    public static async global::System.Threading.Tasks.Task<Module> ")
+            .Append(module.ImportExtensionMethodName)
+            .AppendLine("(");
+        source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
         source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions options,");
         source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
@@ -655,6 +672,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public ModuleModel(
             string? @namespace,
             string typeName,
+            string addExtensionMethodName,
+            string importExtensionMethodName,
             string accessibility,
             string moduleName,
             string moduleVersion,
@@ -665,6 +684,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         {
             Namespace = @namespace;
             TypeName = typeName;
+            AddExtensionMethodName = addExtensionMethodName;
+            ImportExtensionMethodName = importExtensionMethodName;
             Accessibility = accessibility;
             ModuleName = moduleName;
             ModuleVersion = moduleVersion;
@@ -677,6 +698,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public string? Namespace { get; }
 
         public string TypeName { get; }
+
+        public string AddExtensionMethodName { get; }
+
+        public string ImportExtensionMethodName { get; }
 
         public string Accessibility { get; }
 

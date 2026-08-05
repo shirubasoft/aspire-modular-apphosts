@@ -11,7 +11,7 @@ builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfig
 builder.BuildModuleImages();
 
 await AppHostAModule.RegisterAsync(builder, appHostASource);
-var imported = await AppHostAModule.ImportModuleAsync(builder);
+var imported = await builder.ImportAppHostAModuleAsync();
 
 var api = imported.Api;
 var staticSite = imported.Static;

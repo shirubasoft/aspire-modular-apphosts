@@ -4,5 +4,5 @@ using Spire.ModuleContract;
 var builder = DistributedApplication.CreateBuilder(args);
 builder.BuildModuleImages();
 
-await SpireModule.ImportModuleAsync(builder);
+await builder.ImportSpireModuleAsync();
 await builder.Build().RunAsync();
