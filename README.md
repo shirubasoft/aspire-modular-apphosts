@@ -9,6 +9,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
+| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Exporting immutable module preview manifests and dispatching cross-repository E2E workflows. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -22,7 +23,7 @@ The testing package is optional. Keeping it separate means regular AppHosts do n
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
-Both packages target .NET 10 and Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
+The runtime packages and tool target .NET 10, and the Aspire-facing packages require Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
 They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/LICENSE).
 
 ## Quick start
@@ -82,6 +83,41 @@ Module image build commands can follow Aspire's Docker or Podman selection by aw
 
 For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered without a clone; a missing direct sibling is cloned with GitHub CLI. Published module images default to a branch-and-commit tag and add `-dirty` when their source worktree has changes. Repositories can be pinned to a branch, tag, or commit, and existing checkouts are verified against the configured origin. The module guide documents the layout, configuration, and validation behavior.
 
+For an ongoing feature branch that must be exercised by another repository's CI, install the local
+.NET tool, produce a request containing the clean pushed commit and any already-built image digests,
+then dispatch the consumer's trusted workflow:
+
+```bash
+dotnet tool install --global Shirubasoft.Aspire.ModularAppHosts.Tool
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
+  --image catalog-api=ghcr.io/example/catalog/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output module-preview.json
+dotnet modular-apphosts preview trigger \
+  --manifest module-preview.json \
+  --repo example/end-to-end-tests \
+  --workflow module-preview-e2e.yml \
+  --ref main \
+  --wait \
+  --github-output "$GITHUB_OUTPUT"
+```
+
+The request carries full commits and OCI digests rather than mutable branch names and image tags.
+The producer descriptor may omit the contract for an image-only preview, or omit only its version
+and receive the exact CI-computed version through `--contract-version`. The consumer policy decides
+whether the contract is required and whether to restore its exact package from a reviewed HTTPS
+NuGet source or pack it from a reviewed source fallback. Published-package materialization does not
+check out or build the producer repository. A package feed is required only for requests that carry
+a contract.
+
+The consumer tool checks its own policy and writes a trusted resolution for
+`ApplyModulePreviewResolutionAsync`. `preview trigger` prints `workflow_run_id` and
+`workflow_run_url`; `--github-output` appends them to a GitHub Actions output file, while a bare
+`--wait` returns the consumer run's final status. See the cross-repository preview guide for the
+complete security model, package-source and source-fallback boundaries, and runnable two-repository
+example.
+
 Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
 
 ```json
@@ -106,8 +142,10 @@ Projects exported as containers can still run directly during local debugging. T
 
 - [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
+- [Cross-repository preview guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-previews.md): exact-SHA manifests, workflow dispatch, preview contracts, and security boundaries.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer clones and runs a project from `Shirubasoft/spire` through the real GitHub CLI.
+- [Cross-repository preview producer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-producer) and [consumer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-consumer): a producer feature branch changes source and its resource graph, then dispatches a trusted consumer E2E at the exact commit.
 
 For repository setup, validation commands, and the release workflow, see [Contributing](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/CONTRIBUTING.md).

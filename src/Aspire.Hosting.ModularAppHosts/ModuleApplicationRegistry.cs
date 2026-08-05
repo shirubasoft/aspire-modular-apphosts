@@ -33,6 +33,12 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, ModulePreviewSelection> _previewSelections =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly Dictionary<string, ModulePreviewImageArtifact> _previewImages =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly ConcurrentDictionary<string, RepositorySynchronization> _repositorySynchronizations =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -65,6 +71,115 @@ internal sealed class ModuleApplicationRegistry(
 
     internal void MarkMaterialized(string moduleName, string materializationKey) =>
         _materializedModules.Add(moduleName, materializationKey);
+
+    internal void ApplyPreviewManifest(ModulePreviewManifest manifest, string baseDirectory)
+    {
+        ApplyPreviewSelections(manifest.Modules, baseDirectory);
+        RefreshConfiguration();
+    }
+
+    internal void ApplyPreviewResolution(ModulePreviewResolution resolution, string baseDirectory)
+    {
+        ApplyPreviewSelections(resolution.Modules, baseDirectory);
+
+        foreach (var image in resolution.Images)
+        {
+            var key = GetPreviewImageKey(image.Module, image.Resource);
+            if (_previewImages.TryGetValue(key, out var existing) &&
+                (!string.Equals(existing.Repository, image.Repository, StringComparison.Ordinal) ||
+                 !string.Equals(existing.Sha256, image.Sha256, StringComparison.Ordinal) ||
+                 existing.ResourceKind != image.ResourceKind))
+            {
+                throw new InvalidOperationException(
+                    $"Module '{image.Module}' resource '{image.Resource}' already has a different preview image.");
+            }
+        }
+
+        foreach (var image in resolution.Images)
+        {
+            _previewImages[GetPreviewImageKey(image.Module, image.Resource)] = new ModulePreviewImageArtifact
+            {
+                Module = image.Module,
+                Resource = image.Resource,
+                ResourceKind = image.ResourceKind,
+                Repository = image.Repository,
+                Sha256 = image.Sha256
+            };
+        }
+
+        RefreshConfiguration();
+    }
+
+    internal void ValidatePreviewSelection(DistributedApplicationModule module, string baseDirectory)
+    {
+        if (_previewSelections.TryGetValue(module.Name, out var selection) &&
+            !string.IsNullOrWhiteSpace(module.Repository) &&
+            GitHubRepositoryCloner.IsRemoteRepository(module.Repository, baseDirectory) &&
+            !GitHubRepositoryCloner.RefersToSameRepository(
+                selection.Repository,
+                module.Repository,
+                baseDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Preview module '{module.Name}' selects repository '{selection.Repository}', but its " +
+                $"contract declares repository '{module.Repository}'.");
+        }
+
+        foreach (var image in _previewImages.Values.Where(
+                     image => string.Equals(image.Module, module.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            var resource = module.ResourceDefinitions.FirstOrDefault(
+                candidate => string.Equals(candidate.Name, image.Resource, StringComparison.OrdinalIgnoreCase));
+            if (resource is null)
+            {
+                throw new InvalidOperationException(
+                    $"Preview image selects resource '{image.Resource}' in module '{module.Name}', but its " +
+                    "contract does not declare that resource.");
+            }
+
+            var actualKind = resource switch
+            {
+                DistributedApplicationModuleProject => ModulePreviewResourceKind.Project,
+                DistributedApplicationModuleContainer => ModulePreviewResourceKind.Container,
+                _ => (ModulePreviewResourceKind?)null
+            };
+            if (actualKind != image.ResourceKind)
+            {
+                var declaredKind = actualKind?.ToString() ?? resource.GetType().Name;
+                throw new InvalidOperationException(
+                    $"Preview image selects resource '{image.Resource}' in module '{module.Name}' as " +
+                    $"'{image.ResourceKind}', but its contract declares kind '{declaredKind}'.");
+            }
+        }
+    }
+
+    internal bool TryGetPreviewSelection(string moduleName, out ModulePreviewSelection? selection) =>
+        _previewSelections.TryGetValue(moduleName, out selection);
+
+    internal bool CanMaterializePreviewWithoutRepository(DistributedApplicationModule module)
+    {
+        var images = _previewImages.Values
+            .Where(image => string.Equals(image.Module, module.Name, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(image => image.Resource, StringComparer.OrdinalIgnoreCase);
+        if (module.ExplicitlyRequiresRepositoryContent)
+        {
+            return false;
+        }
+
+        var projectsAreDigestSatisfied = module.ProjectDefinitions.All(project =>
+            images.TryGetValue(project.Name, out var image) &&
+            image.ResourceKind == ModulePreviewResourceKind.Project);
+        var publishableContainersAreDigestSatisfied = module.ContainerDefinitions
+            .Where(container => container.ImagePublishOptions is not null)
+            .All(container =>
+                images.TryGetValue(container.Name, out var image) &&
+                image.ResourceKind == ModulePreviewResourceKind.Container);
+        var hasRepositoryIndependentPreviewImage = images.Count > 0 &&
+            (module.ProjectDefinitions.Count > 0 || module.ContainerDefinitions.Count > 0);
+        return hasRepositoryIndependentPreviewImage &&
+            projectsAreDigestSatisfied &&
+            publishableContainersAreDigestSatisfied;
+    }
 
     internal bool TryGetResource(string name, out IResource? resource) =>
         _resources.TryGetValue(name, out resource);
@@ -123,6 +238,54 @@ internal sealed class ModuleApplicationRegistry(
         {
             configure(Options);
         }
+
+        foreach (var selection in _previewSelections.Values)
+        {
+            if (!Options.Modules.TryGetValue(selection.Name, out var moduleOptions))
+            {
+                moduleOptions = new DistributedApplicationModuleOptions();
+                Options.Modules.Add(selection.Name, moduleOptions);
+            }
+
+            moduleOptions.Repository = selection.Repository;
+            moduleOptions.RepositoryRevision = selection.Commit;
+        }
+
+        foreach (var image in _previewImages.Values)
+        {
+            if (!Options.Modules.TryGetValue(image.Module, out var moduleOptions))
+            {
+                moduleOptions = new DistributedApplicationModuleOptions();
+                Options.Modules.Add(image.Module, moduleOptions);
+            }
+
+            DistributedApplicationModuleImageOptions imageOptions;
+            if (image.ResourceKind == ModulePreviewResourceKind.Project)
+            {
+                if (!moduleOptions.Projects.TryGetValue(image.Resource, out var projectOptions))
+                {
+                    projectOptions = new DistributedApplicationModuleProjectOptions();
+                    moduleOptions.Projects.Add(image.Resource, projectOptions);
+                }
+
+                projectOptions.ProjectMode = ModuleProjectMode.Container;
+                imageOptions = projectOptions;
+            }
+            else
+            {
+                if (!moduleOptions.Containers.TryGetValue(image.Resource, out var containerOptions))
+                {
+                    containerOptions = new DistributedApplicationModuleContainerOptions();
+                    moduleOptions.Containers.Add(image.Resource, containerOptions);
+                }
+
+                imageOptions = containerOptions;
+            }
+
+            imageOptions.ImageName = image.Repository;
+            imageOptions.ImageSHA256 = image.Sha256;
+            imageOptions.PublishImage = false;
+        }
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)
@@ -153,6 +316,47 @@ internal sealed class ModuleApplicationRegistry(
         Options.PublishImages = defaults.PublishImages;
         Options.Modules.Clear();
     }
+
+    private void ApplyPreviewSelections(
+        IEnumerable<ModulePreviewSelection> selections,
+        string baseDirectory)
+    {
+        var selectionArray = selections.ToArray();
+        if (_materializedModules.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "A module preview manifest or resolution must be applied before importing or adding modules.");
+        }
+
+        foreach (var selection in selectionArray)
+        {
+            if (_previewSelections.TryGetValue(selection.Name, out var existing) &&
+                (!GitHubRepositoryCloner.RefersToSameRepository(
+                    existing.Repository,
+                    selection.Repository,
+                    baseDirectory) ||
+                 !string.Equals(existing.Commit, selection.Commit, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"Module '{selection.Name}' already has a different preview selection.");
+            }
+        }
+
+        foreach (var selection in selectionArray)
+        {
+            _previewSelections[selection.Name] = new ModulePreviewSelection
+            {
+                Name = selection.Name,
+                Repository = selection.Repository,
+                Commit = selection.Commit,
+                Branch = selection.Branch,
+                BaseRef = selection.BaseRef,
+                BaseCommit = selection.BaseCommit
+            };
+        }
+    }
+
+    private static string GetPreviewImageKey(string module, string resource) => $"{module}\0{resource}";
 
     internal void ValidateConfiguredModules()
     {

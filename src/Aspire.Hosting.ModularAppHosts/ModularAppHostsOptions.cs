@@ -108,6 +108,9 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the effective container image tag.</summary>
     public string? ImageTag { get; set; }
 
+    /// <summary>Gets or sets the immutable OCI digest in <c>sha256:&lt;64 lowercase hex&gt;</c> form.</summary>
+    public string? ImageSHA256 { get; set; }
+
     /// <summary>Gets or sets whether the declared image publish command may run.</summary>
     public bool? PublishImage { get; set; }
 
