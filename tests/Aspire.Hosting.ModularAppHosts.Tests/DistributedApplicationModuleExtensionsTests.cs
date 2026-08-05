@@ -237,7 +237,9 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
 
         Assert.True(annotation.Imported);
-        Assert.Equal(Path.Combine(imports.Path, "orders"), annotation.RepositoryPath);
+        Assert.Equal(
+            Path.Combine(imports.Path, "acme-orders-orders"),
+            annotation.RepositoryPath);
         Assert.True(installer.UpdatesRepository);
         Assert.Equal("https://example.test/acme/orders.git", installer.Repository);
     }
@@ -277,7 +279,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public void ImportModule_with_generic_repository_content_adds_an_interaction_backed_parameter()
+    public void ImportModule_with_generic_repository_content_requires_a_model_time_repository()
     {
         using var repository = TestRepository.Create();
         var builder = CreateBuilder(repository.Path);
@@ -288,12 +290,115 @@ public sealed class DistributedApplicationModuleExtensionsTests
                 context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName)));
         });
 
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.ImportModule("content"));
+
+        Assert.Contains("application model is constructed", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey("content"),
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+    }
+
+    [Fact]
+    public void ImportModule_prepares_configured_repository_before_running_generic_factories()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        using var imports = TemporaryDirectory.Create();
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        var repositoryKey = DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey("content");
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.Configuration[repositoryKey] = repository.Path;
+        string? materializedRepositoryPath = null;
+        builder.ExportModule("content", module =>
+        {
+            module.RequiresRepository();
+            module.AddResource<TestResource>("clock", context =>
+            {
+                materializedRepositoryPath = context.RepositoryPath;
+                Assert.True(File.Exists(Path.Combine(context.RepositoryPath, "Orders.Api.csproj")));
+                return context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName));
+            });
+        });
+
         builder.ImportModule("content");
 
-        var parameter = Assert.Single(builder.Resources.OfType<ParameterResource>());
-        Assert.Equal(
-            DistributedApplicationModuleExtensions.GetRepositoryParameterName("content"),
-            parameter.Name);
+        var expectedPath = Path.Combine(
+            imports.Path,
+            ModuleRepositoryIdentity.GetCanonicalName(repository.Path, "content", repository.Path));
+        Assert.Equal(expectedPath, materializedRepositoryPath);
+        Assert.True(RepositoryInspector.IsGitRepository(expectedPath));
+    }
+
+    [Fact]
+    public void Imported_local_module_root_in_the_apphost_worktree_is_reused_without_origin_validation()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(workspace.Path, "AppHostB");
+        var moduleRoot = Path.Combine(workspace.Path, "modules", "AppHostA");
+        var projectPath = Path.Combine(moduleRoot, "Api", "Api.csproj");
+        Directory.CreateDirectory(appHostDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        TestRepository.RunGit(workspace.Path, "init");
+        TestRepository.RunGit(workspace.Path, "config", "user.name", "Test User");
+        TestRepository.RunGit(workspace.Path, "config", "user.email", "test@example.test");
+        TestRepository.RunGit(workspace.Path, "remote", "add", "origin", "https://github.com/acme/monorepo.git");
+        TestRepository.RunGit(workspace.Path, "add", ".");
+        TestRepository.RunGit(workspace.Path, "commit", "-m", "initial");
+        var builder = CreateBuilder(appHostDirectory);
+        builder.ExportModule("apphost-a", module =>
+        {
+            module.WithRepository(moduleRoot);
+            module.AddProject("api", projectPath)
+                .ExportAsContainer($"module-test-apphost-a-{Guid.NewGuid():N}", "dotnet", ["publish"]);
+        });
+
+        builder.ImportModule("apphost-a");
+
+        var annotation = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal(moduleRoot, annotation.RepositoryPath);
+    }
+
+    [Fact]
+    public void Repository_and_module_slugs_keep_managed_parameters_and_checkouts_distinct()
+    {
+        using var repository = TestRepository.Create();
+        using var imports = TemporaryDirectory.Create();
+        var builder = CreateBuilder(repository.Path);
+        var remote = "https://github.com/acme/catalog.git";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        foreach (var (moduleName, resourceName) in new[]
+        {
+            ("sales.orders", "sales-dot-api"),
+            ("sales-orders", "sales-dash-api")
+        })
+        {
+            builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(moduleName)] = remote;
+            builder.ExportModule(moduleName, module =>
+                module.AddProject(resourceName, repository.ProjectPath)
+                    .ExportAsContainer(resourceName, "dotnet", ["publish"]));
+            builder.ImportModule(moduleName);
+        }
+
+        var parameters = builder.Resources.OfType<ParameterResource>().Select(resource => resource.Name).ToArray();
+        Assert.Equal(2, parameters.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(
+            DistributedApplicationModuleExtensions.GetRepositoryParameterName(remote, "sales.orders"),
+            parameters);
+        Assert.Contains(
+            DistributedApplicationModuleExtensions.GetRepositoryParameterName(remote, "sales-orders"),
+            parameters);
+
+        var repositoryPaths = builder.Resources
+            .OfType<ContainerResource>()
+            .SelectMany(resource => resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>())
+            .Select(annotation => annotation.RepositoryPath)
+            .ToArray();
+        Assert.Equal(2, repositoryPaths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
     [Fact]
@@ -354,7 +459,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
     {
         using var repository = TestRepository.Create();
         using var imports = TemporaryDirectory.Create();
-        var checkout = Path.Combine(imports.Path, "orders");
+        var checkout = Path.Combine(imports.Path, "acme-orders-orders");
         Directory.CreateDirectory(checkout);
         File.Copy(repository.ProjectPath, Path.Combine(checkout, Path.GetFileName(repository.ProjectPath)));
         var builder = CreateBuilder(repository.Path);
@@ -408,7 +513,9 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         var repositoryParameter = Assert.Single(builder.Resources.OfType<ParameterResource>());
         Assert.Equal(
-            DistributedApplicationModuleExtensions.GetRepositoryParameterName("orders"),
+            DistributedApplicationModuleExtensions.GetRepositoryParameterName(
+                "https://example.test/configured/orders.git",
+                "orders"),
             repositoryParameter.Name);
         Assert.Equal(
             "https://example.test/configured/orders.git",
@@ -418,7 +525,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(ImagePullPolicy.Missing, pullPolicy.ImagePullPolicy);
         Assert.Equal("configured-publisher", installer.PublishCommand);
         Assert.Equal(["publish", "configured/orders-api:debug"], installer.PublishArguments);
-        Assert.Equal(Path.Combine(imports.Path, "orders"), installer.WorkingDirectory);
+        Assert.Equal(Path.Combine(imports.Path, "configured-orders-orders"), installer.WorkingDirectory);
         Assert.Equal("https://example.test/configured/orders.git", installer.Repository);
         Assert.False(installer.UpdatesRepository);
         Assert.Same(container, imported.GetResource<IResourceWithEndpoints>("orders-api").Resource);
@@ -536,6 +643,24 @@ public sealed class DistributedApplicationModuleExtensionsTests
             Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(configured.ImplementationInstance)
                 .Value
                 .PublishImages);
+    }
+
+    [Fact]
+    public void Fluent_options_keep_configuration_added_after_the_first_call_visible()
+    {
+        using var repository = TestRepository.Create();
+        using var imports = TemporaryDirectory.Create();
+        var builder = CreateBuilder(repository.Path);
+        builder.BuildModuleImages();
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        var module = ExportModule(builder, repository.ProjectPath);
+
+        builder.ImportModule(module.Name);
+
+        var annotation = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal(Path.Combine(imports.Path, "acme-orders-orders"), annotation.RepositoryPath);
     }
 
     [Theory]
@@ -1176,7 +1301,35 @@ public sealed class DistributedApplicationModuleExtensionsTests
         builder.ImportModule("AppHostA");
 
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
-        Assert.Equal(projectDirectory, installer.WorkingDirectory);
+        Assert.Equal(
+            Path.Combine(directory.Path, "apphosta-apphosta", "Api"),
+            installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public void WithRepository_after_projects_rebases_repository_relative_paths()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var moduleRoot = Path.Combine(source.Path, "catalog");
+        var projectDirectory = Path.Combine(moduleRoot, "src", "Api");
+        var projectPath = Path.Combine(projectDirectory, "Api.csproj");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(source.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        builder.ExportModule("catalog", module =>
+        {
+            module.AddProject("api", projectPath)
+                .ExportAsContainer($"module-test-catalog-{Guid.NewGuid():N}", "dotnet", ["publish"]);
+            module.WithRepository(moduleRoot);
+        });
+
+        builder.ImportModule("catalog");
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(moduleRoot, "catalog", source.Path);
+        Assert.Equal(Path.Combine(imports.Path, canonicalName, "src", "Api"), installer.WorkingDirectory);
     }
 
     [Fact]
@@ -1319,13 +1472,14 @@ public sealed class DistributedApplicationModuleExtensionsTests
     {
         using var source = TestRepository.Create(initializeGit: true);
         using var imports = TemporaryDirectory.Create();
-        var checkout = Path.Combine(imports.Path, "orders");
+        using var appHost = TemporaryDirectory.Create();
+        var checkout = Path.Combine(imports.Path, ModuleRepositoryIdentity.GetCanonicalName(source.Path, "orders", source.Path));
         TestRepository.RunGit(imports.Path, "clone", "--", source.Path, checkout);
         File.AppendAllText(source.ProjectPath, Environment.NewLine + "<!-- current -->");
         TestRepository.RunGit(source.Path, "add", ".");
         TestRepository.RunGit(source.Path, "commit", "-m", "current");
         var currentCommit = Assert.IsType<string>(RepositoryInspector.TryResolveCommit(source.Path));
-        var builder = CreateBuilder(source.Path);
+        var builder = CreateBuilder(appHost.Path);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
         var module = builder.ExportModule("orders", definition =>
         {

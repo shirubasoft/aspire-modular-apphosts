@@ -149,7 +149,7 @@ internal sealed class DistributedApplicationModuleProject(
 
     public bool IsExportedAsContainer => Export is not null;
 
-    internal string SourceRepositoryRoot { get; } = sourceRepositoryRoot;
+    internal string SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
 
     internal Action<IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
 

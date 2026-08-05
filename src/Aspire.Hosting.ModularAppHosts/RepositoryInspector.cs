@@ -1,5 +1,8 @@
 using CliWrap;
 using CliWrap.Buffered;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts;
@@ -253,6 +256,132 @@ internal sealed record RepositoryCloneCommand(
     string Executable,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory);
+
+internal static class ModuleRepositoryIdentity
+{
+    private const int MaximumCanonicalNameLength = 46;
+
+    public static string GetCanonicalName(string? repository, string moduleName, string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+
+        var repositorySlug = string.IsNullOrWhiteSpace(repository)
+            ? "repository"
+            : GetRepositorySlug(repository, baseDirectory);
+        var moduleSlug = CreateSlug(moduleName, disambiguateChanges: true);
+        var canonicalName = $"{repositorySlug}-{moduleSlug}";
+        if (canonicalName.Length <= MaximumCanonicalNameLength)
+        {
+            return canonicalName;
+        }
+
+        var suffix = GetStableSuffix($"{repository}\n{moduleName}");
+        return $"{canonicalName[..(MaximumCanonicalNameLength - suffix.Length - 1)].TrimEnd('-')}-{suffix}";
+    }
+
+    private static string GetRepositorySlug(string repository, string baseDirectory)
+    {
+        var value = repository.Trim().TrimEnd('/', '\\');
+        if (!GitHubRepositoryCloner.IsRemoteRepository(value, baseDirectory))
+        {
+            var fullPath = Path.GetFullPath(value, baseDirectory);
+            return CreateSlug(Path.GetFileName(fullPath), disambiguateChanges: true);
+        }
+
+        string repositoryPath;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            repositoryPath = uri.AbsolutePath;
+        }
+        else if (value.IndexOf(':', StringComparison.Ordinal) is var colon && colon >= 0)
+        {
+            repositoryPath = value[(colon + 1)..];
+        }
+        else
+        {
+            repositoryPath = value;
+        }
+
+        var components = repositoryPath
+            .Replace('\\', '/')
+            .Trim('/')
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (components.Length == 0)
+        {
+            return "repository";
+        }
+
+        var repositoryName = components[^1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? components[^1][..^4]
+            : components[^1];
+        var owner = components.Length > 1 ? components[^2] : null;
+        return owner is null
+            ? CreateSlug(repositoryName, disambiguateChanges: true)
+            : $"{CreateSlug(owner, disambiguateChanges: true)}-{CreateSlug(repositoryName, disambiguateChanges: true)}";
+    }
+
+    private static string CreateSlug(string value, bool disambiguateChanges)
+    {
+        var normalized = value.Trim();
+        var changed = false;
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var originalCharacter in normalized)
+        {
+            var character = originalCharacter is >= 'A' and <= 'Z'
+                ? (char)(originalCharacter + ('a' - 'A'))
+                : originalCharacter;
+            var safeCharacter = character is >= 'a' and <= 'z' or >= '0' and <= '9';
+            if (safeCharacter)
+            {
+                builder.Append(character);
+            }
+            else if (character == '-')
+            {
+                builder.Append(character);
+            }
+            else
+            {
+                builder.Append('-');
+                changed = true;
+            }
+        }
+
+        var slug = builder.ToString();
+        while (slug.Contains("--", StringComparison.Ordinal))
+        {
+            slug = slug.Replace("--", "-", StringComparison.Ordinal);
+            changed = true;
+        }
+
+        slug = slug.Trim('-');
+        if (slug.Length == 0)
+        {
+            slug = "module";
+            changed = true;
+        }
+
+        if (disambiguateChanges && changed)
+        {
+            slug = $"{slug}-{GetStableSuffix(value)}";
+        }
+
+        const int maximumComponentLength = 22;
+        if (slug.Length > maximumComponentLength)
+        {
+            var suffix = GetStableSuffix(value);
+            slug = $"{slug[..(maximumComponentLength - suffix.Length - 1)].TrimEnd('-')}-{suffix}";
+        }
+
+        return slug;
+    }
+
+    private static string GetStableSuffix(string value)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return string.Concat(hash.Take(3).Select(value => value.ToString("x2", CultureInfo.InvariantCulture)));
+    }
+}
 
 internal static class GitHubRepositoryCloner
 {
@@ -797,11 +926,22 @@ internal static class RepositorySynchronizer
             return;
         }
 
+        var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
+        if (!GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory) &&
+            LocalRepositoryRootsMatch(
+                expectedRepository,
+                repositoryPath,
+                baseDirectory,
+                gitExecutablePath,
+                commandTimeout))
+        {
+            return;
+        }
+
         var actualRepository = RepositoryInspector.TryGetRemote(
             repositoryPath,
             gitExecutablePath,
             commandTimeout);
-        var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
         var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
             (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
              LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
@@ -824,6 +964,27 @@ internal static class RepositorySynchronizer
         return PathSafety.AreEqual(
             Path.GetFullPath(first, baseDirectory),
             Path.GetFullPath(second, baseDirectory));
+    }
+
+    private static bool LocalRepositoryRootsMatch(
+        string expectedRepository,
+        string repositoryPath,
+        string baseDirectory,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout)
+    {
+        var expectedPath = Path.GetFullPath(expectedRepository, baseDirectory);
+        return RepositoryInspector.TryFindRepositoryRoot(
+                expectedPath,
+                out var expectedRoot,
+                gitExecutablePath,
+                commandTimeout) &&
+            RepositoryInspector.TryFindRepositoryRoot(
+                repositoryPath,
+                out var actualRoot,
+                gitExecutablePath,
+                commandTimeout) &&
+            PathSafety.AreEqual(expectedRoot, actualRoot);
     }
 
     private static void EnsureDirtyCheckoutMatchesRevision(

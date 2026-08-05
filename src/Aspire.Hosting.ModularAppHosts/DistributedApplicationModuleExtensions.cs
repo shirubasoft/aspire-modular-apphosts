@@ -50,19 +50,15 @@ public static class DistributedApplicationModuleExtensions
     public static string GetRepositoryParameterName(string moduleName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(null, moduleName, Directory.GetCurrentDirectory())}-repository";
+    }
 
-        var slug = new string(moduleName
-            .Select(character => char.IsLetterOrDigit(character)
-                ? char.ToLowerInvariant(character)
-                : '-')
-            .ToArray());
-        while (slug.Contains("--", StringComparison.Ordinal))
-        {
-            slug = slug.Replace("--", "-", StringComparison.Ordinal);
-        }
-
-        slug = slug.Trim('-');
-        return slug.Length == 0 ? "module-repository" : $"module-{slug}-repository";
+    /// <summary>Gets the repository-specific Aspire parameter name used to import a module.</summary>
+    public static string GetRepositoryParameterName(string repository, string moduleName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(repository, moduleName, Directory.GetCurrentDirectory())}-repository";
     }
 
     /// <summary>Gets the configuration key used to resolve an imported module's Git repository.</summary>
@@ -210,8 +206,16 @@ public static class DistributedApplicationModuleExtensions
         var repositoryConfigurationKey = GetRepositoryConfigurationKey(module.Name);
         var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
         var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
+        if (!string.IsNullOrWhiteSpace(repository) &&
+            !GitHubRepositoryCloner.IsRemoteRepository(repository, builder.AppHostDirectory))
+        {
+            repository = Path.GetFullPath(repository, builder.AppHostDirectory);
+        }
+
         var repositoryRevision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ?? module.RepositoryRevision;
         var requiresRepository = module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent;
+        var factoryRequiresRepository = module.RequiresRepositoryContent &&
+            module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
         ValidateModuleConfiguration(module, moduleOptions);
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
@@ -226,6 +230,22 @@ public static class DistributedApplicationModuleExtensions
                 options.RepositoryCommandTimeout,
                 GetConfiguredValue(options.GitExecutablePath) ?? "git")
             : null;
+        if (imported && factoryRequiresRepository && repositoryResolution is null &&
+            string.IsNullOrWhiteSpace(repository))
+        {
+            throw new InvalidOperationException(
+                $"Imported module '{module.Name}' uses a repository-backed resource factory, so its repository " +
+                $"must be available while the application model is constructed. Configure " +
+                $"'{repositoryConfigurationKey}' or call WithRepository() in the module definition.");
+        }
+
+        var existingSameWorktreeRepository = imported
+            ? TryGetExistingSameWorktreeRepository(
+                builder.AppHostDirectory,
+                repository,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout)
+            : null;
         var repositoryParameter = imported &&
             (configuredRepository is not null ||
                 (!autoCloneRepository && requiresRepository && string.IsNullOrWhiteSpace(repository)))
@@ -233,26 +253,30 @@ public static class DistributedApplicationModuleExtensions
                 builder,
                 registry,
                 module.Name,
+                repository,
                 repositoryConfigurationKey)
             : null;
         var repositoryPath = repositoryResolution?.RepositoryPath ??
+            existingSameWorktreeRepository ??
             (imported &&
                 (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
-                ? GetImportedRepositoryPath(builder, options, module.Name)
+                ? GetImportedRepositoryPath(builder, options, repository, module.Name)
                 : GetLocalRepositoryPath(builder, module, repository));
         var updateRepository =
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
-            repositoryResolution?.UsesSiblingLayout is not false;
+            repositoryResolution?.UsesSiblingLayout is not false &&
+            existingSameWorktreeRepository is null;
 
         var synchronizedRepository =
             ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
-             (builder.ExecutionContext.IsRunMode && imported)) &&
+             (builder.ExecutionContext.IsRunMode && imported) ||
+             (imported && factoryRequiresRepository)) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             !string.IsNullOrWhiteSpace(repository) &&
-            RepositoryInspector.IsGitRepository(
+            (factoryRequiresRepository || RepositoryInspector.IsGitRepository(
                 repositoryPath,
                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                options.RepositoryCommandTimeout);
+                options.RepositoryCommandTimeout));
         if (synchronizedRepository)
         {
             registry.SynchronizeRepositoryAsync(
@@ -277,7 +301,7 @@ public static class DistributedApplicationModuleExtensions
         var defaultImageTag = GetDefaultImageTag(builder, repositoryPath, options);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
-        if (repositoryResolution is not null || !imported)
+        if (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported)
         {
             ValidateProjectFiles(module, repositoryPath);
         }
@@ -777,6 +801,7 @@ public static class DistributedApplicationModuleExtensions
     private static string GetImportedRepositoryPath(
         IDistributedApplicationBuilder builder,
         ModularAppHostsOptions options,
+        string? repository,
         string moduleName)
     {
         var configuredLocation = GetConfiguredValue(options.RepositoryBasePath) ??
@@ -784,16 +809,23 @@ public static class DistributedApplicationModuleExtensions
         var defaultLocation = Path.Combine(builder.AppHostDirectory, ".aspire", "module-repositories");
         var baseLocation = Path.GetFullPath(configuredLocation ?? defaultLocation, builder.AppHostDirectory);
         Directory.CreateDirectory(baseLocation);
-        return Path.Combine(baseLocation, GetSafeDirectoryName(moduleName));
+        var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(
+            repository,
+            moduleName,
+            builder.AppHostDirectory);
+        return Path.Combine(baseLocation, canonicalName);
     }
 
     private static IResourceBuilder<ParameterResource> GetOrCreateRepositoryParameter(
         IDistributedApplicationBuilder builder,
         ModuleApplicationRegistry registry,
         string moduleName,
+        string? repository,
         string configurationKey)
     {
-        var parameterName = GetRepositoryParameterName(moduleName);
+        var parameterName = string.IsNullOrWhiteSpace(repository)
+            ? GetRepositoryParameterName(moduleName)
+            : $"module-{ModuleRepositoryIdentity.GetCanonicalName(repository, moduleName, builder.AppHostDirectory)}-repository";
         if (!builder.TryCreateResourceBuilder<ParameterResource>(parameterName, out var parameter))
         {
             parameter = builder
@@ -838,6 +870,35 @@ public static class DistributedApplicationModuleExtensions
         }
 
         return builder.AppHostDirectory;
+    }
+
+    private static string? TryGetExistingSameWorktreeRepository(
+        string appHostDirectory,
+        string? repository,
+        string gitExecutablePath,
+        TimeSpan repositoryCommandTimeout)
+    {
+        if (string.IsNullOrWhiteSpace(repository) ||
+            GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+        {
+            return null;
+        }
+
+        var repositoryPath = Path.GetFullPath(repository, appHostDirectory);
+        return Directory.Exists(repositoryPath) &&
+            RepositoryInspector.TryFindRepositoryRoot(
+                appHostDirectory,
+                out var appHostRoot,
+                gitExecutablePath,
+                repositoryCommandTimeout) &&
+            RepositoryInspector.TryFindRepositoryRoot(
+                repositoryPath,
+                out var repositoryRoot,
+                gitExecutablePath,
+                repositoryCommandTimeout) &&
+            PathSafety.AreEqual(appHostRoot, repositoryRoot)
+                ? repositoryPath
+                : null;
     }
 
     private static void ValidateResourceNames(
@@ -1081,11 +1142,4 @@ public static class DistributedApplicationModuleExtensions
 
     private static string GetInstallerName(string projectName) => $"{projectName}-installer";
 
-    private static string GetSafeDirectoryName(string name)
-    {
-        var invalidCharacters = Path.GetInvalidFileNameChars().ToHashSet();
-        var safeName = new string(name.Select(character =>
-            invalidCharacters.Contains(character) || character is '/' or '\\' ? '-' : character).ToArray());
-        return safeName.Length == 0 ? "module" : safeName;
-    }
 }

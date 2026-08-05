@@ -31,9 +31,9 @@ internal sealed class ModuleApplicationRegistry(
     private readonly ConcurrentDictionary<string, Lazy<Task>> _repositorySynchronizations =
         new(StringComparer.OrdinalIgnoreCase);
 
-    internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
+    private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
 
-    private bool _programmaticallyConfigured;
+    internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 
@@ -77,18 +77,31 @@ internal sealed class ModuleApplicationRegistry(
 
     internal void RefreshConfiguration()
     {
-        if (!_programmaticallyConfigured && configuration is not null)
+        ResetOptions();
+        if (configuration is not null)
         {
-            ResetOptions();
             configuration.GetSection(ModularAppHostsOptions.ConfigurationSectionName).Bind(Options);
+        }
+
+        foreach (var configure in _configurations)
+        {
+            configure(Options);
         }
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)
     {
-        RefreshConfiguration();
-        configure(Options);
-        _programmaticallyConfigured = true;
+        _configurations.Add(configure);
+        try
+        {
+            RefreshConfiguration();
+        }
+        catch
+        {
+            _configurations.RemoveAt(_configurations.Count - 1);
+            RefreshConfiguration();
+            throw;
+        }
     }
 
     private void ResetOptions()

@@ -126,6 +126,8 @@ module.AddResource<ProjectResource>("orders-api", context =>
         Path.Combine(context.RepositoryPath, "src", "Orders.Api", "Orders.Api.csproj")));
 ```
 
+Repository-backed generic factories run while Aspire constructs the application model, so their repository must come from configuration, programmatic options, or `WithRepository`. A missing managed checkout is cloned before the factory runs. An interactive repository parameter cannot be used for this case because Aspire presents that input only after model construction.
+
 Use the specialized `AddProject` API when the project must be represented as a portable container image. These project declarations require the exact command that produces their image:
 
 ```csharp
@@ -276,8 +278,10 @@ Pin a branch, tag, or commit with `WithRepository(repository, revision)` or `Mod
 Managed repositories default to:
 
 ```text
-<AppHost directory>/.aspire/module-repositories/<module name>
+<AppHost directory>/.aspire/module-repositories/<repository slug>-<module slug>
 ```
+
+For example, module `orders` from `acme/orders` uses `acme-orders-orders`. The repository owner and name keep repositories with the same final path segment distinct, while the module component keeps multiple contracts from one repository distinct. Names that would collapse to the same filesystem/resource slug receive a stable suffix instead of sharing a checkout or parameter accidentally.
 
 Override the base directory through the options section:
 
@@ -291,7 +295,7 @@ Override the base directory through the options section:
 }
 ```
 
-Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repository` are modeled with `AddParameterFromConfiguration`. If that key, the module definition, and programmatic options are all missing, the same required parameter uses Aspire's interaction service to ask for the repository in interactive environments. Non-interactive runs and deployment pipelines provide the options key through normal configuration, such as `Aspire__ModularAppHosts__Modules__orders__Repository`. Use `DistributedApplicationModuleExtensions.GetRepositoryParameterName(moduleName)` and `GetRepositoryConfigurationKey(moduleName)` when code needs the exact names.
+Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repository` are modeled with `AddParameterFromConfiguration`. If that key, the module definition, and programmatic options are all missing, the same required parameter uses Aspire's interaction service to ask for the repository in interactive environments, except for repository-backed generic factories as noted above. Non-interactive runs and deployment pipelines provide the options key through normal configuration, such as `Aspire__ModularAppHosts__Modules__orders__Repository`. Use `DistributedApplicationModuleExtensions.GetRepositoryParameterName(repository, moduleName)` when the repository is known, the one-argument fallback for unresolved interactive imports, and `GetRepositoryConfigurationKey(moduleName)` for the configuration key.
 
 `RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
@@ -308,7 +312,7 @@ Set `AutoCloneRepositories` to `true` globally, or `Modules:<name>:AutoCloneRepo
 <workspace>/orders/     # module repository inferred from …/orders.git or owner/orders
 ```
 
-The library first resolves the AppHost Git root. A module whose configured local root belongs to that same worktree is reused as-is, including a nested logical module root, and GitHub CLI is not invoked. Otherwise, the only accepted location is one direct sibling named from the module repository. An existing sibling must be a Git worktree with the configured origin. A missing sibling is cloned during model construction with:
+The library first resolves the AppHost Git root. A module whose configured local root belongs to that same worktree is reused as-is, including a nested logical module root, and GitHub CLI is not invoked. Local paths are compared by their actual Git roots, so a nested logical root remains valid even when that worktree has a remote `origin`. Otherwise, the only accepted location is one direct sibling named from the module repository. An existing sibling must be a Git worktree with the configured origin. A missing sibling is cloned during model construction with:
 
 ```text
 gh repo clone <repository> <sibling-path> -- --recurse-submodules

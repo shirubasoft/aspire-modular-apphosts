@@ -37,7 +37,7 @@ internal sealed class DistributedApplicationModuleBuilder(
             gitExecutablePath,
             repositoryCommandTimeout);
         var appHostDirectory = Path.GetFullPath(applicationBuilder.AppHostDirectory);
-        var configuredRepositoryRoot = GetConfiguredLocalRepositoryRoot(
+        var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
             module.Repository,
             appHostDirectory,
             absoluteProjectPath,
@@ -99,10 +99,24 @@ internal sealed class DistributedApplicationModuleBuilder(
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         module.Repository = repository;
         module.RepositoryRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+        foreach (var project in module.ProjectDefinitions)
+        {
+            var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
+                repository,
+                Path.GetFullPath(applicationBuilder.AppHostDirectory),
+                project.ProjectPath,
+                gitExecutablePath,
+                repositoryCommandTimeout);
+            if (configuredRepositoryRoot is not null)
+            {
+                project.SourceRepositoryRoot = configuredRepositoryRoot;
+            }
+        }
+
         return this;
     }
 
-    private static string? GetConfiguredLocalRepositoryRoot(
+    internal static string? TryGetConfiguredLocalRepositoryRoot(
         string? repository,
         string appHostDirectory,
         string projectPath,
