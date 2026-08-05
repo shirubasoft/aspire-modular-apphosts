@@ -101,9 +101,6 @@ internal sealed class ModuleApplicationRegistry(
         Options.RepositoryCommandTimeout = defaults.RepositoryCommandTimeout;
         Options.UpdateImportedRepositories = defaults.UpdateImportedRepositories;
         Options.ProjectMode = defaults.ProjectMode;
-#pragma warning disable CS0618
-        Options.RunProjectsAsContainers = defaults.RunProjectsAsContainers;
-#pragma warning restore CS0618
         Options.PublishImages = defaults.PublishImages;
         Options.Modules.Clear();
     }

@@ -251,7 +251,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 }
 ```
 
-`ProjectMode` is honored only in Aspire run mode. Its safe `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built. The older `RunAsContainer` and `RunProjectsAsContainers` switches remain compatibility shims, but new configuration should use `ProjectMode`.
+`ProjectMode` is honored only in Aspire run mode. Its safe `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built.
 
 Repository updates and image build commands are opt-in. Set `UpdateRepository`/`UpdateImportedRepositories` or `PublishImage`/`PublishImages` only where that mutation is intended. Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
 
@@ -265,7 +265,7 @@ builder.UseModuleContainers();
 builder.BuildModuleImages();
 ```
 
-Repository clone, fetch, checkout, and pull operations stream progress to the AppHost output and honor startup cancellation. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
+Repository clone, fetch, checkout, and pull operations stream progress to the AppHost output. Deferred synchronization before startup honors startup cancellation; repository work required while constructing the application model is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
 
 ## Repository imports
 

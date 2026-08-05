@@ -1002,21 +1002,9 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModuleProjectOptions? projectOptions,
         bool imported)
     {
-#pragma warning disable CS0618
         var mode = projectOptions?.ProjectMode ??
-            (projectOptions?.RunAsContainer is { } projectRunsAsContainer
-                ? (ModuleProjectMode?)(projectRunsAsContainer
-                    ? ModuleProjectMode.Container
-                    : ModuleProjectMode.Project)
-                : null) ??
             moduleOptions?.ProjectMode ??
-            (moduleOptions?.RunProjectsAsContainers is { } moduleRunsAsContainers
-                ? (ModuleProjectMode?)(moduleRunsAsContainers
-                    ? ModuleProjectMode.Container
-                    : ModuleProjectMode.Project)
-                : null) ??
-            (options.RunProjectsAsContainers ? ModuleProjectMode.Container : options.ProjectMode);
-#pragma warning restore CS0618
+            options.ProjectMode;
 
         return mode == ModuleProjectMode.Auto
             ? imported ? ModuleProjectMode.Container : ModuleProjectMode.Project

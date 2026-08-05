@@ -40,13 +40,6 @@ public sealed class ModularAppHostsOptions
     /// <summary>Gets or sets how exported projects run in Aspire run mode.</summary>
     public ModuleProjectMode ProjectMode { get; set; } = ModuleProjectMode.Auto;
 
-    /// <summary>
-    /// Gets or sets whether projects exported as containers run as those containers in Aspire run mode.
-    /// Publish mode always uses the exported container representation.
-    /// </summary>
-    [Obsolete($"Use {nameof(ProjectMode)} instead.")]
-    public bool RunProjectsAsContainers { get; set; }
-
     /// <summary>Gets or sets whether declared image publish commands may run in Aspire run mode.</summary>
     public bool PublishImages { get; set; }
 
@@ -87,10 +80,6 @@ public sealed class DistributedApplicationModuleOptions
 
     /// <summary>Gets or sets how this module's exported projects run in Aspire run mode.</summary>
     public ModuleProjectMode? ProjectMode { get; set; }
-
-    /// <summary>Gets or sets whether exported projects run as containers in Aspire run mode.</summary>
-    [Obsolete($"Use {nameof(ProjectMode)} instead.")]
-    public bool? RunProjectsAsContainers { get; set; }
 
     /// <summary>Gets or sets whether image publish commands declared by this module may run.</summary>
     public bool? PublishImages { get; set; }
@@ -140,12 +129,6 @@ public sealed class DistributedApplicationModuleProjectOptions : DistributedAppl
 {
     /// <summary>Gets or sets how this project runs in Aspire run mode.</summary>
     public ModuleProjectMode? ProjectMode { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether this project runs as its exported container in Aspire run mode. Set to
-    /// <see langword="false"/> to run the project directly for debugging.
-    /// </summary>
-    public bool? RunAsContainer { get; set; }
 
     /// <summary>Gets or sets the launch profile used when the project runs directly.</summary>
     public string? LaunchProfileName { get; set; }

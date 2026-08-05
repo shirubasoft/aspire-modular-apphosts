@@ -318,8 +318,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var builder = CreateBuilder(repository.Path);
         var projectConfigured = false;
         builder.Configuration[
-            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
-            "false";
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
 
         var module = builder.ExportModule("orders", definition =>
             definition.AddProject("orders-api", repository.ProjectPath)
@@ -344,7 +344,9 @@ public sealed class DistributedApplicationModuleExtensionsTests
             service => service.ServiceType == typeof(IOptions<ModularAppHostsOptions>));
         var boundOptions = Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(
             descriptor.ImplementationInstance);
-        Assert.False(boundOptions.Value.Modules["orders"].Projects["orders-api"].RunAsContainer);
+        Assert.Equal(
+            ModuleProjectMode.Project,
+            boundOptions.Value.Modules["orders"].Projects["orders-api"].ProjectMode);
     }
 
     [Fact]
@@ -358,8 +360,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var builder = CreateBuilder(repository.Path);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
         builder.Configuration[
-            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
-            "false";
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
         ExportModule(builder, repository.ProjectPath);
 
         var module = builder.ImportModule("orders");
@@ -659,8 +661,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
         using var repository = TestRepository.Create();
         var builder = CreateBuilder(repository.Path, "--publisher", "manifest");
         builder.Configuration[
-            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:RunAsContainer"] =
-            "false";
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
         var module = ExportModule(builder, repository.ProjectPath);
 
         builder.Add(module);
