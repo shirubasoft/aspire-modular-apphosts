@@ -34,6 +34,40 @@ jobs:
         if: runner.os != 'Windows'
         run: ./build.sh
 
+      - name: Enforce core library line coverage
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/core.cobertura.xml
+          -p:CoverletOutputFormat=cobertura
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts*]*'
+          -p:Threshold=90
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
+
+      - name: Enforce testing library line coverage
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/testing.cobertura.xml
+          -p:CoverletOutputFormat=cobertura
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts.Testing]*'
+          -p:Threshold=70
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
+
+      - name: Upload coverage reports
+        if: always() && runner.os != 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-reports
+          path: artifacts/coverage/*.cobertura.xml
+          if-no-files-found: error
+
       - name: Validate, test, and pack on Windows
         if: runner.os == 'Windows'
         shell: pwsh
