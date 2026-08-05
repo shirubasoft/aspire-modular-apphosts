@@ -12,6 +12,8 @@ Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.EnvironmentName.ge
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.EnvironmentName.set -> void
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.OutputPath.get -> string?
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.OutputPath.set -> void
+Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.PortConflictRetryCount.get -> int
+Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.PortConflictRetryCount.set -> void
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AddResource<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AppHostAssembly.get -> System.Reflection.Assembly?
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AppHostDirectory.get -> string!

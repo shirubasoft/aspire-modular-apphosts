@@ -155,6 +155,8 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
     [Theory]
     [InlineData("https://example.test/health")]
     [InlineData("health")]
+    [InlineData("//evil.example/health")]
+    [InlineData("/\\evil.example/health")]
     public void WithTestEndpoint_rejects_a_health_check_that_is_not_root_relative(string healthCheckPath)
     {
         var builder = CreateBuilder();

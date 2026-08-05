@@ -15,8 +15,14 @@ public sealed class DockerComposeDeploymentOptions
     /// </summary>
     public string? OutputPath { get; set; }
 
-    /// <summary>Gets or sets the path to the Aspire CLI executable.</summary>
+    /// <summary>
+    /// Gets or sets the path to the Aspire CLI executable. The default prefers a restored local Aspire tool manifest
+    /// found above the AppHost and otherwise invokes <c>aspire</c> from <c>PATH</c>.
+    /// </summary>
     public string AspireCliPath { get; set; } = "aspire";
+
+    /// <summary>Gets or sets how many times a deployment is retried after a detected host-port bind conflict.</summary>
+    public int PortConflictRetryCount { get; set; } = 1;
 
     /// <summary>Gets or sets the maximum time allowed for <c>aspire deploy</c>.</summary>
     public TimeSpan DeploymentTimeout { get; set; } = TimeSpan.FromMinutes(10);

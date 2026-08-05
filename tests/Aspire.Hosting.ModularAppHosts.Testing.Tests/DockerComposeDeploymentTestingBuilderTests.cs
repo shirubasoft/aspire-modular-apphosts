@@ -119,6 +119,25 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         Assert.Contains("without its endpoint", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("//evil.example/health")]
+    [InlineData("/\\evil.example/health")]
+    public void Create_rejects_a_health_check_that_can_replace_the_endpoint_authority(string healthPath)
+    {
+        var resourceName = Encode("catalog");
+        var endpointName = Encode("http");
+        using var file = TemporaryFile.Create($$"""
+            ASPIRE_TEST_ENDPOINT__{{resourceName}}__{{endpointName}}=http://localhost:5101/
+            ASPIRE_TEST_ENDPOINT_HEALTH_PATH__{{resourceName}}__{{endpointName}}={{healthPath}}
+            """);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder
+                .Create<DockerComposeDeploymentTestingBuilderTests>(file.Path));
+
+        Assert.Contains("root-relative URI path", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Create_rejects_an_invalid_encoded_name()
     {
@@ -189,6 +208,70 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public async Task DeployAsync_rejects_a_negative_port_conflict_retry_count()
+    {
+        var options = new DockerComposeDeploymentOptions { PortConflictRetryCount = -1 };
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            DockerComposeDeploymentTestingBuilder.DeployAsync<DockerComposeDeploymentTestingBuilderTests>(
+                options,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("options", exception.ParamName);
+    }
+
+    [Fact]
+    public void Default_cli_resolution_prefers_a_restored_local_tool_manifest()
+    {
+        using var repository = TemporaryDirectory.Create();
+        var manifestDirectory = Path.Combine(repository.Path, ".config");
+        var appHostPath = Path.Combine(repository.Path, "src", "AppHost", "AppHost.csproj");
+        Directory.CreateDirectory(manifestDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(appHostPath)!);
+        File.WriteAllText(
+            Path.Combine(manifestDirectory, "dotnet-tools.json"),
+            """
+            {
+              "version": 1,
+              "isRoot": true,
+              "tools": {
+                "aspire.cli": {
+                  "version": "13.4.6",
+                  "commands": [ "aspire" ]
+                }
+              }
+            }
+            """);
+
+        var invocation = DockerComposeDeploymentTestingBuilder.ResolveAspireCliInvocation("aspire", appHostPath);
+
+        Assert.Equal("dotnet", invocation.Executable);
+        Assert.Equal(["tool", "run", "aspire", "--"], invocation.PrefixArguments);
+        var explicitInvocation = DockerComposeDeploymentTestingBuilder.ResolveAspireCliInvocation(
+            "custom-aspire",
+            appHostPath);
+        Assert.Equal("custom-aspire", explicitInvocation.Executable);
+        Assert.Empty(explicitInvocation.PrefixArguments);
+    }
+
+    [Fact]
+    public void Unrestored_local_cli_detection_only_falls_back_for_the_manifest_invocation()
+    {
+        var localInvocation = new AspireCliInvocation("dotnet", ["tool", "run", "aspire", "--"]);
+        var explicitInvocation = new AspireCliInvocation("custom-aspire", []);
+
+        Assert.True(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            localInvocation,
+            "Run \"dotnet tool restore\" to make the \"aspire\" command available."));
+        Assert.False(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            localInvocation,
+            "Deployment failed for another reason."));
+        Assert.False(DockerComposeDeploymentTestingBuilder.ShouldFallBackToAspireOnPath(
+            explicitInvocation,
+            "Run \"dotnet tool restore\" to make the \"aspire\" command available."));
+    }
+
+    [Fact]
     public void Deployment_options_use_unique_environment_names_by_default()
     {
         var first = new DockerComposeDeploymentOptions().EnvironmentName;
@@ -253,6 +336,30 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
         Assert.Same(failure, exception);
         Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
         Assert.False(Directory.Exists(runner.Invocations[0].OutputPath));
+    }
+
+    [Fact]
+    public async Task DeployAsync_retries_after_cleaning_up_a_host_port_conflict()
+    {
+        var deployAttempts = 0;
+        var runner = new RecordingAspireCommandRunner(invocation =>
+        {
+            if (invocation.Command == "deploy" && deployAttempts++ == 0)
+            {
+                return Task.FromException(new InvalidOperationException(
+                    "Bind for 0.0.0.0:5101 failed: port is already allocated"));
+            }
+
+            return WriteConfigurationOnDeploy(invocation);
+        });
+
+        var builder = await DeployAsync(runner, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(["deploy", "destroy", "deploy"], runner.Invocations.Select(invocation => invocation.Command));
+        await builder.DisposeAsync();
+        Assert.Equal(
+            ["deploy", "destroy", "deploy", "destroy"],
+            runner.Invocations.Select(invocation => invocation.Command));
     }
 
     [Fact]

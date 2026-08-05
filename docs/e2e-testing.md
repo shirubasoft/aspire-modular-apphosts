@@ -35,7 +35,7 @@ compose
     .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
-`WithTestEndpoint` requires an external endpoint. When the endpoint omits a host port, the test export allocates an available loopback port and applies it to the endpoint before Compose publishing; this avoids hard-coded sample ports and lets independent test deployments run concurrently. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path must be root-relative and becomes Aspire resource health in the imported testing model. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
+`WithTestEndpoint` requires an external endpoint. When the endpoint omits a host port, the test export selects an available loopback port and applies it to the endpoint before Compose publishing; this avoids hard-coded sample ports and lets independent test deployments run concurrently. Because an availability probe cannot reserve a port until Compose binds it, `DeployAsync` detects bind conflicts, destroys the partial deployment, and retries once by default. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path must be a root-relative path on the exported endpoint; network-path references such as `//other-host/health` are rejected. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
 
 ## Use one test lifecycle
 
@@ -80,12 +80,13 @@ var builder = await DockerComposeDeploymentTestingBuilder
         EnvironmentName = "CI",
         OutputPath = artifactsPath,
         AspireCliPath = toolPath,
+        PortConflictRetryCount = 1,
         DeploymentTimeout = TimeSpan.FromMinutes(15),
         CleanupTimeout = TimeSpan.FromMinutes(3)
     });
 ```
 
-The Aspire CLI output is streamed while deploy and destroy run. A timed-out deploy still receives a best-effort destroy. Temporary output is removed only after destroy succeeds; if cleanup fails, the exception reports both failures and retains the output directory so a developer or CI recovery step still has the deployment state.
+When `AspireCliPath` keeps its `aspire` default, the builder prefers an `aspire` command from the nearest `.config/dotnet-tools.json`. If that manifest has not been restored, it falls back to `aspire` on `PATH`; set an explicit executable path to override discovery. The Aspire CLI output is streamed while deploy and destroy run. A timed-out deploy still receives a best-effort destroy. Temporary output is removed only after destroy succeeds; if cleanup fails, the exception reports both failures and retains the output directory so a developer or CI recovery step still has the deployment state.
 
 When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. These modes import configuration without deploying or destroying the external environment. Imported files use dotenv syntax, including `export`, single- and double-quoted values, escapes, and inline comments. Malformed lines, duplicate keys, orphaned health checks, and endpoint URLs that are not plain HTTP(S) origins fail with the file and line or exported key in the diagnostic.
 

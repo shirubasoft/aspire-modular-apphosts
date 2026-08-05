@@ -35,7 +35,7 @@ await app.StartAsync();
 await app.ResourceNotifications.WaitForResourceHealthyAsync("catalog-api");
 ```
 
-`DeployAsync` deploys through Aspire, imports the resolved endpoints and configuration, and destroys the deployment when the builder is disposed. `Create` and `CreateFromEnvironment` import a deployment owned by another system.
+`DeployAsync` deploys through Aspire, imports the resolved endpoints and configuration, and destroys the deployment when the builder is disposed. It prefers a restored local Aspire tool manifest, retries detected host-port bind conflicts once, and allows both behaviors to be overridden through `DockerComposeDeploymentOptions`. `Create` and `CreateFromEnvironment` import a deployment owned by another system.
 
 Endpoint names and multiple endpoints per resource are preserved, so the same `CreateHttpClient(resourceName, endpointName)` calls work in both modes. Pass `DockerComposeDeploymentOptions` when CI needs an explicit environment, output path, Aspire CLI path, or deploy/cleanup timeouts. Aspire CLI output is streamed during deployment and cleanup.
 

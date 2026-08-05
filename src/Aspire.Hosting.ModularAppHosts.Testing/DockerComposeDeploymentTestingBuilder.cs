@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
@@ -152,6 +153,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             cancellationToken);
     }
 
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "All deployment failures require best-effort cleanup before the original exception is rethrown.")]
     private static async Task<DockerComposeDeploymentTestingBuilder> DeployCoreAsync<TEntryPoint>(
         DockerComposeDeploymentOptions options,
         string appHostPath,
@@ -172,27 +177,51 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             deleteOutputDirectory,
             commandRunner);
 
-        try
+        Exception? deploymentFailure = null;
+        for (var attempt = 0; attempt <= options.PortConflictRetryCount; attempt++)
         {
-            await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
-            var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
-            return Create<TEntryPoint>(configurationFilePath, deployment);
-        }
-        catch (Exception deploymentFailure)
-        {
-            var cleanupFailure = await CleanupFailedDeploymentAsync(deployment).ConfigureAwait(false);
-            if (cleanupFailure is not null)
+            try
             {
-                throw new AggregateException(
-                    $"The Compose deployment failed and cleanup also failed. Deployment state was retained at " +
-                    $"'{deployment.OutputPath}' for recovery.",
-                    deploymentFailure,
-                    cleanupFailure);
+                await RunAspireCommandAsync("deploy", deployment, cancellationToken).ConfigureAwait(false);
+                var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
+                return Create<TEntryPoint>(configurationFilePath, deployment);
             }
-
-            ExceptionDispatchInfo.Capture(deploymentFailure).Throw();
-            throw;
+            catch (Exception exception) when (
+                attempt < options.PortConflictRetryCount && IsPortConflict(exception))
+            {
+                Console.WriteLine(
+                    $"[aspire deploy] Host-port conflict detected; cleaning the partial deployment before retry " +
+                    $"{attempt + 1} of {options.PortConflictRetryCount}.");
+                var retryCleanupFailure = await DestroyFailedDeploymentAsync(deployment).ConfigureAwait(false);
+                if (retryCleanupFailure is not null)
+                {
+                    throw new AggregateException(
+                        $"The Compose deployment hit a host-port conflict and cleanup before retry also failed. " +
+                        $"Deployment state was retained at '{deployment.OutputPath}' for recovery.",
+                        exception,
+                        retryCleanupFailure);
+                }
+            }
+            catch (Exception exception)
+            {
+                deploymentFailure = exception;
+                break;
+            }
         }
+
+        deploymentFailure ??= new InvalidOperationException("The Compose deployment failed without an exception.");
+        var cleanupFailure = await CleanupFailedDeploymentAsync(deployment).ConfigureAwait(false);
+        if (cleanupFailure is not null)
+        {
+            throw new AggregateException(
+                $"The Compose deployment failed and cleanup also failed. Deployment state was retained at " +
+                $"'{deployment.OutputPath}' for recovery.",
+                deploymentFailure,
+                cleanupFailure);
+        }
+
+        ExceptionDispatchInfo.Capture(deploymentFailure).Throw();
+        throw new InvalidOperationException("Unreachable code.");
     }
 
     private static DockerComposeDeploymentTestingBuilder Create<TEntryPoint>(
@@ -490,6 +519,14 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 options.CleanupTimeout,
                 "The cleanup timeout must be positive.");
         }
+
+        if (options.PortConflictRetryCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.PortConflictRetryCount,
+                "The port-conflict retry count cannot be negative.");
+        }
     }
 
     private static DockerComposeDeploymentOptions Snapshot(DockerComposeDeploymentOptions options) => new()
@@ -497,6 +534,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         EnvironmentName = options.EnvironmentName,
         OutputPath = options.OutputPath,
         AspireCliPath = options.AspireCliPath,
+        PortConflictRetryCount = options.PortConflictRetryCount,
         DeploymentTimeout = options.DeploymentTimeout,
         CleanupTimeout = options.CleanupTimeout
     };
@@ -539,45 +577,138 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         string environmentName,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string>
-        {
-            command,
-            "--apphost",
-            appHostPath,
-            "--output-path",
-            outputPath,
-            "--environment",
-            environmentName
-        };
-        if (string.Equals(command, "destroy", StringComparison.Ordinal))
-        {
-            arguments.Add("--yes");
-        }
-
-        arguments.Add("--non-interactive");
+        var invocation = ResolveAspireCliInvocation(aspireCliPath, appHostPath);
+        var output = new StringBuilder();
         var outputLock = new object();
         void ReportOutput(string line)
         {
             lock (outputLock)
             {
+                output.AppendLine(line);
                 Console.WriteLine($"[aspire {command}] {line}");
             }
         }
 
-        CommandResult result;
-        result = await CliCommand.Wrap(aspireCliPath)
-            .WithArguments(arguments)
-            .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
-            .WithValidation(CommandResultValidation.None)
-            .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportOutput))
-            .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportOutput))
-            .ExecuteAsync(cancellationToken);
+        async Task<CommandResult> ExecuteAsync(AspireCliInvocation candidate)
+        {
+            var arguments = new List<string>(candidate.PrefixArguments)
+            {
+                command,
+                "--apphost",
+                appHostPath,
+                "--output-path",
+                outputPath,
+                "--environment",
+                environmentName
+            };
+            if (string.Equals(command, "destroy", StringComparison.Ordinal))
+            {
+                arguments.Add("--yes");
+            }
+
+            arguments.Add("--non-interactive");
+            return await CliCommand.Wrap(candidate.Executable)
+                .WithArguments(arguments)
+                .WithWorkingDirectory(Path.GetDirectoryName(appHostPath)!)
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportOutput))
+                .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportOutput))
+                .ExecuteAsync(cancellationToken);
+        }
+
+        var result = await ExecuteAsync(invocation).ConfigureAwait(false);
+        if (!result.IsSuccess && ShouldFallBackToAspireOnPath(invocation, output.ToString()))
+        {
+            ReportOutput("The manifest tool is not restored; falling back to 'aspire' on PATH.");
+            result = await ExecuteAsync(new AspireCliInvocation(aspireCliPath, [])).ConfigureAwait(false);
+        }
 
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException(
-                $"'aspire {command}' exited with code {result.ExitCode} for AppHost '{appHostPath}'.");
+                CreateAspireCommandFailureMessage(command, result.ExitCode, appHostPath, output.ToString()));
         }
+    }
+
+    private static string CreateAspireCommandFailureMessage(
+        string command,
+        int exitCode,
+        string appHostPath,
+        string output)
+    {
+        var diagnostic = output.Trim();
+        if (diagnostic.Length > 4000)
+        {
+            diagnostic = diagnostic[^4000..];
+        }
+
+        return $"'aspire {command}' exited with code {exitCode} for AppHost '{appHostPath}'." +
+            (diagnostic.Length == 0 ? string.Empty : $"{System.Environment.NewLine}{diagnostic}");
+    }
+
+    internal static AspireCliInvocation ResolveAspireCliInvocation(string aspireCliPath, string appHostPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(aspireCliPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostPath);
+        if (!string.Equals(aspireCliPath, "aspire", StringComparison.Ordinal))
+        {
+            return new AspireCliInvocation(aspireCliPath, []);
+        }
+
+        var current = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(appHostPath))!);
+        while (current is not null)
+        {
+            var manifestPath = Path.Combine(current.FullName, ".config", "dotnet-tools.json");
+            if (File.Exists(manifestPath) && ManifestProvidesAspireCli(manifestPath))
+            {
+                return new AspireCliInvocation("dotnet", ["tool", "run", "aspire", "--"]);
+            }
+
+            current = current.Parent;
+        }
+
+        return new AspireCliInvocation(aspireCliPath, []);
+    }
+
+    internal static bool ShouldFallBackToAspireOnPath(AspireCliInvocation invocation, string output)
+        => string.Equals(invocation.Executable, "dotnet", StringComparison.Ordinal)
+            && invocation.PrefixArguments.SequenceEqual(["tool", "run", "aspire", "--"])
+            && output.Contains("dotnet tool restore", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ManifestProvidesAspireCli(string manifestPath)
+    {
+        try
+        {
+            using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!manifest.RootElement.TryGetProperty("tools", out var tools))
+            {
+                return false;
+            }
+
+            return tools.EnumerateObject().Any(tool =>
+                tool.Value.TryGetProperty("commands", out var commands) &&
+                commands.EnumerateArray().Any(command =>
+                    string.Equals(command.GetString(), "aspire", StringComparison.Ordinal)));
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidOperationException(
+                $"Unable to read local .NET tool manifest '{manifestPath}'.",
+                exception);
+        }
+    }
+
+    private static bool IsPortConflict(Exception exception)
+    {
+        var message = exception.Message;
+        if (message.Contains("address already in use", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("port is already allocated", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("port is already in use", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return exception.InnerException is not null && IsPortConflict(exception.InnerException);
     }
 
     [SuppressMessage(
@@ -586,13 +717,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         Justification = "Cleanup failures are returned so they can be reported with the deployment failure.")]
     private static async Task<Exception?> CleanupFailedDeploymentAsync(OwnedDeployment deployment)
     {
-        try
+        var destroyFailure = await DestroyFailedDeploymentAsync(deployment).ConfigureAwait(false);
+        if (destroyFailure is not null)
         {
-            await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            return exception;
+            return destroyFailure;
         }
 
         try
@@ -605,6 +733,23 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
 
         return null;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Cleanup failures are returned so callers can preserve deployment diagnostics and recovery state.")]
+    private static async Task<Exception?> DestroyFailedDeploymentAsync(OwnedDeployment deployment)
+    {
+        try
+        {
+            await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return exception;
+        }
     }
 
     private static void DeleteOwnedOutputDirectory(OwnedDeployment deployment)
@@ -705,8 +850,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             var healthKey = EndpointHealthPathPrefix + encodedEndpoint;
             if (values.TryGetValue(healthKey, out var healthPath))
             {
-                if (healthPath.Length == 0 || healthPath[0] != '/' ||
-                    !Uri.IsWellFormedUriString(healthPath, UriKind.Relative))
+                if (!TestEndpointHealthPath.IsRootRelative(healthPath))
                 {
                     throw new InvalidOperationException(
                         $"The exported health check for '{resourceName}/{endpointName}' must be a root-relative URI path; " +
@@ -789,6 +933,8 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         bool DeleteOutputDirectory,
         IAspireCommandRunner CommandRunner);
 }
+
+internal sealed record AspireCliInvocation(string Executable, IReadOnlyList<string> PrefixArguments);
 
 internal interface IAspireCommandRunner
 {

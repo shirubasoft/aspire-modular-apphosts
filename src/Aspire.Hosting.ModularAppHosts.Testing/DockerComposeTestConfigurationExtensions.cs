@@ -21,9 +21,7 @@ public static class DockerComposeTestConfigurationExtensions
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(host);
 
-        if (healthCheckPath is not null &&
-            (healthCheckPath.Length == 0 || healthCheckPath[0] != '/' ||
-             !Uri.IsWellFormedUriString(healthCheckPath, UriKind.Relative)))
+        if (healthCheckPath is not null && !TestEndpointHealthPath.IsRootRelative(healthCheckPath))
         {
             throw new ArgumentException(
                 $"The health check path '{healthCheckPath}' must be a root-relative URI path.",
