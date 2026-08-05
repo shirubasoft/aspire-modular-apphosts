@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/samples/MultiRepoE2E/">
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.AppHost/Spire.Consumer.AppHost.csproj" />
+    <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />

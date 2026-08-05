@@ -4,6 +4,15 @@
 
 ## Define and materialize a module
 
+To scaffold the first contract into an existing project that references the core package, install the repository item template and choose the C# type name and stable module identity:
+
+```bash
+dotnet new install ./templates/aspire-module
+dotnet new aspire-module --name OrdersModule --moduleName orders
+```
+
+The generated contract starts at version `1` with one container-backed API. Replace that example resource graph with the resources owned by the module.
+
 The generated API defines and materializes a conventional `Define(IDistributedApplicationModuleBuilder)` contract in one call:
 
 - `OrdersModule.AddModule(builder)` uses the definition in the current application.

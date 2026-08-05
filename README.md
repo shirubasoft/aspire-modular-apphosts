@@ -26,6 +26,13 @@ They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-
 
 ## Quick start
 
+Install the repository's item template and scaffold a contract into an existing project that references the core package:
+
+```bash
+dotnet new install ./templates/aspire-module
+dotnet new aspire-module --name CatalogModule --moduleName catalog
+```
+
 Declare a module in a shared contract. The generator creates typed properties for its resources:
 
 ```csharp

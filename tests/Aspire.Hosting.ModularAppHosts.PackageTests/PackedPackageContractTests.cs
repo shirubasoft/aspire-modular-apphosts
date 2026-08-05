@@ -143,6 +143,48 @@ public sealed class PackedPackageContractTests
             TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Module_item_template_scaffolds_a_named_versioned_contract()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var workingDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"aspire-module-template-tests-{Guid.NewGuid():N}");
+        var outputPath = Path.Combine(workingDirectory, "output");
+        var hivePath = Path.Combine(workingDirectory, "hive");
+        Directory.CreateDirectory(workingDirectory);
+
+        await RunDotNetAsync(
+            repositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "install",
+            "templates/aspire-module",
+            "--debug:custom-hive",
+            hivePath);
+        await RunDotNetAsync(
+            repositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "aspire-module",
+            "--name",
+            "InventoryModule",
+            "--moduleName",
+            "inventory",
+            "--output",
+            outputPath,
+            "--debug:custom-hive",
+            hivePath);
+
+        var sourcePath = Path.Combine(outputPath, "InventoryModule.cs");
+        Assert.True(File.Exists(sourcePath));
+        var source = await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken);
+        Assert.Contains("partial class InventoryModule", source, StringComparison.Ordinal);
+        Assert.Contains("public const string Name = \"inventory\";", source, StringComparison.Ordinal);
+        Assert.Contains("Version = \"1\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("catalog-module-name", source, StringComparison.Ordinal);
+    }
+
     private static async Task<PackageArtifacts> GetPackagesAsync(CancellationToken cancellationToken)
     {
         if (_packageArtifacts is not null)
