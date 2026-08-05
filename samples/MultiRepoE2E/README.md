@@ -27,9 +27,17 @@ this repository into a temporary parent directory and run:
 dotnet tool restore
 dotnet tool run aspire -- start --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost --non-interactive
 dotnet tool run aspire -- wait spire-api --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost --timeout 180 --non-interactive
-curl --fail http://localhost:55201/weatherforecast
+spire_api_url="$(
+  dotnet tool run aspire -- describe spire-api \
+    --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost \
+    --format Json \
+    --non-interactive |
+    jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
+)"
+test -n "$spire_api_url"
+curl --fail --show-error "${spire_api_url%/}/weatherforecast"
 dotnet tool run aspire -- stop --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost --non-interactive
 ```
 
-The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, GitHub CLI, and access to
+The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, GitHub CLI, `jq`, and access to
 GitHub. Authentication remains a GitHub CLI concern; CI supplies its scoped workflow token.

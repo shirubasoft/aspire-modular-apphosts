@@ -1,6 +1,6 @@
 # Modules
 
-`Shirubasoft.Aspire.ModularAppHosts` lets a shared C# contract describe an Aspire resource graph. Each receiving AppHost chooses whether to materialize that graph locally. Repository-backed modules can instead use a managed checkout.
+`Shirubasoft.Aspire.ModularAppHosts` lets a shared C# contract describe an Aspire resource graph. Each receiving AppHost chooses whether to materialize that graph locally. Repository-backed modules can instead use a managed checkout. Consumers still reference the producer-owned C# contract assembly; the Git repository provides source and build context, not executable module-definition code.
 
 ## Define and materialize a module
 
@@ -36,6 +36,7 @@ public static partial class OrdersModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
+        module.RequiresRepository();
         module.AddResource<ProjectResource>(ApiResourceName, context =>
             context.ApplicationBuilder
                 .AddProject(
@@ -77,18 +78,21 @@ builder.AddContainer("consumer", "example/consumer", "latest")
 
 ## Generated resource API
 
-`GenerateDistributedApplicationModule` generates one-call `AddModuleAsync` and `ImportModuleAsync` methods plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract; defining the same module name with another version fails with both versions in the diagnostic.
+`GenerateDistributedApplicationModule` generates one-call `AddModuleAsync` and `ImportModuleAsync` methods plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. Publish the updated contract package and update participating AppHosts together when a version changes.
 
 Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModuleAsync`/`ExportModuleAsync`, and pass the resulting definition to the generated `AddModuleAsync(builder, definition)` overload.
 
-The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings inside the conventional `Define` method. Advanced contracts are scanned in module-builder definition methods or a lambda passed directly to `DefineModuleAsync`/`ExportModuleAsync`. Calls in unrelated helpers are ignored so the typed API cannot advertise resources the selected definition never materializes. Invalid declarations, unsupported names, and generated-member collisions are reported as build diagnostics.
+The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings inside the conventional `Define` method. Advanced contracts are scanned in module-builder definition methods or a lambda passed directly to `DefineModuleAsync`/`ExportModuleAsync`. Calls in unrelated helpers are ignored so the typed API cannot advertise resources the selected definition never materializes. Invalid declarations, unsupported names, generated-member collisions, and custom resource types that are less accessible than the generated module API are reported as build diagnostics.
 
 The untyped API remains available when a generated contract is unnecessary. Generated `AddProject` properties use `IResourceWithEndpoints` because configuration can select a `ProjectResource` or `ContainerResource` at run time:
 
 ```csharp
+await builder.DefineModuleAsync(OrdersModule.Name, "1", OrdersModule.Define);
 var orders = await builder.ImportModuleAsync("orders");
-var api = orders.GetResource<ContainerResource>("orders-api");
+var api = orders.GetResource<ProjectResource>("orders-api");
 ```
+
+Unlike the generated `OrdersModule.ImportModuleAsync` helper, the raw untyped import does not register the definition for you; call `DefineModuleAsync` or `ExportModuleAsync` first.
 
 ### Resource prefixes and aliases
 
@@ -185,7 +189,7 @@ module.AddContainer("orders-static", "orders-static")
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 
-- When `ImageTag` is omitted, the module repository branch is lowercased and sanitized and its 12-character commit is appended (`feature/orders` becomes `feature-orders-a1b2c3d4e5f6`). Detached checkouts use `sha-a1b2c3d4e5f6`. If the repository is not available yet, the AppHost branch and commit are used, then CI branch variables, then `latest`.
+- When `ImageTag` is omitted, the module repository branch is lowercased and sanitized and its 12-character commit is appended (`feature/orders` becomes `feature-orders-a1b2c3d4e5f6`). Detached checkouts use `sha-a1b2c3d4e5f6`. A known managed repository is synchronized before this tag is selected. For repository-independent or still-unresolved definitions, the AppHost branch and commit are used, then CI branch variables, then `latest`.
 - A clean repository uses `ImageName:ImageTag` and reuses that image when it already exists locally.
 - A dirty repository uses `ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
 - The container waits for its installer to complete successfully.
@@ -269,6 +273,22 @@ builder.UseModuleContainers();
 builder.BuildModuleImages();
 ```
 
+Use `ConfigureModularAppHosts` when several policies should be set together or computed in code:
+
+```csharp
+builder.ConfigureModularAppHosts(options =>
+{
+    options.RepositoryBasePath = Path.Combine(builder.AppHostDirectory, ".aspire", "modules");
+    options.UpdateImportedRepositories = true;
+    options.Modules[OrdersModule.Name] = new DistributedApplicationModuleOptions
+    {
+        Repository = "https://github.com/example/orders.git",
+        RepositoryRevision = "v2.0.0",
+        PublishImages = false
+    };
+});
+```
+
 Managed repository synchronization buffers clone, fetch, checkout, and pull progress and replays it through Aspire's resource logging service so it appears with the module resource in the dashboard. Discovery and cloning that must finish while constructing the application model continue to stream to the AppHost output. Deferred synchronization before startup honors startup cancellation, and every repository operation is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
 
 ## Repository imports
@@ -297,7 +317,7 @@ Override the base directory through the options section:
 }
 ```
 
-Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repository` are modeled with `AddParameterFromConfiguration`. If that key, the module definition, and programmatic options are all missing, the same required parameter uses Aspire's interaction service to ask for the repository in interactive environments, except for repository-backed generic factories as noted above. Non-interactive runs and deployment pipelines provide the options key through normal configuration, such as `Aspire__ModularAppHosts__Modules__orders__Repository`. Use `DistributedApplicationModuleExtensions.GetRepositoryParameterName(repository, moduleName)` when the repository is known, the one-argument fallback for unresolved interactive imports, and `GetRepositoryConfigurationKey(moduleName)` for the configuration key.
+Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repository` are modeled with `AddParameterFromConfiguration`. If that key, the module definition, and programmatic options are all missing, the same required parameter uses Aspire's interaction service to ask for the repository in interactive environments, except for repository-backed generic factories as noted above. Non-interactive runs and deployment pipelines provide the options key through normal configuration, such as `Aspire__ModularAppHosts__Modules__orders__Repository`. Use `builder.GetRepositoryParameterName(repository, moduleName)` when the repository is known, the one-argument fallback for unresolved interactive imports, and `GetRepositoryConfigurationKey(moduleName)` for the configuration key. The builder is required so relative repository identities use `builder.AppHostDirectory`, matching materialization even when Aspire was launched elsewhere with `--apphost`.
 
 `RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
@@ -322,6 +342,6 @@ gh repo clone <repository> <sibling-path> -- --recurse-submodules
 
 This feature is off by default, so `gh` is only a runtime dependency when it is enabled and a sibling is missing. `GitHubCliPath` can select another executable path. Authentication, host selection, and credentials remain GitHub CLI concerns; clone failures retain its diagnostic output.
 
-Because sibling cloning must finish before repository-backed Aspire resources are added to the model, an enabled missing sibling needs `Repository` from configuration, programmatic options, or `WithRepository`. It cannot wait for an interactive parameter response. Existing managed imports continue to use `RepositoryBasePath` and before-start synchronization when sibling discovery is disabled.
+Because sibling cloning must finish before repository-backed Aspire resources are added to the model, an enabled missing sibling needs `Repository` from configuration, programmatic options, or `WithRepository`. It cannot wait for an interactive parameter response. Existing managed imports continue to use `RepositoryBasePath` when sibling discovery is disabled. Synchronization happens during model construction when a repository-backed factory or default image identity needs the checkout immediately; other imports can defer it until before startup.
 
 See the [Two-AppHost sample](../samples/README.md) for a complete local and imported module.

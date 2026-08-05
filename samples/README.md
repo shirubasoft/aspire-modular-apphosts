@@ -30,8 +30,8 @@ AppHost B imports every resource
 The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project and generated-container exports supply the exact commands that produce their configured images:
 
 ```text
-<docker|podman> build --tag modular-sample-api:<sanitized-branch> .
-<docker|podman> build --tag modular-sample-static:<sanitized-branch> .
+<docker|podman> build --tag modular-sample-api:<sanitized-branch>-<12-character-commit> .
+<docker|podman> build --tag modular-sample-static:<sanitized-branch>-<12-character-commit> .
 ```
 
 For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
@@ -60,7 +60,7 @@ AppHost A materializes its local module and opts into the module-declared image 
 Stop AppHost A, then run the importing host:
 
 ```bash
-cd samples/AppHostB
+cd ../AppHostB
 aspire run
 ```
 

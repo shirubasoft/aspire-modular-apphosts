@@ -5,10 +5,11 @@
 - start the AppHost in the test process with `DistributedApplicationTestingBuilder`;
 - deploy the AppHost to Docker Compose with Aspire and represent the deployed services as a testing application.
 
-The package is separate so regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies.
+The package is separate so regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies. Install it in both the AppHost that declares the Docker Compose test environment and the test project that creates or deploys that environment.
 
 ```bash
-dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
+dotnet add path/to/AppHost.csproj package Shirubasoft.Aspire.ModularAppHosts.Testing
+dotnet add path/to/AppHost.Tests.csproj package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
 ## Export test configuration from the AppHost

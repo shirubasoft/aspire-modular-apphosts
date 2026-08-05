@@ -1,6 +1,6 @@
 # Shirubasoft.Aspire.ModularAppHosts
 
-Define an Aspire resource graph once and reuse it across AppHosts. A module can be added from the current application, imported from a managed Git checkout, and exposed through a generated strongly typed API.
+Define an Aspire resource graph once and reuse it across AppHosts. A module can be added from the current application, imported from a managed Git checkout, and exposed through a generated strongly typed API. Importing does not load a module definition from Git: every consumer references the producer-owned C# contract package, while the configured repository supplies only the source and build context needed to materialize that contract.
 
 ## Packages
 
@@ -16,7 +16,7 @@ Install the core package in AppHosts and shared module contracts:
 dotnet add package Shirubasoft.Aspire.ModularAppHosts
 ```
 
-The testing package is optional. Keeping it separate means regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies.
+The testing package is optional. Keeping it separate means regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies. Add it to both the AppHost that declares the test deployment environment and the test project that creates the deployment builder.
 
 ```bash
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
@@ -27,14 +27,15 @@ They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-
 
 ## Quick start
 
-Install the item-template package and scaffold a contract into an existing project that references the core package:
+Prerequisites are the .NET 10 SDK, Aspire CLI 13.4 or later, and a running Docker 28+ or Podman 5+ container runtime. In an existing AppHost or shared contract project, install the core package, install the item template, and scaffold a contract:
 
 ```bash
+dotnet add package Shirubasoft.Aspire.ModularAppHosts
 dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
 dotnet new aspire-module --name CatalogModule --moduleName catalog --namespace Catalog.Modules
 ```
 
-Declare a module in a shared contract. The generator creates typed properties for its resources:
+Replace the generated `CatalogModule.cs` content with this runnable contract. The generator creates typed properties for its resources:
 
 ```csharp
 using Aspire.Hosting;
@@ -50,9 +51,9 @@ public static partial class CatalogModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        module.AddContainer(ApiResourceName, "example/catalog-api", "latest")
+        module.AddContainer(ApiResourceName, "nginx", "alpine")
             .Configure(container =>
-                container.WithHttpEndpoint(targetPort: 8080, name: "http"));
+                container.WithHttpEndpoint(targetPort: 80, name: "http"));
     }
 }
 ```
@@ -64,12 +65,14 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var catalog = await CatalogModule.AddModuleAsync(builder);
 
-builder.AddContainer("storefront", "example/storefront", "latest")
+builder.AddContainer("storefront", "nginx", "alpine")
     .WithReference(catalog.Api.GetEndpoint("http"))
     .WaitFor(catalog.Api);
 
 await builder.Build().RunAsync();
 ```
+
+From the AppHost directory, run `aspire run`, open the dashboard URL printed by Aspire, and use the `catalog-api` endpoint to verify the module is running.
 
 For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `await CatalogModule.ImportModuleAsync(builder)`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
 

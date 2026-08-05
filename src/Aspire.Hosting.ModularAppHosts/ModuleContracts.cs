@@ -192,7 +192,7 @@ public sealed class ModuleContainerExportOptions(
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
 
     /// <summary>
-    /// Gets or sets the clean image tag. When omitted, the current repository branch is sanitized and used.
+    /// Gets or sets the clean image tag. When omitted, the sanitized repository branch and 12-character commit are used.
     /// The effective tag has <c>-dirty</c> appended for a dirty repository.
     /// </summary>
     public string? ImageTag { get; set; }
