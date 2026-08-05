@@ -146,7 +146,7 @@ internal sealed class DistributedApplicationModule(
 
         var repositoryRoots = _projects
             .Select(project => project.SourceRepositoryRoot)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(PathSafety.Comparer)
             .ToArray();
 
         if (repositoryRoots.Length > 1)

@@ -48,18 +48,25 @@ public static partial class DistributedApplicationModuleExtensions
     }
 
     /// <summary>Gets the Aspire parameter name used when an imported module has no configured repository.</summary>
-    public static string GetRepositoryParameterName(string moduleName)
+    public static string GetRepositoryParameterName(
+        this IDistributedApplicationBuilder builder,
+        string moduleName)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(null, moduleName, Directory.GetCurrentDirectory())}-repository";
+        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(null, moduleName, builder.AppHostDirectory)}-repository";
     }
 
     /// <summary>Gets the repository-specific Aspire parameter name used to import a module.</summary>
-    public static string GetRepositoryParameterName(string repository, string moduleName)
+    public static string GetRepositoryParameterName(
+        this IDistributedApplicationBuilder builder,
+        string repository,
+        string moduleName)
     {
+        ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(repository, moduleName, Directory.GetCurrentDirectory())}-repository";
+        return $"module-{ModuleRepositoryIdentity.GetCanonicalName(repository, moduleName, builder.AppHostDirectory)}-repository";
     }
 
     /// <summary>Gets the configuration key used to resolve an imported module's Git repository.</summary>
@@ -309,14 +316,22 @@ public static partial class DistributedApplicationModuleExtensions
              (imported && factoryRequiresRepository)) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             !string.IsNullOrWhiteSpace(repository);
-        var synchronizedRepository = synchronizationRequired &&
-            (factoryRequiresRepository ||
+        var repositoryPathIsGit = synchronizationRequired &&
+            await RepositoryInspector.IsGitRepositoryAsync(
+                repositoryPath,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        var repositoryCanSupplyImageTag = synchronizationRequired &&
+            RequiresRepositoryImageTag(module, options, moduleOptions, imported) &&
+            (GitHubRepositoryCloner.IsRemoteRepository(repository!, builder.AppHostDirectory) ||
              await RepositoryInspector.IsGitRepositoryAsync(
-                 repositoryPath,
+                 repository!,
                  GetConfiguredValue(options.GitExecutablePath) ?? "git",
                  options.RepositoryCommandTimeout,
                  cancellationToken: cancellationToken).ConfigureAwait(false));
-        if (synchronizedRepository)
+        if (synchronizationRequired &&
+            (factoryRequiresRepository || repositoryPathIsGit || repositoryCanSupplyImageTag))
         {
             await registry.SynchronizeRepositoryAsync(
                 repositorySynchronizationKey,
@@ -889,8 +904,8 @@ public static partial class DistributedApplicationModuleExtensions
         string configurationKey)
     {
         var parameterName = string.IsNullOrWhiteSpace(repository)
-            ? GetRepositoryParameterName(moduleName)
-            : $"module-{ModuleRepositoryIdentity.GetCanonicalName(repository, moduleName, builder.AppHostDirectory)}-repository";
+            ? builder.GetRepositoryParameterName(moduleName)
+            : builder.GetRepositoryParameterName(repository, moduleName);
         if (!builder.TryCreateResourceBuilder<ParameterResource>(parameterName, out var parameter))
         {
             parameter = builder
@@ -1134,6 +1149,26 @@ public static partial class DistributedApplicationModuleExtensions
 
         DistributedApplicationModuleProjectOptions? projectOptions(DistributedApplicationModuleProject project) =>
             moduleOptions?.FindProject(project.Name);
+    }
+
+    private static bool RequiresRepositoryImageTag(
+        DistributedApplicationModule module,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        bool imported)
+    {
+        return module.ResourceDefinitions.Any(definition => definition switch
+        {
+            DistributedApplicationModuleProject project =>
+                ResolveProjectMode(options, moduleOptions, moduleOptions?.FindProject(project.Name), imported) ==
+                    ModuleProjectMode.Container &&
+                GetConfiguredValue(moduleOptions?.FindProject(project.Name)?.ImageTag) is null &&
+                GetConfiguredValue(project.Export.Options.ImageTag) is null,
+            DistributedApplicationModuleContainer container when container.ImagePublishOptions is not null =>
+                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.ImageTag) is null &&
+                GetConfiguredValue(container.ImagePublishOptions.ImageTag) is null,
+            _ => false
+        });
     }
 
     private static ModuleProjectMode ResolveProjectMode(

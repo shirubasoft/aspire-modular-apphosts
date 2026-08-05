@@ -407,7 +407,14 @@ internal static class GitHubRepositoryCloner
         var firstIdentity = GetRemoteIdentity(first, baseDirectory);
         var secondIdentity = GetRemoteIdentity(second, baseDirectory);
         return firstIdentity is not null && secondIdentity is not null &&
-            string.Equals(firstIdentity, secondIdentity, StringComparison.OrdinalIgnoreCase);
+            string.Equals(firstIdentity.Host, secondIdentity.Host, StringComparison.OrdinalIgnoreCase) &&
+            firstIdentity.Port == secondIdentity.Port &&
+            string.Equals(
+                firstIdentity.Path,
+                secondIdentity.Path,
+                IsCaseInsensitiveRepositoryHost(firstIdentity.Host)
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal);
     }
 
     public static bool IsRemoteRepository(string repository, string baseDirectory)
@@ -531,7 +538,7 @@ internal static class GitHubRepositoryCloner
         return name;
     }
 
-    private static string? GetRemoteIdentity(string repository, string baseDirectory)
+    private static RepositoryRemoteIdentity? GetRemoteIdentity(string repository, string baseDirectory)
     {
         if (!IsRemoteRepository(repository, baseDirectory))
         {
@@ -539,26 +546,46 @@ internal static class GitHubRepositoryCloner
         }
 
         var value = repository.Trim().TrimEnd('/');
-        string identity;
+        string host;
+        int? port = null;
+        string path;
         if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
-            identity = $"{uri.Host}/{uri.AbsolutePath.Trim('/')}";
+            host = uri.IdnHost;
+            port = IsDefaultRepositoryPort(uri.Scheme, uri.Port) ? null : uri.Port;
+            path = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped).Trim('/');
         }
         else if (value.IndexOf(':', StringComparison.Ordinal) is var colon && colon >= 0)
         {
             var hostStart = value.LastIndexOf('@', colon);
-            var host = value[(hostStart >= 0 ? hostStart + 1 : 0)..colon];
-            identity = $"{host}/{value[(colon + 1)..].Trim('/')}";
+            host = value[(hostStart >= 0 ? hostStart + 1 : 0)..colon];
+            path = value[(colon + 1)..].Trim('/');
         }
         else
         {
-            identity = $"github.com/{value.Trim('/')}";
+            host = "github.com";
+            path = value.Trim('/');
         }
 
-        return identity.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
-            ? identity[..^4]
-            : identity;
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            path = path[..^4];
+        }
+
+        return new RepositoryRemoteIdentity(host, port, path);
     }
+
+    private static bool IsCaseInsensitiveRepositoryHost(string host) =>
+        string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsDefaultRepositoryPort(string scheme, int port) =>
+        port < 0 ||
+        (string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) && port == 80) ||
+        (string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) && port == 443) ||
+        (string.Equals(scheme, "ssh", StringComparison.OrdinalIgnoreCase) && port == 22) ||
+        (string.Equals(scheme, "git", StringComparison.OrdinalIgnoreCase) && port == 9418);
+
+    private sealed record RepositoryRemoteIdentity(string Host, int? Port, string Path);
 }
 
 internal sealed record ModuleRepositoryResolution(

@@ -30,6 +30,32 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public void Repository_identity_includes_non_default_ports()
+    {
+        Assert.False(GitHubRepositoryCloner.RefersToSameRepository(
+            "ssh://git@example.test:2222/acme/orders.git",
+            "ssh://git@example.test:3333/acme/orders.git",
+            Path.GetTempPath()));
+        Assert.True(GitHubRepositoryCloner.RefersToSameRepository(
+            "ssh://git@example.test:22/acme/orders.git",
+            "git@example.test:acme/orders.git",
+            Path.GetTempPath()));
+    }
+
+    [Fact]
+    public void Repository_path_casing_is_host_specific()
+    {
+        Assert.True(GitHubRepositoryCloner.RefersToSameRepository(
+            "https://github.com/Acme/Orders.git",
+            "git@github.com:acme/orders.git",
+            Path.GetTempPath()));
+        Assert.False(GitHubRepositoryCloner.RefersToSameRepository(
+            "https://git.example.test/Acme/Orders.git",
+            "git@git.example.test:acme/orders.git",
+            Path.GetTempPath()));
+    }
+
+    [Fact]
     public void GitHub_clone_command_forwards_submodule_checkout_to_gh()
     {
         var target = Path.Combine(Path.GetTempPath(), "modules", "orders");
