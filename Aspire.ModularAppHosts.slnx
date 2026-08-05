@@ -20,6 +20,9 @@
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
   </Folder>
+  <Folder Name="/templates/">
+    <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
+  </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />
     <Project Path="samples/AppHostA/Api/ModularSample.Api.csproj" />

@@ -41,6 +41,9 @@ dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.cs
 dotnet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj \
   --configuration Release --no-build --no-restore --output artifacts \
   "${package_version_arguments[@]}"
+dotnet pack templates/Aspire.Hosting.ModularAppHosts.Templates.csproj \
+  --configuration Release --no-build --no-restore --output artifacts \
+  "${package_version_arguments[@]}"
 
 if [[ "$run_containers" == true ]]; then
   Parameters__orders_api_key=e2e-orders-key \

@@ -9,8 +9,8 @@ public static partial class CatalogModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        module.AddContainer(ApiResourceName, "example/catalog-api", "latest")
+        module.AddContainer(ApiResourceName, "nginx", "alpine")
             .Configure(container => container
-                .WithHttpEndpoint(targetPort: 8080, name: "http"));
+                .WithHttpEndpoint(targetPort: 80, name: "http"));
     }
 }

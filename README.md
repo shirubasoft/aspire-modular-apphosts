@@ -8,6 +8,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | --- | --- |
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
+| `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -26,10 +27,10 @@ They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-
 
 ## Quick start
 
-Install the repository's item template and scaffold a contract into an existing project that references the core package:
+Install the item-template package and scaffold a contract into an existing project that references the core package:
 
 ```bash
-dotnet new install ./templates/aspire-module
+dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
 dotnet new aspire-module --name CatalogModule --moduleName catalog
 ```
 

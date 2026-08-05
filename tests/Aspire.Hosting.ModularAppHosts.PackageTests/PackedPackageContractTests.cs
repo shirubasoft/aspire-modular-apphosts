@@ -11,6 +11,7 @@ public sealed class PackedPackageContractTests
 {
     private const string CorePackageId = "Shirubasoft.Aspire.ModularAppHosts";
     private const string TestingPackageId = "Shirubasoft.Aspire.ModularAppHosts.Testing";
+    private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
     private static PackageArtifacts? _packageArtifacts;
 
@@ -49,7 +50,12 @@ public sealed class PackedPackageContractTests
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
 
-        foreach (var packagePath in new[] { packages.CorePackagePath, packages.TestingPackagePath })
+        foreach (var packagePath in new[]
+                 {
+                     packages.CorePackagePath,
+                     packages.TestingPackagePath,
+                     packages.TemplatePackagePath
+                 })
         {
             var metadata = ReadMetadata(packagePath);
             Assert.Equal("MIT", metadata.LicenseExpression);
@@ -146,7 +152,7 @@ public sealed class PackedPackageContractTests
     [Fact]
     public async Task Module_item_template_scaffolds_a_named_versioned_contract()
     {
-        var repositoryRoot = FindRepositoryRoot();
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
         var workingDirectory = Path.Combine(
             Path.GetTempPath(),
             $"aspire-module-template-tests-{Guid.NewGuid():N}");
@@ -155,15 +161,15 @@ public sealed class PackedPackageContractTests
         Directory.CreateDirectory(workingDirectory);
 
         await RunDotNetAsync(
-            repositoryRoot,
+            packages.RepositoryRoot,
             TestContext.Current.CancellationToken,
             "new",
             "install",
-            "templates/aspire-module",
+            packages.TemplatePackagePath,
             "--debug:custom-hive",
             hivePath);
         await RunDotNetAsync(
-            repositoryRoot,
+            packages.RepositoryRoot,
             TestContext.Current.CancellationToken,
             "new",
             "aspire-module",
@@ -182,6 +188,8 @@ public sealed class PackedPackageContractTests
         Assert.Contains("partial class InventoryModule", source, StringComparison.Ordinal);
         Assert.Contains("public const string Name = \"inventory\";", source, StringComparison.Ordinal);
         Assert.Contains("Version = \"1\"", source, StringComparison.Ordinal);
+        Assert.Contains("module.AddContainer(ApiResourceName, \"nginx\", \"alpine\")", source, StringComparison.Ordinal);
+        Assert.Contains("targetPort: 80", source, StringComparison.Ordinal);
         Assert.DoesNotContain("catalog-module-name", source, StringComparison.Ordinal);
     }
 
@@ -229,6 +237,17 @@ public sealed class PackedPackageContractTests
                 "--output",
                 outputPath,
                 $"-p:PackageVersion={version}");
+            await RunDotNetAsync(
+                repositoryRoot,
+                cancellationToken,
+                "pack",
+                "templates/Aspire.Hosting.ModularAppHosts.Templates.csproj",
+                "--configuration",
+                "Release",
+                "--no-restore",
+                "--output",
+                outputPath,
+                $"-p:PackageVersion={version}");
 
             return _packageArtifacts = new PackageArtifacts(
                 repositoryRoot,
@@ -236,6 +255,7 @@ public sealed class PackedPackageContractTests
                 version,
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"),
+                Path.Combine(outputPath, $"{TemplatePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.snupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"));
         }
@@ -372,6 +392,7 @@ public sealed class PackedPackageContractTests
         string Version,
         string CorePackagePath,
         string TestingPackagePath,
+        string TemplatePackagePath,
         string CoreSymbolPackagePath,
         string TestingSymbolPackagePath);
 

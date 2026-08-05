@@ -4,10 +4,10 @@
 
 ## Define and materialize a module
 
-To scaffold the first contract into an existing project that references the core package, install the repository item template and choose the C# type name and stable module identity:
+To scaffold the first contract into an existing project that references the core package, install the item-template package and choose the C# type name and stable module identity:
 
 ```bash
-dotnet new install ./templates/aspire-module
+dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
 dotnet new aspire-module --name OrdersModule --moduleName orders
 ```
 
