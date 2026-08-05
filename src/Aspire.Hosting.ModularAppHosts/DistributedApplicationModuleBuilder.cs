@@ -1,11 +1,49 @@
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
 internal sealed class DistributedApplicationModuleBuilder(
     IDistributedApplicationBuilder applicationBuilder,
-    DistributedApplicationModule module) : IDistributedApplicationModuleBuilder
+    DistributedApplicationModule module,
+    ModuleApplicationRegistry registry) : IDistributedApplicationModuleBuilder
 {
+    public IConfiguration Configuration => applicationBuilder.Configuration;
+
+    public IConfigurationSection ConfigurationSection => Configuration.GetSection(
+        DistributedApplicationModuleExtensions.GetModuleConfigurationKey(module.Name));
+
+    public IOptions<TOptions> GetOptions<TOptions>()
+        where TOptions : class, new()
+    {
+        var options = new TOptions();
+        ConfigurationSection.Bind(options);
+        return Options.Create(options);
+    }
+
+    public IDistributedApplicationModule GetRequiredModule(string name, string version)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+
+        if (!registry.TryGetDefinition(name, out var referencedModule) || referencedModule is null)
+        {
+            throw new InvalidOperationException(
+                $"Module '{module.Name}' requires module '{name}' with contract version '{version}', but it has not " +
+                "been defined. Add or import the required module first.");
+        }
+
+        if (!string.Equals(referencedModule.Version, version, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Module '{module.Name}' requires module '{name}' with contract version '{version}', but version " +
+                $"'{referencedModule.Version}' is defined.");
+        }
+
+        return referencedModule;
+    }
+
     public IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)

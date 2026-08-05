@@ -64,7 +64,7 @@ Add the module and use its generated resources like ordinary Aspire resource bui
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-var catalog = await CatalogModule.AddModuleAsync(builder);
+var catalog = await builder.AddCatalogModuleAsync();
 
 builder.AddContainer("storefront", "nginx", "alpine")
     .WithReference(catalog.Api.GetEndpoint("http"))
@@ -75,7 +75,9 @@ await builder.Build().RunAsync();
 
 From the AppHost directory, run `aspire run`, open the dashboard URL printed by Aspire, and use the `catalog-api` endpoint to verify the module is running.
 
-For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `await CatalogModule.ImportModuleAsync(builder)`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
+For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `await builder.ImportCatalogModuleAsync()`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
+
+Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
 
 By default, local modules run as projects, imported modules run as containers, and existing clean imported repositories are fast-forwarded before startup. Image build commands remain opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
 

@@ -205,6 +205,10 @@ public sealed class PackedPackageContractTests
             {
                 public static System.Type GeneratedModuleType => typeof(OrdersModule.Module);
 
+                public static System.Threading.Tasks.Task<OrdersModule.Module> ImportAsync(
+                    Aspire.Hosting.IDistributedApplicationBuilder builder) =>
+                    builder.ImportOrdersModuleAsync();
+
                 public static ModularAppHostsOptions AutoCloneOptions => new()
                 {
                     AutoCloneRepositories = true,

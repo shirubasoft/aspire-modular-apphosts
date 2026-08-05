@@ -1,4 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
@@ -41,6 +43,19 @@ public sealed class ModuleImportOptions
 /// <summary>Builds an <see cref="IDistributedApplicationModule"/> definition.</summary>
 public interface IDistributedApplicationModuleBuilder
 {
+    /// <summary>Gets the receiving AppHost configuration.</summary>
+    IConfiguration Configuration { get; }
+
+    /// <summary>Gets the conventional configuration section for the module being defined.</summary>
+    IConfigurationSection ConfigurationSection { get; }
+
+    /// <summary>Gets options bound from <see cref="ConfigurationSection"/>.</summary>
+    IOptions<TOptions> GetOptions<TOptions>()
+        where TOptions : class, new();
+
+    /// <summary>Gets a previously defined module with the required contract version.</summary>
+    IDistributedApplicationModule GetRequiredModule(string name, string version);
+
     /// <summary>
     /// Adds any Aspire resource type through a factory that runs when the module is materialized.
     /// </summary>

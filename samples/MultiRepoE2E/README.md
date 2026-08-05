@@ -9,8 +9,8 @@ The contract declares:
 
 - the `multi-repo-api` container and HTTP health check;
 - `bash build-image.sh <resolved-image-reference>` as its image build command;
-- `MULTI_REPO_RESOURCE_BUILD_REPOSITORY` as the build repository; and
-- `MULTI_REPO_RESOURCE_BUILD_REVISION` as the requested Git revision; CI supplies a full commit SHA.
+- module-scoped `IOptions<SpireModuleOptions>` for the build repository and optional revision; and
+- an `appsettings.json` default that uses the checked-in build fixture without environment variables.
 
 [`ResourceBuildRepository`](ResourceBuildRepository) is source material for the independent
 repository used by the fixture. It owns only a Dockerfile, its build script, and the HTTP health and
@@ -43,33 +43,17 @@ stops cleanly.
 
 ## Run manually
 
-Create an independent repository from the fixture, capture its revision, and expose both values to
-the AppHost:
+From the repository root, start the AppHost. Its normal configuration points the module at the
+checked-in build fixture, and the build script selects a running Docker or Podman installation:
 
 ```bash
-resource_repository="$(mktemp -d)"
-cp -R samples/MultiRepoE2E/ResourceBuildRepository/. "$resource_repository/"
-git -C "$resource_repository" init --initial-branch main
-git -C "$resource_repository" config user.name "MultiRepo E2E"
-git -C "$resource_repository" config user.email "multi-repo@example.invalid"
-git -C "$resource_repository" add .
-git -C "$resource_repository" commit -m "Add resource build inputs"
-
-export MULTI_REPO_RESOURCE_BUILD_REPOSITORY="$resource_repository"
-export MULTI_REPO_RESOURCE_BUILD_REVISION="$(git -C "$resource_repository" rev-parse HEAD)"
-export ASPIRE_CONTAINER_RUNTIME=docker
-
-dotnet tool restore
-dotnet tool run aspire -- start \
-  --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost \
-  --non-interactive
-dotnet tool run aspire -- wait multi-repo-api \
-  --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost \
-  --timeout 180 \
-  --non-interactive
-dotnet tool run aspire -- stop \
-  --apphost samples/MultiRepoE2E/Spire.Consumer.AppHost \
-  --non-interactive
+cd samples/MultiRepoE2E/Spire.Consumer.AppHost
+aspire run
 ```
+
+For an independent checkout or pinned build, set `BuildRepository` and
+`BuildRepositoryRevision` under
+`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` through JSON, command-line, or another
+standard .NET configuration provider.
 
 The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, Bash, Docker, `curl`, and `jq`.

@@ -31,6 +31,13 @@ public sealed class DistributedApplicationModuleGeneratorTests
                         throw new System.NotSupportedException());
                 }
             }
+
+            public static class Consumer
+            {
+                public static System.Threading.Tasks.Task<OrdersModule.Module> ImportAsync(
+                    Aspire.Hosting.IDistributedApplicationBuilder builder) =>
+                    builder.ImportOrdersModuleAsync();
+            }
             """;
 
         var result = RunGenerator(source);
@@ -38,10 +45,11 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var generated = Assert.Single(result.GeneratedSources);
-        Assert.Contains("Task<Module> AddModuleAsync(", generated);
+        Assert.Contains("Task<Module> AddOrdersModuleAsync(", generated);
+        Assert.Contains("this global::Aspire.Hosting.IDistributedApplicationBuilder builder", generated);
         Assert.Contains("DefineModuleAsync(builder, \"orders\", \"2\", Define, cancellationToken)", generated);
-        Assert.Contains("return await AddModuleAsync(builder, module, cancellationToken)", generated);
-        Assert.Contains("Task<Module> ImportModuleAsync(", generated);
+        Assert.Contains("return await AddOrdersModuleAsync(builder, module, cancellationToken)", generated);
+        Assert.Contains("Task<Module> ImportOrdersModuleAsync(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
         Assert.Contains("Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
@@ -52,6 +60,44 @@ public sealed class DistributedApplicationModuleGeneratorTests
             typeof(DistributedApplicationModuleGenerator).Assembly.GetName().Version!.ToString(),
             generated,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generator_creates_a_strongly_typed_reference_for_use_in_other_module_definitions()
+    {
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            namespace GeneratedSample;
+
+            [GenerateDistributedApplicationModule("catalog", Version = "2")]
+            public static partial class CatalogModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("api", "catalog");
+                }
+            }
+
+            [GenerateDistributedApplicationModule("orders")]
+            public static partial class OrdersModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    var catalog = CatalogModule.Reference(module);
+                    _ = catalog.Api;
+                    module.AddContainer("api", "orders");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Contains(result.GeneratedSources, generated =>
+            generated.Contains("public static Module Reference(", StringComparison.Ordinal) &&
+            generated.Contains("GetRequiredModule(\"catalog\", \"2\")", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -333,8 +379,9 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Theory]
-    [InlineData("public static void AddModuleAsync() { }", "AddModuleAsync")]
-    [InlineData("public static int ImportModuleAsync => 0;", "ImportModuleAsync")]
+    [InlineData("public static void AddInvalidModuleAsync() { }", "AddInvalidModuleAsync")]
+    [InlineData("public static int ImportInvalidModuleAsync => 0;", "ImportInvalidModuleAsync")]
+    [InlineData("public static void Reference() { }", "Reference")]
     [InlineData("public sealed class Module { }", "Module")]
     public void Generator_rejects_members_reserved_for_the_generated_api(
         string member,
@@ -381,7 +428,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
             result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Id == "SAMHSG006"));
         Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
         var generated = Assert.Single(result.GeneratedSources);
-        Assert.Contains("Task<Module> AddModuleAsync(", generated);
+        Assert.Contains("Task<Module> AddEmptyModuleAsync(", generated);
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
     }
 
@@ -416,6 +463,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("> _2faService =>", generated);
         Assert.Contains("> OrderItems =>", generated);
         Assert.Contains("> Resource =>", generated);
+        Assert.Contains("Task<Module> ImportClassAsync(", generated);
         Assert.Contains("ImportModuleAsync(builder, \"orders\\\"north\\\\region\\n\", options, cancellationToken)", generated);
     }
 

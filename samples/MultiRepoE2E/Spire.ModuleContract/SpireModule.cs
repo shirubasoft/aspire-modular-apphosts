@@ -10,13 +10,15 @@ public static partial class SpireModule
     public const string Name = "multi-repo-resource-build";
     public const string ApiResourceName = "multi-repo-api";
     public const string ImageName = "multi-repo-e2e-resource";
-    public const string BuildRepositoryEnvironmentName = "MULTI_REPO_RESOURCE_BUILD_REPOSITORY";
-    public const string BuildRevisionEnvironmentName = "MULTI_REPO_RESOURCE_BUILD_REVISION";
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        var buildRepository = GetRequiredEnvironmentVariable(BuildRepositoryEnvironmentName);
-        var buildRevision = GetRequiredEnvironmentVariable(BuildRevisionEnvironmentName);
+        var options = module.GetOptions<SpireModuleOptions>().Value;
+        if (string.IsNullOrWhiteSpace(options.BuildRepository))
+        {
+            throw new InvalidOperationException(
+                $"Configure '{module.ConfigurationSection.Path}:BuildRepository'.");
+        }
 
         module.AddContainer(ApiResourceName, ImageName)
             .WithImagePublishCommand(new ModuleContainerExportOptions(
@@ -28,8 +30,8 @@ public static partial class SpireModule
                     ModuleContainerExportOptions.ImageReferencePlaceholder
                 ])
             {
-                BuildRepository = buildRepository,
-                BuildRepositoryRevision = buildRevision,
+                BuildRepository = options.BuildRepository,
+                BuildRepositoryRevision = options.BuildRepositoryRevision,
                 WorkingDirectory = "."
             })
             .Configure(container => container
@@ -37,9 +39,11 @@ public static partial class SpireModule
                 .WithExternalHttpEndpoints()
                 .WithHttpHealthCheck("/health.txt"));
     }
+}
 
-    private static string GetRequiredEnvironmentVariable(string name) =>
-        Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
-            ? value
-            : throw new InvalidOperationException($"Environment variable '{name}' is required.");
+public sealed class SpireModuleOptions
+{
+    public string BuildRepository { get; set; } = string.Empty;
+
+    public string? BuildRepositoryRevision { get; set; }
 }

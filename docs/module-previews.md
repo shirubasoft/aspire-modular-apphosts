@@ -309,7 +309,7 @@ var resolutionPath = builder.Configuration["ModulePreview:Resolution"]
     ?? throw new InvalidOperationException("ModulePreview:Resolution is required.");
 await builder.ApplyModulePreviewResolutionAsync(resolutionPath);
 
-await ModuleCModule.ImportModuleAsync(builder);
+await builder.ImportModuleCModuleAsync();
 await builder.Build().RunAsync();
 ```
 

@@ -96,6 +96,48 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Module_builder_exposes_configuration_bound_options_and_required_modules()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var dependency = await builder.DefineModuleAsync("catalog", "2", definition =>
+            definition.AddContainer("catalog-api", "catalog"));
+        var sectionKey = DistributedApplicationModuleExtensions.GetModuleConfigurationKey("orders");
+        builder.Configuration[$"{sectionKey}:Region"] = "south-america";
+
+        await builder.DefineModuleAsync("orders", "1", definition =>
+        {
+            Assert.Same(builder.Configuration, definition.Configuration);
+            Assert.Equal(sectionKey, definition.ConfigurationSection.Path);
+            Assert.Equal("south-america", definition.GetOptions<TestModuleOptions>().Value.Region);
+            Assert.Same(dependency, definition.GetRequiredModule("catalog", "2"));
+            definition.AddContainer("orders-api", "orders");
+        });
+    }
+
+    [Fact]
+    public async Task Required_module_reports_missing_and_incompatible_contracts()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var missingBuilder = CreateBuilder(repository.Path);
+
+        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            missingBuilder.DefineModuleAsync("orders", "1", definition =>
+                definition.GetRequiredModule("catalog", "2")));
+        Assert.Contains("has not been defined", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("Add or import the required module first", missing.Message, StringComparison.Ordinal);
+
+        var incompatibleBuilder = CreateBuilder(repository.Path);
+        await incompatibleBuilder.DefineModuleAsync("catalog", "1", definition =>
+            definition.AddContainer("catalog-api", "catalog"));
+        var incompatible = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            incompatibleBuilder.DefineModuleAsync("orders", "1", definition =>
+                definition.GetRequiredModule("catalog", "2")));
+        Assert.Contains("version '2'", incompatible.Message, StringComparison.Ordinal);
+        Assert.Contains("version '1' is defined", incompatible.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ImportModule_applies_prefixes_and_per_resource_aliases_without_changing_typed_lookup_names()
     {
         using var repository = await TestRepository.CreateAsync();
@@ -2042,6 +2084,11 @@ public sealed class DistributedApplicationModuleExtensionsTests
             nameof(ModuleProjectMode.Container);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "true";
         return builder;
+    }
+
+    private sealed class TestModuleOptions
+    {
+        public string? Region { get; set; }
     }
 
     private sealed class TestRepository : IDisposable

@@ -72,8 +72,14 @@ public static partial class DistributedApplicationModuleExtensions
     /// <summary>Gets the configuration key used to resolve an imported module's Git repository.</summary>
     public static string GetRepositoryConfigurationKey(string moduleName)
     {
+        return $"{GetModuleConfigurationKey(moduleName)}:Repository";
+    }
+
+    /// <summary>Gets the conventional configuration section key for a module.</summary>
+    public static string GetModuleConfigurationKey(string moduleName)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        return $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:{moduleName}:Repository";
+        return $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:{moduleName}";
     }
 
     /// <summary>Exports a named module definition without adding its services to the application model.</summary>
@@ -118,7 +124,7 @@ public static partial class DistributedApplicationModuleExtensions
 
             var gitExecutablePath = GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git";
             var module = new DistributedApplicationModule(builder, name, version);
-            moduleBuilder(new DistributedApplicationModuleBuilder(builder, module));
+            moduleBuilder(new DistributedApplicationModuleBuilder(builder, module, registry));
             await module.ValidateAsync(
                 gitExecutablePath,
                 registry.Options.RepositoryCommandTimeout,

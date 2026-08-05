@@ -265,6 +265,8 @@ jobs:
           echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository" >> "$GITHUB_ENV"
           echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision" >> "$GITHUB_ENV"
           echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision" >> "$GITHUB_ENV"
+          echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepository=$resource_repository" >> "$GITHUB_ENV"
+          echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepositoryRevision=$resource_revision" >> "$GITHUB_ENV"
           echo "SpireContractPackageVersion=$package_version" >> "$GITHUB_ENV"
           echo "RestoreAdditionalProjectSources=$package_feed" >> "$GITHUB_ENV"
 

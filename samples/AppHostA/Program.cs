@@ -5,7 +5,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 builder.BuildModuleImages();
 
 var exported = await AppHostAModule.RegisterAsync(builder, builder.AppHostDirectory);
-var module = await AppHostAModule.AddModuleAsync(builder, exported);
+var module = await builder.AddAppHostAModuleAsync(exported);
 
 _ = module.Api;
 _ = module.Project;
