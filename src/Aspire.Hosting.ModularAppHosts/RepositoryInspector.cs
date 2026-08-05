@@ -176,21 +176,33 @@ internal static class GitHubRepositoryCloner
             workingDirectory);
     }
 
-    public static void Clone(string executable, string repository, string repositoryPath)
+    public static void Clone(
+        string executable,
+        string repository,
+        string repositoryPath,
+        TimeSpan? commandTimeout = null)
     {
         var command = CreateCommand(executable, repository, repositoryPath);
         Directory.CreateDirectory(command.WorkingDirectory);
 
-        BufferedCommandResult result;
+        ModuleCliResult result;
         try
         {
-            result = CliCommand.Wrap(command.Executable)
-                .WithArguments(command.Arguments)
-                .WithWorkingDirectory(command.WorkingDirectory)
-                .WithValidation(CommandResultValidation.None)
-                .ExecuteBufferedAsync()
+            result = ModuleCliRunner.RunAsync(
+                    command.Executable,
+                    command.Arguments,
+                    command.WorkingDirectory,
+                    commandTimeout ?? TimeSpan.FromMinutes(2),
+                    $"clone {repository}",
+                    CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
+        }
+        catch (TimeoutException exception)
+        {
+            throw new InvalidOperationException(
+                $"Automatic module cloning of '{repository}' timed out while using '{executable}'.",
+                exception);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
@@ -283,7 +295,8 @@ internal static class ModuleRepositoryDiscovery
         string appHostDirectory,
         DistributedApplicationModule module,
         string? repository,
-        string githubCliPath)
+        string githubCliPath,
+        TimeSpan? commandTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         ArgumentNullException.ThrowIfNull(module);
@@ -350,7 +363,7 @@ internal static class ModuleRepositoryDiscovery
                 $"{DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(module.Name)} or WithRepository().");
         }
 
-        GitHubRepositoryCloner.Clone(githubCliPath, repository, siblingPath);
+        GitHubRepositoryCloner.Clone(githubCliPath, repository, siblingPath, commandTimeout);
         EnsureExpectedOrigin(siblingPath, repository, appHostDirectory, module.Name);
         return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
     }
@@ -450,9 +463,10 @@ internal static class RepositorySynchronizer
         string repositoryPath,
         string? repository,
         bool updateRepository,
-        string? revision = null)
+        string? revision = null,
+        string gitExecutablePath = "git")
     {
-        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision);
+        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision, gitExecutablePath);
         return commands.Count == 0 ? null : commands[0];
     }
 
@@ -460,7 +474,8 @@ internal static class RepositorySynchronizer
         string repositoryPath,
         string? repository,
         bool updateRepository,
-        string? revision = null)
+        string? revision = null,
+        string gitExecutablePath = "git")
     {
         if (!RepositoryInspector.IsGitRepository(repositoryPath))
         {
@@ -480,9 +495,9 @@ internal static class RepositorySynchronizer
 
             var commands = new List<RepositorySyncCommand>
             {
-                new("git", ["clone", "--recurse-submodules", "--", repository, repositoryPath])
+                new(gitExecutablePath, ["clone", "--recurse-submodules", "--", repository, repositoryPath])
             };
-            AddRevisionCommands(commands, repositoryPath, revision);
+            AddRevisionCommands(commands, repositoryPath, revision, gitExecutablePath);
             return commands;
         }
 
@@ -497,13 +512,13 @@ internal static class RepositorySynchronizer
         if (!string.IsNullOrWhiteSpace(revision))
         {
             var commands = new List<RepositorySyncCommand>();
-            AddRevisionCommands(commands, repositoryPath, revision);
+            AddRevisionCommands(commands, repositoryPath, revision, gitExecutablePath);
             return commands;
         }
 
         return updateRepository
             ? [new RepositorySyncCommand(
-                "git",
+                gitExecutablePath,
                 ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])]
             : [];
     }
@@ -513,17 +528,28 @@ internal static class RepositorySynchronizer
         string? repository,
         bool updateRepository,
         CancellationToken cancellationToken,
-        string? revision = null)
+        string? revision = null,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null,
+        Action<string>? progress = null)
     {
-        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision);
+        var commands = CreateCommands(
+            repositoryPath,
+            repository,
+            updateRepository,
+            revision,
+            gitExecutablePath);
         foreach (var command in commands)
         {
-            var result = await CliCommand.Wrap(command.Executable)
-                .WithArguments(command.Arguments)
-                .WithWorkingDirectory(Path.GetDirectoryName(repositoryPath)
-                    ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."))
-                .WithValidation(CommandResultValidation.None)
-                .ExecuteBufferedAsync(cancellationToken);
+            var result = await ModuleCliRunner.RunAsync(
+                command.Executable,
+                command.Arguments,
+                Path.GetDirectoryName(repositoryPath)
+                    ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."),
+                commandTimeout ?? TimeSpan.FromMinutes(2),
+                $"prepare {Path.GetFileName(repositoryPath)}",
+                cancellationToken,
+                progress).ConfigureAwait(false);
 
             if (!result.IsSuccess)
             {
@@ -539,7 +565,8 @@ internal static class RepositorySynchronizer
     private static void AddRevisionCommands(
         List<RepositorySyncCommand> commands,
         string repositoryPath,
-        string? revision)
+        string? revision,
+        string gitExecutablePath)
     {
         if (string.IsNullOrWhiteSpace(revision))
         {
@@ -547,13 +574,13 @@ internal static class RepositorySynchronizer
         }
 
         commands.Add(new RepositorySyncCommand(
-            "git",
+            gitExecutablePath,
             ["-C", repositoryPath, "fetch", "--tags", "origin", revision]));
         commands.Add(new RepositorySyncCommand(
-            "git",
+            gitExecutablePath,
             ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"]));
         commands.Add(new RepositorySyncCommand(
-            "git",
+            gitExecutablePath,
             ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"]));
     }
 

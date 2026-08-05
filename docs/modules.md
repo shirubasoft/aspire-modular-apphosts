@@ -167,20 +167,22 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
       "RepositoryBasePath": "/work/aspire-repositories",
       "AutoCloneRepositories": false,
       "GitHubCliPath": "gh",
-      "UpdateImportedRepositories": true,
-      "RunProjectsAsContainers": true,
-      "PublishImages": true,
+      "GitExecutablePath": "git",
+      "RepositoryCommandTimeout": "00:02:00",
+      "UpdateImportedRepositories": false,
+      "ProjectMode": "Auto",
+      "PublishImages": false,
       "Modules": {
         "orders": {
           "Repository": "https://github.com/example/orders.git",
           "RepositoryRevision": "release/2026-08",
           "AutoCloneRepository": true,
           "UpdateRepository": false,
-          "RunProjectsAsContainers": true,
+          "ProjectMode": "Container",
           "PublishImages": true,
           "Projects": {
             "orders-api": {
-              "RunAsContainer": false,
+              "ProjectMode": "Project",
               "LaunchProfileName": "https",
               "ExcludeLaunchProfile": false,
               "ExcludeKestrelEndpoints": false,
@@ -214,18 +216,21 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 }
 ```
 
-`RunAsContainer` is honored only in Aspire run mode. Publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built.
+`ProjectMode` is honored only in Aspire run mode. Its safe `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built. The older `RunAsContainer` and `RunProjectsAsContainers` switches remain compatibility shims, but new configuration should use `ProjectMode`.
 
-Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
+Repository updates and image build commands are opt-in. Set `UpdateRepository`/`UpdateImportedRepositories` or `PublishImage`/`PublishImages` only where that mutation is intended. Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
 
 Configured module, project, and container names are validated against exported definitions. A typo fails with the missing name and the available names instead of being silently ignored. With sibling discovery enabled, every specialized `AddProject` path is also checked after discovery or cloning; an absent service project fails with its module name, resource name, and expected path.
 
 The same options can be changed in code before materializing a module:
 
 ```csharp
-builder.ConfigureModularAppHosts(options =>
-    options.RunProjectsAsContainers = false);
+builder.UseLocalModuleProjects();
+builder.UseModuleContainers();
+builder.BuildModuleImages();
 ```
+
+Repository clone, fetch, checkout, and pull operations stream progress to the AppHost output and honor startup cancellation. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
 
 ## Repository imports
 

@@ -24,6 +24,8 @@ Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.AutoCloneRepo
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.Containers.get -> System.Collections.Generic.IDictionary<string!, Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleContainerOptions!>!
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.DistributedApplicationModuleOptions() -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.Projects.get -> System.Collections.Generic.IDictionary<string!, Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions!>!
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.ProjectMode.get -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.ProjectMode.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.PublishImages.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.PublishImages.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions.Repository.get -> string?
@@ -42,6 +44,8 @@ Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.Exclud
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.ExcludeLaunchProfile.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.LaunchProfileName.get -> string?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.LaunchProfileName.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.ProjectMode.get -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.ProjectMode.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.RunAsContainer.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleProjectOptions.RunAsContainer.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleResourceAnnotation
@@ -97,12 +101,18 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext.Reso
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.AutoCloneRepositories.get -> bool
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.AutoCloneRepositories.set -> void
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.GitExecutablePath.get -> string!
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.GitExecutablePath.set -> void
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.GitHubCliPath.get -> string!
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.GitHubCliPath.set -> void
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.ModularAppHostsOptions() -> void
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.Modules.get -> System.Collections.Generic.IDictionary<string!, Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleOptions!>!
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.PublishImages.get -> bool
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.PublishImages.set -> void
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.ProjectMode.get -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.ProjectMode.set -> void
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.RepositoryCommandTimeout.get -> System.TimeSpan
+Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.RepositoryCommandTimeout.set -> void
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.RepositoryBasePath.get -> string?
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.RepositoryBasePath.set -> void
 Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.RunProjectsAsContainers.get -> bool
@@ -130,14 +140,21 @@ Aspire.Hosting.ModularAppHosts.ModuleRepositoryInstallerResource.Repository.get 
 Aspire.Hosting.ModularAppHosts.ModuleRepositoryInstallerResource.RepositoryDirty.get -> bool
 Aspire.Hosting.ModularAppHosts.ModuleRepositoryInstallerResource.RepositoryPath.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleRepositoryInstallerResource.UpdatesRepository.get -> bool
+Aspire.Hosting.ModularAppHosts.ModuleProjectMode
+Aspire.Hosting.ModularAppHosts.ModuleProjectMode.Auto = 0 -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode
+Aspire.Hosting.ModularAppHosts.ModuleProjectMode.Container = 2 -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode
+Aspire.Hosting.ModularAppHosts.ModuleProjectMode.Project = 1 -> Aspire.Hosting.ModularAppHosts.ModuleProjectMode
 const Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.RepositoryBaseLocationParameterName = "module-repository-base-location" -> string!
 const Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions.ConfigurationSectionName = "Aspire:ModularAppHosts" -> string!
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageNamePlaceholder = "{image-name}" -> string!
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageReferencePlaceholder = "{image}" -> string!
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageTagPlaceholder = "{image-tag}" -> string!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.Add(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule! module) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.BuildModuleImages(this Aspire.Hosting.IDistributedApplicationBuilder! builder) -> Aspire.Hosting.IDistributedApplicationBuilder!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ConfigureModularAppHosts(this Aspire.Hosting.IDistributedApplicationBuilder! builder, System.Action<Aspire.Hosting.ModularAppHosts.ModularAppHostsOptions!>! configure) -> Aspire.Hosting.IDistributedApplicationBuilder!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ExportModule(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! name, System.Action<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!>! moduleBuilder) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(string! moduleName) -> string!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.GetRepositoryParameterName(string! moduleName) -> string!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ImportModule(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! name) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.UseLocalModuleProjects(this Aspire.Hosting.IDistributedApplicationBuilder! builder) -> Aspire.Hosting.IDistributedApplicationBuilder!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.UseModuleContainers(this Aspire.Hosting.IDistributedApplicationBuilder! builder) -> Aspire.Hosting.IDistributedApplicationBuilder!

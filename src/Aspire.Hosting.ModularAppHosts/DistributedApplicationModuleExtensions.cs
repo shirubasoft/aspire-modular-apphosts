@@ -18,8 +18,31 @@ public static class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
 
-        configure(GetOrCreateRegistry(builder).Options);
+        var options = GetOrCreateRegistry(builder).Options;
+        configure(options);
+        ValidateOptions(options);
         return builder;
+    }
+
+    /// <summary>Runs every exported project directly in Aspire run mode for local debugging.</summary>
+    public static IDistributedApplicationBuilder UseLocalModuleProjects(
+        this IDistributedApplicationBuilder builder)
+    {
+        return builder.ConfigureModularAppHosts(options => options.ProjectMode = ModuleProjectMode.Project);
+    }
+
+    /// <summary>Runs every exported project through its portable container representation.</summary>
+    public static IDistributedApplicationBuilder UseModuleContainers(
+        this IDistributedApplicationBuilder builder)
+    {
+        return builder.ConfigureModularAppHosts(options => options.ProjectMode = ModuleProjectMode.Container);
+    }
+
+    /// <summary>Opts into executing module-declared image build commands in Aspire run mode.</summary>
+    public static IDistributedApplicationBuilder BuildModuleImages(
+        this IDistributedApplicationBuilder builder)
+    {
+        return builder.ConfigureModularAppHosts(options => options.PublishImages = true);
     }
 
     /// <summary>Gets the Aspire parameter name used when an imported module has no configured repository.</summary>
@@ -142,7 +165,8 @@ public static class DistributedApplicationModuleExtensions
                 builder.AppHostDirectory,
                 module,
                 repository,
-                GetConfiguredValue(options.GitHubCliPath) ?? "gh")
+                GetConfiguredValue(options.GitHubCliPath) ?? "gh",
+                options.RepositoryCommandTimeout)
             : null;
         var repositoryParameter = imported &&
             (configuredRepository is not null ||
@@ -177,7 +201,9 @@ public static class DistributedApplicationModuleExtensions
                         repository,
                         updateRepository,
                         CancellationToken.None,
-                        repositoryRevision))
+                        repositoryRevision,
+                        GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                        options.RepositoryCommandTimeout))
                 .GetAwaiter()
                 .GetResult();
         }
@@ -185,7 +211,7 @@ public static class DistributedApplicationModuleExtensions
         var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
         var defaultImageTag = GetDefaultImageTag(builder, repositoryPath);
 
-        ValidateResourceNames(builder, module, registry, options, moduleOptions);
+        ValidateResourceNames(builder, module, registry, options, moduleOptions, imported);
         if (repositoryResolution is not null || !imported)
         {
             ValidateProjectFiles(module, repositoryPath);
@@ -201,6 +227,8 @@ public static class DistributedApplicationModuleExtensions
             imported,
             updateRepository,
             repositoryRevision,
+            GetConfiguredValue(options.GitExecutablePath) ?? "git",
+            options.RepositoryCommandTimeout,
             deferSynchronization: !synchronizedRepository);
 
         foreach (var definition in module.ResourceDefinitions)
@@ -269,9 +297,7 @@ public static class DistributedApplicationModuleExtensions
         var projectDirectoryRelativePath = Path.GetRelativePath(project.SourceRepositoryRoot, sourceProjectDirectory);
         var projectOptions = moduleOptions?.FindProject(project.Name);
         var runAsContainer = !builder.ExecutionContext.IsRunMode ||
-            (projectOptions?.RunAsContainer ??
-                moduleOptions?.RunProjectsAsContainers ??
-                options.RunProjectsAsContainers);
+            ResolveProjectMode(options, moduleOptions, projectOptions, imported) == ModuleProjectMode.Container;
 
         if (!runAsContainer)
         {
@@ -594,6 +620,8 @@ public static class DistributedApplicationModuleExtensions
         bool imported,
         bool updateRepository,
         string? repositoryRevision,
+        string gitExecutablePath,
+        TimeSpan repositoryCommandTimeout,
         bool deferSynchronization)
     {
         if (!builder.ExecutionContext.IsRunMode || !imported ||
@@ -620,7 +648,9 @@ public static class DistributedApplicationModuleExtensions
                     resolvedRepository,
                     updateRepository,
                     cancellationToken,
-                    repositoryRevision)).ConfigureAwait(false);
+                    repositoryRevision,
+                    gitExecutablePath,
+                    repositoryCommandTimeout)).ConfigureAwait(false);
 
             ValidateProjectFiles(module, repositoryPath);
         });
@@ -638,6 +668,7 @@ public static class DistributedApplicationModuleExtensions
         }
 
         var options = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
+        ValidateOptions(options);
         var registry = new ModuleApplicationRegistry(options);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
@@ -720,10 +751,11 @@ public static class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
-        DistributedApplicationModuleOptions? moduleOptions)
+        DistributedApplicationModuleOptions? moduleOptions,
+        bool imported)
     {
         var resourceNames = module.ResourceDefinitions.SelectMany(definition =>
-            RequiresImagePublishInstaller(definition, options, moduleOptions) &&
+            RequiresImagePublishInstaller(definition, options, moduleOptions, imported) &&
                 builder.ExecutionContext.IsRunMode
                 ? new[] { definition.Name, GetInstallerName(definition.Name) }
                 : new[] { definition.Name });
@@ -821,14 +853,13 @@ public static class DistributedApplicationModuleExtensions
     private static bool RequiresImagePublishInstaller(
         IDistributedApplicationModuleResource definition,
         ModularAppHostsOptions options,
-        DistributedApplicationModuleOptions? moduleOptions)
+        DistributedApplicationModuleOptions? moduleOptions,
+        bool imported)
     {
         return definition switch
         {
             DistributedApplicationModuleProject project =>
-                (projectOptions(project)?.RunAsContainer ??
-                    moduleOptions?.RunProjectsAsContainers ??
-                    options.RunProjectsAsContainers) &&
+                ResolveProjectMode(options, moduleOptions, projectOptions(project), imported) == ModuleProjectMode.Container &&
                 (projectOptions(project)?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages),
             DistributedApplicationModuleContainer container when container.ImagePublishOptions is not null =>
                 moduleOptions?.FindContainer(container.Name)?.PublishImage ??
@@ -841,8 +872,44 @@ public static class DistributedApplicationModuleExtensions
             moduleOptions?.FindProject(project.Name);
     }
 
+    private static ModuleProjectMode ResolveProjectMode(
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        DistributedApplicationModuleProjectOptions? projectOptions,
+        bool imported)
+    {
+#pragma warning disable CS0618
+        var mode = projectOptions?.ProjectMode ??
+            (projectOptions?.RunAsContainer is { } projectRunsAsContainer
+                ? (ModuleProjectMode?)(projectRunsAsContainer
+                    ? ModuleProjectMode.Container
+                    : ModuleProjectMode.Project)
+                : null) ??
+            moduleOptions?.ProjectMode ??
+            (moduleOptions?.RunProjectsAsContainers is { } moduleRunsAsContainers
+                ? (ModuleProjectMode?)(moduleRunsAsContainers
+                    ? ModuleProjectMode.Container
+                    : ModuleProjectMode.Project)
+                : null) ??
+            (options.RunProjectsAsContainers ? ModuleProjectMode.Container : options.ProjectMode);
+#pragma warning restore CS0618
+
+        return mode == ModuleProjectMode.Auto
+            ? imported ? ModuleProjectMode.Container : ModuleProjectMode.Project
+            : mode;
+    }
+
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static void ValidateOptions(ModularAppHostsOptions options)
+    {
+        if (options.RepositoryCommandTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.RepositoryCommandTimeout)} must be positive.");
+        }
+    }
 
     private static string GetInstallerName(string projectName) => $"{projectName}-installer";
 

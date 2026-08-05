@@ -28,17 +28,27 @@ public sealed class ModularAppHostsOptions
     /// <summary>Gets or sets the GitHub CLI executable used by automatic sibling clones.</summary>
     public string GitHubCliPath { get; set; } = "gh";
 
+    /// <summary>Gets or sets the Git executable used to synchronize managed repositories.</summary>
+    public string GitExecutablePath { get; set; } = "git";
+
+    /// <summary>Gets or sets the maximum duration of one repository CLI command.</summary>
+    public TimeSpan RepositoryCommandTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
     /// <summary>Gets or sets whether existing clean imported repositories are fast-forwarded before startup.</summary>
-    public bool UpdateImportedRepositories { get; set; } = true;
+    public bool UpdateImportedRepositories { get; set; }
+
+    /// <summary>Gets or sets how exported projects run in Aspire run mode.</summary>
+    public ModuleProjectMode ProjectMode { get; set; } = ModuleProjectMode.Auto;
 
     /// <summary>
     /// Gets or sets whether projects exported as containers run as those containers in Aspire run mode.
     /// Publish mode always uses the exported container representation.
     /// </summary>
-    public bool RunProjectsAsContainers { get; set; } = true;
+    [Obsolete($"Use {nameof(ProjectMode)} instead.")]
+    public bool RunProjectsAsContainers { get; set; }
 
     /// <summary>Gets or sets whether declared image publish commands may run in Aspire run mode.</summary>
-    public bool PublishImages { get; set; } = true;
+    public bool PublishImages { get; set; }
 
     /// <summary>Gets module-specific overrides keyed by module name.</summary>
     public IDictionary<string, DistributedApplicationModuleOptions> Modules { get; } =
@@ -75,7 +85,11 @@ public sealed class DistributedApplicationModuleOptions
     /// <summary>Gets or sets whether an existing clean checkout is fast-forwarded before startup.</summary>
     public bool? UpdateRepository { get; set; }
 
+    /// <summary>Gets or sets how this module's exported projects run in Aspire run mode.</summary>
+    public ModuleProjectMode? ProjectMode { get; set; }
+
     /// <summary>Gets or sets whether exported projects run as containers in Aspire run mode.</summary>
+    [Obsolete($"Use {nameof(ProjectMode)} instead.")]
     public bool? RunProjectsAsContainers { get; set; }
 
     /// <summary>Gets or sets whether image publish commands declared by this module may run.</summary>
@@ -124,6 +138,9 @@ public abstract class DistributedApplicationModuleImageOptions
 /// <summary>Overrides materialization behavior for one exported project.</summary>
 public sealed class DistributedApplicationModuleProjectOptions : DistributedApplicationModuleImageOptions
 {
+    /// <summary>Gets or sets how this project runs in Aspire run mode.</summary>
+    public ModuleProjectMode? ProjectMode { get; set; }
+
     /// <summary>
     /// Gets or sets whether this project runs as its exported container in Aspire run mode. Set to
     /// <see langword="false"/> to run the project directly for debugging.
@@ -142,3 +159,16 @@ public sealed class DistributedApplicationModuleProjectOptions : DistributedAppl
 
 /// <summary>Overrides materialization behavior for one declared container.</summary>
 public sealed class DistributedApplicationModuleContainerOptions : DistributedApplicationModuleImageOptions;
+
+/// <summary>Controls how an exported project is represented in Aspire run mode.</summary>
+public enum ModuleProjectMode
+{
+    /// <summary>Runs local modules as projects and imported modules as containers.</summary>
+    Auto,
+
+    /// <summary>Runs the project directly for local debugging.</summary>
+    Project,
+
+    /// <summary>Runs the project's exported container representation.</summary>
+    Container
+}

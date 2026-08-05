@@ -513,12 +513,16 @@ public sealed class ModuleRepositoryDiscoveryTests
         string projectDirectory,
         bool publishMode = true)
     {
-        return DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
         {
             Args = publishMode ? ["--publisher", "manifest"] : [],
             DisableDashboard = true,
             ProjectDirectory = projectDirectory
         });
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:ProjectMode"] =
+            nameof(ModuleProjectMode.Container);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "true";
+        return builder;
     }
 
     private static string CreateFakeGh(string directory, string sourceRepository)

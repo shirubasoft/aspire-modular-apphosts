@@ -2,6 +2,7 @@ using Aspire.Hosting.ModularAppHosts;
 using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
+builder.BuildModuleImages();
 
 var samplesRoot = Path.GetFullPath("..", builder.AppHostDirectory);
 var appHostASource = Path.Combine(samplesRoot, "AppHostA");

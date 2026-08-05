@@ -1203,12 +1203,17 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
     private static IDistributedApplicationBuilder CreateBuilder(string projectDirectory, params string[] args)
     {
-        return DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
         {
             Args = args,
             DisableDashboard = true,
             ProjectDirectory = projectDirectory
         });
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:ProjectMode"] =
+            nameof(ModuleProjectMode.Container);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:UpdateImportedRepositories"] = "true";
+        return builder;
     }
 
     private sealed class TestRepository : IDisposable
