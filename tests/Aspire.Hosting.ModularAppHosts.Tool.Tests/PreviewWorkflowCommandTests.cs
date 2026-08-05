@@ -90,6 +90,39 @@ public sealed class PreviewWorkflowCommandTests
     }
 
     [Fact]
+    public async Task Produce_accepts_a_computed_contract_version_when_the_descriptor_omits_it()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteProducerDescriptorWithoutVersionAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "module-preview.json");
+        const string computedVersion = "2.0.0-preview.42";
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--contract-version", computedVersion,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken);
+        Assert.Equal(computedVersion, Assert.Single(manifest.Contracts).Version);
+    }
+
+    [Fact]
     public async Task Materialize_resolves_policy_owned_contract_images_and_GitHub_environment()
     {
         if (OperatingSystem.IsWindows())
@@ -228,6 +261,197 @@ public sealed class PreviewWorkflowCommandTests
             environment);
     }
 
+    [Fact]
+    public async Task Image_only_preview_materializes_without_contract_tools_or_package_feed()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteImageOnlyProducerDescriptorAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "module-preview.json");
+        var produceExitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken);
+        Assert.Equal(0, produceExitCode);
+        Assert.Empty((await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken)).Contracts);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory.Path, "git-arguments.txt"),
+            string.Empty,
+            cancellationToken);
+
+        var policyPath = await WriteOptionalConsumerPolicyAsync(directory, cancellationToken);
+        var dotnetMarker = Path.Combine(directory.Path, "dotnet-was-called");
+        var dotnet = await directory.WriteExecutableAsync(
+            "never-dotnet",
+            $$"""
+            #!/usr/bin/env bash
+            touch '{{dotnetMarker}}'
+            exit 97
+            """,
+            cancellationToken);
+        var docker = await directory.WriteExecutableAsync(
+            "fake-docker",
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            """,
+            cancellationToken);
+        var workDirectory = Path.Combine(directory.Path, "materialization-work");
+        var resolutionPath = Path.Combine(directory.Path, "resolved-preview.json");
+        var githubEnvironmentPath = Path.Combine(directory.Path, "github.env");
+
+        var materializeExitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "materialize",
+                "--manifest", manifestPath,
+                "--policy", policyPath,
+                "--work-directory", workDirectory,
+                "--resolution", resolutionPath,
+                "--consumer-repository", "https://github.com/shirubasoft/preview-consumer.git",
+                "--consumer-commit", BaseCommit,
+                "--github-env", githubEnvironmentPath,
+                "--git-executable", git,
+                "--dotnet-executable", dotnet,
+                "--docker-executable", docker
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, materializeExitCode);
+        var resolution = await ModulePreviewResolution.LoadAsync(resolutionPath, cancellationToken);
+        Assert.Empty(resolution.Contracts);
+        Assert.Equal(2, resolution.Images.Count);
+        Assert.False(File.Exists(dotnetMarker));
+        Assert.Empty(await File.ReadAllLinesAsync(
+            Path.Combine(directory.Path, "git-arguments.txt"),
+            cancellationToken));
+        Assert.Equal(
+            [$"ModulePreview__Resolution={Path.GetFullPath(resolutionPath)}"],
+            await File.ReadAllLinesAsync(githubEnvironmentPath, cancellationToken));
+    }
+
+    [Fact]
+    public async Task Materialize_resolves_and_hashes_an_exact_published_contract_without_source_checkout()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteProducerDescriptorAsync(directory, cancellationToken);
+        var produceGit = await WriteGitExecutableAsync(directory, cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "module-preview.json");
+        Assert.Equal(0, await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", produceGit,
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken));
+
+        var policyPath = await WritePublishedConsumerPolicyAsync(directory, cancellationToken);
+        var packageTemplate = Path.Combine(directory.Path, "published-contract.nupkg");
+        await CreateContractPackageAsync(packageTemplate, cancellationToken);
+        var expectedPackageSha256 = await ComputeSha256Async(packageTemplate, cancellationToken);
+        var dotnetLog = Path.Combine(directory.Path, "dotnet-arguments.txt");
+        var dotnet = await directory.WriteExecutableAsync(
+            "fake-published-dotnet",
+            $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\n' "$*" >> '{{dotnetLog}}'
+            test "$1" = 'restore'
+            packages=''
+            while (( $# > 0 )); do
+              if [[ "$1" == '--packages' ]]; then
+                packages="$2"
+                break
+              fi
+              shift
+            done
+            test -n "$packages"
+            target="$packages/{{ContractPackageId.ToLowerInvariant()}}/{{ContractVersion}}"
+            mkdir -p "$target"
+            cp '{{packageTemplate}}' "$target/{{ContractPackageId.ToLowerInvariant()}}.{{ContractVersion}}.nupkg"
+            """,
+            cancellationToken);
+        var gitMarker = Path.Combine(directory.Path, "git-was-called");
+        var git = await directory.WriteExecutableAsync(
+            "never-git",
+            $$"""
+            #!/usr/bin/env bash
+            touch '{{gitMarker}}'
+            exit 98
+            """,
+            cancellationToken);
+        var docker = await directory.WriteExecutableAsync(
+            "fake-docker",
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            """,
+            cancellationToken);
+        var workDirectory = Path.Combine(directory.Path, "materialization-work");
+        var packageFeed = Path.Combine(directory.Path, "preview-feed");
+        var resolutionPath = Path.Combine(directory.Path, "resolved-preview.json");
+        var githubEnvironmentPath = Path.Combine(directory.Path, "github.env");
+
+        var materializeExitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "materialize",
+                "--manifest", manifestPath,
+                "--policy", policyPath,
+                "--work-directory", workDirectory,
+                "--package-feed", packageFeed,
+                "--resolution", resolutionPath,
+                "--consumer-repository", "https://github.com/shirubasoft/preview-consumer.git",
+                "--consumer-commit", BaseCommit,
+                "--github-env", githubEnvironmentPath,
+                "--git-executable", git,
+                "--dotnet-executable", dotnet,
+                "--docker-executable", docker
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, materializeExitCode);
+        var resolution = await ModulePreviewResolution.LoadAsync(resolutionPath, cancellationToken);
+        var contract = Assert.Single(resolution.Contracts);
+        Assert.Equal("https://nuget.pkg.github.com/shirubasoft/index.json", contract.Source);
+        Assert.Equal(expectedPackageSha256, contract.Sha256);
+        Assert.True(File.Exists(contract.PackagePath));
+        Assert.False(File.Exists(gitMarker));
+        var restore = Assert.Single(await File.ReadAllLinesAsync(dotnetLog, cancellationToken));
+        Assert.StartsWith("restore ", restore, StringComparison.Ordinal);
+        Assert.Contains(
+            "--source https://nuget.pkg.github.com/shirubasoft/index.json",
+            restore,
+            StringComparison.Ordinal);
+        var resolverProject = Assert.Single(
+            Directory.GetFiles(workDirectory, "ContractResolver.csproj", SearchOption.AllDirectories));
+        Assert.Contains(
+            $"Version=\"[{ContractVersion}]\"",
+            await File.ReadAllTextAsync(resolverProject, cancellationToken),
+            StringComparison.Ordinal);
+    }
+
     private static async Task<string> WriteProducerDescriptorAsync(
         WorkflowTestDirectory directory,
         CancellationToken cancellationToken)
@@ -243,6 +467,56 @@ public sealed class PreviewWorkflowCommandTests
                 "packageId": "{{ContractPackageId}}",
                 "version": "{{ContractVersion}}"
               },
+              "images": [
+                {
+                  "resource": "preview-producer-api",
+                  "resourceKind": "container",
+                  "repository": "{{ApiImageRepository}}",
+                  "required": true
+                },
+                {
+                  "resource": "preview-producer-sidecar",
+                  "resourceKind": "container",
+                  "repository": "{{SidecarImageRepository}}",
+                  "required": true
+                }
+              ]
+            }
+            """,
+            cancellationToken);
+        return path;
+    }
+
+    private static Task<string> WriteProducerDescriptorWithoutVersionAsync(
+        WorkflowTestDirectory directory,
+        CancellationToken cancellationToken) =>
+        WriteProducerDescriptorVariantAsync(directory, includeContract: true, cancellationToken);
+
+    private static Task<string> WriteImageOnlyProducerDescriptorAsync(
+        WorkflowTestDirectory directory,
+        CancellationToken cancellationToken) =>
+        WriteProducerDescriptorVariantAsync(directory, includeContract: false, cancellationToken);
+
+    private static async Task<string> WriteProducerDescriptorVariantAsync(
+        WorkflowTestDirectory directory,
+        bool includeContract,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(directory.Path, $"module-preview-{includeContract}.producer.json");
+        var contract = includeContract
+            ? $$"""
+                "contract": {
+                  "packageId": "{{ContractPackageId}}"
+                },
+                """
+            : string.Empty;
+        await directory.WriteTextAsync(
+            path,
+            $$"""
+            {
+              "schemaVersion": 1,
+              "module": "preview-producer",
+              {{contract}}
               "images": [
                 {
                   "resource": "preview-producer-api",
@@ -285,6 +559,69 @@ public sealed class PreviewWorkflowCommandTests
                       "project": "src/PreviewProducer.Contract/PreviewProducer.Contract.csproj"
                     },
                     "allowedPackProperties": ["ModularAppHostsVersion"]
+                  },
+                  "images": [
+                    {
+                      "resource": "preview-producer-api",
+                      "resourceKind": "container",
+                      "repositories": ["{{ApiImageRepository}}"],
+                      "required": true
+                    },
+                    {
+                      "resource": "preview-producer-sidecar",
+                      "resourceKind": "container",
+                      "repositories": ["{{SidecarImageRepository}}"],
+                      "required": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """,
+            cancellationToken);
+        return path;
+    }
+
+    private static async Task<string> WriteOptionalConsumerPolicyAsync(
+        WorkflowTestDirectory directory,
+        CancellationToken cancellationToken)
+    {
+        var path = await WriteConsumerPolicyAsync(directory, cancellationToken);
+        var json = await File.ReadAllTextAsync(path, cancellationToken);
+        await directory.WriteTextAsync(
+            path,
+            json.Replace(
+                $"\"versionEnvironment\": \"PreviewContractVersion\",",
+                $"\"versionEnvironment\": \"PreviewContractVersion\",{Environment.NewLine}        \"required\": false,",
+                StringComparison.Ordinal),
+            cancellationToken);
+        return path;
+    }
+
+    private static async Task<string> WritePublishedConsumerPolicyAsync(
+        WorkflowTestDirectory directory,
+        CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(directory.Path, "module-preview-published-policy.json");
+        await directory.WriteTextAsync(
+            path,
+            $$"""
+            {
+              "schemaVersion": 1,
+              "modules": [
+                {
+                  "module": "preview-producer",
+                  "repository": "{{Repository}}",
+                  "contract": {
+                    "packageId": "{{ContractPackageId}}",
+                    "versionEnvironment": "PreviewContractVersion",
+                    "required": false,
+                    "published": {
+                      "source": "https://nuget.pkg.github.com/shirubasoft/index.json"
+                    },
+                    "sourceFallback": {
+                      "enabled": false
+                    }
                   },
                   "images": [
                     {

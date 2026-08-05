@@ -91,19 +91,32 @@ then dispatch the consumer's trusted workflow:
 dotnet tool install --global Shirubasoft.Aspire.ModularAppHosts.Tool
 dotnet modular-apphosts preview produce \
   --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
   --image catalog-api=ghcr.io/example/catalog/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --output module-preview.json
 dotnet modular-apphosts preview trigger \
   --manifest module-preview.json \
   --repo example/end-to-end-tests \
   --workflow module-preview-e2e.yml \
-  --ref main
+  --ref main \
+  --wait \
+  --github-output "$GITHUB_OUTPUT"
 ```
 
 The request carries full commits and OCI digests rather than mutable branch names and image tags.
-The consumer tool checks its own policy, materializes contract packages, and writes a trusted
-resolution for `ApplyModulePreviewResolutionAsync`. See the cross-repository preview guide for the
-complete security model, source-fallback boundary, and runnable two-repository example.
+The producer descriptor may omit the contract for an image-only preview, or omit only its version
+and receive the exact CI-computed version through `--contract-version`. The consumer policy decides
+whether the contract is required and whether to restore its exact package from a reviewed HTTPS
+NuGet source or pack it from a reviewed source fallback. Published-package materialization does not
+check out or build the producer repository. A package feed is required only for requests that carry
+a contract.
+
+The consumer tool checks its own policy and writes a trusted resolution for
+`ApplyModulePreviewResolutionAsync`. `preview trigger` prints `workflow_run_id` and
+`workflow_run_url`; `--github-output` appends them to a GitHub Actions output file, while a bare
+`--wait` returns the consumer run's final status. See the cross-repository preview guide for the
+complete security model, package-source and source-fallback boundaries, and runnable two-repository
+example.
 
 Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
 

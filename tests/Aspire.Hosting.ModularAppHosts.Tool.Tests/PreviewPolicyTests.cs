@@ -46,6 +46,33 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public async Task Producer_descriptor_allows_an_image_only_preview()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "module": "preview-producer",
+              "images": [
+                {
+                  "resource": "preview-producer-api",
+                  "resourceKind": "project",
+                  "repository": "ghcr.io/shirubasoft/preview-producer",
+                  "required": true
+                }
+              ]
+            }
+            """;
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var descriptor = await ModulePreviewProducerDescriptor.LoadAsync(
+            stream,
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(descriptor.Contract);
+        Assert.Single(descriptor.Images);
+    }
+
+    [Fact]
     public async Task Documents_reject_unknown_members()
     {
         const string json = """
@@ -92,7 +119,12 @@ public sealed class PreviewPolicyTests
             Contract = new ModulePreviewConsumerContractPolicy
             {
                 PackageId = "Shirubasoft.Other.Contract",
-                VersionEnvironment = "PreviewContractVersion"
+                VersionEnvironment = "PreviewContractVersion",
+                SourceFallback = new ModulePreviewSourceFallbackPolicy
+                {
+                    Enabled = true,
+                    Project = "src/Other.Contract/Other.Contract.csproj"
+                }
             }
         });
 
@@ -130,6 +162,47 @@ public sealed class PreviewPolicyTests
             module.Policy.Contract?.SourceFallback.Project);
         Assert.Equal("2.0.0-preview.1", module.Contract?.Version);
         Assert.Single(module.Images);
+    }
+
+    [Fact]
+    public void Evaluator_accepts_an_omitted_optional_contract()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Required = false;
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
+
+        Assert.Null(Assert.Single(evaluation.Modules).Contract);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_an_omitted_required_contract()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Contracts.Clear();
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, CreatePolicy()));
+
+        Assert.Contains("required policy-owned contract", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Policy_accepts_a_trusted_published_contract_source_without_pack_configuration()
+    {
+        var policy = CreatePolicy();
+        var contract = policy.Modules[0].Contract!;
+        contract.Required = false;
+        contract.Published = new ModulePreviewPublishedContractPolicy
+        {
+            Source = "https://nuget.pkg.github.com/shirubasoft/index.json"
+        };
+        contract.SourceFallback = new ModulePreviewSourceFallbackPolicy();
+        contract.AllowedPackProperties.Clear();
+
+        policy.Validate();
     }
 
     [Fact]

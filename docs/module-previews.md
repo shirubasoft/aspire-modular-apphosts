@@ -18,9 +18,10 @@ flowchart LR
 
 The distinction between request and resolution is intentional:
 
-- Repo C controls requested module commits, contract versions, and immutable OCI digests.
-- Repo D controls allowed repositories, package IDs, source fallback project paths, MSBuild
-  properties, emitted environment variable names, and allowed image repositories.
+- Repo C controls requested module commits, optional contract versions, and immutable OCI digests.
+- Repo D controls whether a contract is required, allowed repositories and package IDs, the
+  published package source or source fallback project, MSBuild properties, emitted environment
+  variable names, and allowed image repositories.
 - `preview verify` is pure and offline. It does not clone repositories, run producer code, or contact
   a registry.
 - `preview materialize` revalidates the request, performs only policy-approved work, hashes the
@@ -49,8 +50,7 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
   "schemaVersion": 1,
   "module": "module-c",
   "contract": {
-    "packageId": "Acme.ModuleC.Contract",
-    "version": "2.3.0-preview.7"
+    "packageId": "Acme.ModuleC.Contract"
   },
   "images": [
     {
@@ -72,9 +72,34 @@ workflow already built the image, pass that digest directly to the tool; Repo D 
 ```bash
 dotnet modular-apphosts preview produce \
   --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
   --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --output module-preview.json
 ```
+
+The contract version may instead be committed as `contract.version` in the descriptor. Supplying
+`--contract-version` overrides that value, which lets CI pass the exact version it just published.
+A declared contract must get a version from one of those locations.
+
+Omit `contract` entirely when the preview needs only already-built images:
+
+```json
+{
+  "schemaVersion": 1,
+  "module": "module-c",
+  "images": [
+    {
+      "resource": "module-c-api",
+      "resourceKind": "container",
+      "repository": "ghcr.io/acme/module-c/api",
+      "required": true
+    }
+  ]
+}
+```
+
+That produces a request with an empty `contracts` collection. Do not pass `--contract-version` for
+an image-only descriptor.
 
 `produce` verifies that the worktree is clean, `HEAD` is attached to a branch, and the exact commit
 is the pushed tip of that branch on `origin`. It rejects undeclared images, tags, uppercase or
@@ -86,6 +111,7 @@ Add changed dependencies explicitly; a branch name is never inferred across repo
 ```bash
 dotnet modular-apphosts preview produce \
   --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
   --pin module-a=https://github.com/acme/repo-a.git@0123456789abcdef0123456789abcdef01234567 \
   --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --output module-preview.json
@@ -151,13 +177,13 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
       "contract": {
         "packageId": "Acme.ModuleC.Contract",
         "versionEnvironment": "ModuleCContractVersion",
-        "sourceFallback": {
-          "enabled": true,
-          "project": "src/ModuleC.Contract/ModuleC.Contract.csproj"
+        "required": false,
+        "published": {
+          "source": "https://api.nuget.org/v3/index.json"
         },
-        "allowedPackProperties": [
-          "ModularAppHostsVersion"
-        ]
+        "sourceFallback": {
+          "enabled": false
+        }
       },
       "images": [
         {
@@ -174,11 +200,35 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
 }
 ```
 
-`required: true` prevents a producer from omitting the digest and making the AppHost fall back to a
-source build. A source fallback is useful until the producer publishes its contract package, but it
-allows `dotnet restore` and `dotnet pack` to execute MSBuild from the producer commit. Run that step
-in a no-secrets job. Disable `sourceFallback` once the contract is available through a separately
-trusted package-materialization path.
+The contract policy's `required` value defaults to `true`. Set it to `false` only when Repo D permits
+an image-only request; when the request omits the contract, no contract version or package feed is
+exported. Image `required: true` independently prevents a producer from omitting a digest and making
+the AppHost fall back to a source build.
+
+`published.source` is the preferred contract materialization mode when Repo C already published the
+package. It must be a consumer-reviewed, credential-free absolute HTTPS NuGet source without a query
+or fragment. Keep credentials in Repo D's NuGet configuration or credential provider, never in the
+source URL or preview documents.
+
+Published resolution and an enabled source fallback are mutually exclusive. When a package is not
+published, replace `published` with a reviewed fallback:
+
+```json
+{
+  "sourceFallback": {
+    "enabled": true,
+    "project": "src/ModuleC.Contract/ModuleC.Contract.csproj"
+  },
+  "allowedPackProperties": [
+    "ModularAppHostsVersion"
+  ]
+}
+```
+
+This fragment represents the corresponding fields inside `contract`. Source fallback permits fixed
+`dotnet restore` and `dotnet pack` commands to execute MSBuild from the producer commit, so run it in
+a no-secrets job. `allowedPackProperties` applies only to fallback mode and must be empty or omitted
+in published mode. Every declared contract policy must enable exactly one materialization mode.
 
 ## Verify and materialize in Repo D
 
@@ -211,12 +261,33 @@ dotnet modular-apphosts preview materialize \
 Materialization performs these operations:
 
 1. Revalidates the strict request and consumer policy.
-2. Fetches only each exact contract-source commit when source fallback is enabled.
-3. Runs fixed `dotnet restore` and `dotnet pack` commands against only the policy-owned project path.
-4. Opens the resulting `.nupkg`, verifies its nuspec ID and version, and records its SHA-256.
+2. In published mode, restores the exact requested package ID and version from the policy-owned
+   source. It does not fetch the producer repository or run `dotnet pack`.
+3. In source fallback mode, fetches only the exact producer commit and runs fixed `dotnet restore`
+   and `dotnet pack` commands against only the policy-owned project path.
+4. Opens the resolved `.nupkg`, verifies its nuspec ID and version, records its SHA-256, and copies it
+   into the package feed. Published contracts record both `source` and `packagePath` in the trusted
+   resolution; fallback contracts record `packagePath` and a null `source`.
 5. Verifies every `repository@sha256:...` with `docker buildx imagetools inspect`.
 6. Writes the resolution and, when `--github-env` is used, exports `ModulePreview__Resolution`,
    `ModulePreview__PackageFeed`, and each policy-owned contract version environment variable.
+
+`--package-feed` is required only when the request contains a contract. For an accepted image-only
+request, omit `--package-feed`, `--nuget-config`, and contract pack properties:
+
+```bash
+dotnet modular-apphosts preview materialize \
+  --manifest "$RUNNER_TEMP/module-preview.verified.json" \
+  --policy .github/module-preview-policy.json \
+  --work-directory "$RUNNER_TEMP/module-preview-work" \
+  --resolution "$RUNNER_TEMP/module-preview.resolution.json" \
+  --consumer-repository "https://github.com/acme/repo-d.git" \
+  --consumer-commit "$GITHUB_SHA" \
+  --github-env "$GITHUB_ENV"
+```
+
+The image-only GitHub environment contains `ModulePreview__Resolution`; it does not contain
+`ModulePreview__PackageFeed` or a contract version variable.
 
 The work directory must be empty. Authentication for Git, NuGet, and OCI registries is configured by
 the workflow and never appears in the request, descriptor, policy, or resolution.
@@ -259,13 +330,26 @@ dotnet modular-apphosts preview trigger \
   --manifest module-preview.json \
   --repo acme/repo-d \
   --workflow module-preview-e2e.yml \
-  --ref main
+  --ref main \
+  --wait \
+  --github-output "$GITHUB_OUTPUT"
 ```
 
 The default workflow input is `manifest_json`. Use `--input-name` for another declared input and
 repeat `--input name=value` for consumer-specific metadata. `--ref` selects Repo D's workflow
 definition; keep it fixed to a trusted branch. It is deliberately unrelated to Repo C's feature
 branch.
+
+On a successful dispatch, `trigger` prints the run identity as GitHub-style output:
+
+```text
+workflow_run_id=123456789
+workflow_run_url=https://github.com/acme/repo-d/actions/runs/123456789
+```
+
+`--github-output <path>` appends the same two values to that file. A bare `--wait` watches the
+returned run with `gh run watch --exit-status`, so the trigger process exits unsuccessfully when the
+consumer workflow fails. Omit `--wait` when Repo C only needs to enqueue the run and retain its URL.
 
 For local use, authenticate with `gh auth login`. A normal repository-scoped `GITHUB_TOKEN` in Repo C
 cannot dispatch Repo D. For unattended dispatch, use a GitHub App installed only on the necessary
@@ -295,10 +379,14 @@ and uploads the trusted resolution and diagnostics.
 | Failure | Meaning | Resolution |
 | --- | --- | --- |
 | Dirty or unpushed producer worktree | CI cannot reproduce all runnable content | Commit and push the exact branch tip |
+| Declared contract has no exact version | The request cannot identify a reproducible package | Commit `contract.version` or pass `--contract-version` |
+| Required contract omitted | Repo D does not allow an image-only request for that module | Include the contract or review the policy and set contract `required` to `false` |
 | Missing required image | The request could fall back to building source | Publish the image and pass its immutable digest |
 | Unauthorized repository or resource | Repo C attempted to widen Repo D's trust boundary | Review and update Repo D's policy, not the request |
-| Contract identity mismatch | The packed nuspec differs from the request | Fix the producer package ID/version or descriptor |
+| Contract identity mismatch | The restored or packed nuspec differs from the request | Fix the published package or producer package ID/version |
+| Published contract resolution fails | The exact version is absent, inaccessible, or NuGet authentication is missing | Publish or grant access to the exact version, then retry |
 | Image inspect failure | The digest is absent, inaccessible, or authentication is missing | Publish/grant access, then retry the same digest |
-| Source fallback disabled | Repo D has no approved way to obtain the requested contract | Publish the contract through a trusted path or enable a reviewed no-secrets fallback |
+| No contract materialization mode | Repo D has no approved way to obtain the requested contract | Configure a reviewed published source or enable a no-secrets fallback |
 | AppHost requests a repository despite complete image pins | The contract has a repository-backed generic factory or an unpinned project | Pin every runtime image or retain the exact checkout |
 | Dispatch denied | The caller cannot start Repo D's workflow | Authenticate with a narrowly scoped GitHub App or user token |
+| Watched run fails | Repo D's workflow completed unsuccessfully | Follow `workflow_run_url` and inspect the consumer-owned diagnostics |

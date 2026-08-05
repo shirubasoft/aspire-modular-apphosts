@@ -192,30 +192,7 @@ public sealed class PreviewToolTests
 
         using var directory = TestDirectory.Create();
         var manifestPath = Path.Combine(directory.Path, "preview.json");
-        var manifest = new ModulePreviewManifest
-        {
-            Producer = new ModulePreviewProducer
-            {
-                Repository = "https://github.com/shirubasoft/repo-c.git",
-                Commit = Commit,
-                Dirty = false
-            }
-        };
-        manifest.Modules.Add(new ModulePreviewSelection
-        {
-            Name = "module-c",
-            Repository = "https://github.com/shirubasoft/repo-c.git",
-            Commit = Commit
-        });
-        manifest.Images.Add(new ModulePreviewImageArtifact
-        {
-            Module = "module-c",
-            Resource = "module-c-api",
-            ResourceKind = ModulePreviewResourceKind.Container,
-            Repository = "ghcr.io/shirubasoft/module-c",
-            Sha256 = $"sha256:{new string('a', 64)}"
-        });
-        await manifest.SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        await WriteTriggerManifestAsync(manifestPath, TestContext.Current.CancellationToken);
         var argumentsPath = Path.Combine(directory.Path, "arguments.txt");
         var bodyPath = Path.Combine(directory.Path, "body.json");
         var gh = directory.WriteExecutable("fake-gh", $$"""
@@ -255,6 +232,131 @@ public sealed class PreviewToolTests
         Assert.Equal(
             "container",
             dispatchedManifest.RootElement.GetProperty("images")[0].GetProperty("resourceKind").GetString());
+    }
+
+    [Fact]
+    public async Task Trigger_can_append_run_outputs_and_wait_for_the_returned_run()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = TestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var manifestPath = Path.Combine(directory.Path, "preview.json");
+        await WriteTriggerManifestAsync(manifestPath, cancellationToken);
+        var watchArgumentsPath = Path.Combine(directory.Path, "watch-arguments.txt");
+        var githubOutputPath = Path.Combine(directory.Path, "github-output.txt");
+        await File.WriteAllTextAsync(githubOutputPath, "existing=value\n", cancellationToken);
+        var gh = directory.WriteExecutable("fake-gh", $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            case "$1" in
+              api)
+                tee /dev/null >/dev/null
+                printf '{"workflow_run_id":42,"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}'
+                ;;
+              run)
+                printf '%s\n' "$@" > '{{watchArgumentsPath}}'
+                ;;
+              *) exit 2 ;;
+            esac
+            """);
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "trigger",
+                "--manifest", manifestPath,
+                "--repo", "shirubasoft/repo-d",
+                "--workflow", "preview-e2e.yml",
+                "--ref", "main",
+                "--wait",
+                "--github-output", githubOutputPath,
+                "--gh-executable", gh
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(
+            ["run", "watch", "42", "--repo", "shirubasoft/repo-d", "--exit-status"],
+            await File.ReadAllLinesAsync(watchArgumentsPath, cancellationToken));
+        Assert.Equal(
+            [
+                "existing=value",
+                "workflow_run_id=42",
+                "workflow_run_url=https://github.com/shirubasoft/repo-d/actions/runs/42"
+            ],
+            await File.ReadAllLinesAsync(githubOutputPath, cancellationToken));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("0")]
+    [InlineData("\"42\"")]
+    public async Task Trigger_rejects_missing_or_invalid_workflow_run_id(string? workflowRunIdJson)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = TestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var manifestPath = Path.Combine(directory.Path, "preview.json");
+        await WriteTriggerManifestAsync(manifestPath, cancellationToken);
+        var response = workflowRunIdJson is null
+            ? """{"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}"""
+            : $$"""{"workflow_run_id":{{workflowRunIdJson}},"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}""";
+        var gh = directory.WriteExecutable("fake-gh", $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            tee /dev/null >/dev/null
+            printf '%s' '{{response}}'
+            """);
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "trigger",
+                "--manifest", manifestPath,
+                "--repo", "shirubasoft/repo-d",
+                "--workflow", "preview-e2e.yml",
+                "--ref", "main",
+                "--gh-executable", gh
+            ],
+            cancellationToken);
+
+        Assert.Equal(1, exitCode);
+    }
+
+    private static async Task WriteTriggerManifestAsync(
+        string manifestPath,
+        CancellationToken cancellationToken)
+    {
+        var manifest = new ModulePreviewManifest
+        {
+            Producer = new ModulePreviewProducer
+            {
+                Repository = "https://github.com/shirubasoft/repo-c.git",
+                Commit = Commit,
+                Dirty = false
+            }
+        };
+        manifest.Modules.Add(new ModulePreviewSelection
+        {
+            Name = "module-c",
+            Repository = "https://github.com/shirubasoft/repo-c.git",
+            Commit = Commit
+        });
+        manifest.Images.Add(new ModulePreviewImageArtifact
+        {
+            Module = "module-c",
+            Resource = "module-c-api",
+            ResourceKind = ModulePreviewResourceKind.Container,
+            Repository = "ghcr.io/shirubasoft/module-c",
+            Sha256 = $"sha256:{new string('a', 64)}"
+        });
+        await manifest.SaveAsync(manifestPath, cancellationToken);
     }
 
     private sealed class TestDirectory : IDisposable

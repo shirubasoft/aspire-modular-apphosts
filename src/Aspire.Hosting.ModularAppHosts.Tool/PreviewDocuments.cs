@@ -38,7 +38,7 @@ internal sealed class ModulePreviewProducerContractDescriptor
     public string PackageId { get; set; } = string.Empty;
 
     [JsonPropertyOrder(1)]
-    public string Version { get; set; } = string.Empty;
+    public string? Version { get; set; }
 }
 
 internal sealed class ModulePreviewProducerImageDescriptor
@@ -103,10 +103,22 @@ internal sealed class ModulePreviewConsumerContractPolicy
     public string VersionEnvironment { get; set; } = string.Empty;
 
     [JsonPropertyOrder(2)]
-    public ModulePreviewSourceFallbackPolicy SourceFallback { get; set; } = new();
+    public bool Required { get; set; } = true;
 
     [JsonPropertyOrder(3)]
+    public ModulePreviewPublishedContractPolicy? Published { get; set; }
+
+    [JsonPropertyOrder(4)]
+    public ModulePreviewSourceFallbackPolicy SourceFallback { get; set; } = new();
+
+    [JsonPropertyOrder(5)]
     public IList<string> AllowedPackProperties { get; } = [];
+}
+
+internal sealed class ModulePreviewPublishedContractPolicy
+{
+    [JsonPropertyOrder(0)]
+    public string Source { get; set; } = string.Empty;
 }
 
 internal sealed class ModulePreviewSourceFallbackPolicy

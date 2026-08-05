@@ -24,6 +24,7 @@ internal static partial class PreviewTool
             "output",
             "working-directory",
             "git-executable",
+            "contract-version",
             "image",
             "pin",
             "dependency");
@@ -55,12 +56,26 @@ internal static partial class PreviewTool
 
         if (descriptor.Contract is not null)
         {
+            var contractVersion = options.Optional("contract-version") ?? descriptor.Contract.Version;
+            if (string.IsNullOrWhiteSpace(contractVersion))
+            {
+                throw new PreviewToolException(
+                    "The producer descriptor declares a contract without a version. " +
+                    "Supply its computed exact version with --contract-version.");
+            }
+
+            PreviewPolicyValidation.ValidatePackageVersion(contractVersion, "--contract-version");
             manifest.Contracts.Add(new ModulePreviewContractRequest
             {
                 Module = descriptor.Module,
                 PackageId = descriptor.Contract.PackageId,
-                Version = descriptor.Contract.Version
+                Version = contractVersion
             });
+        }
+        else if (options.Optional("contract-version") is not null)
+        {
+            throw new PreviewToolException(
+                "--contract-version cannot be used when the producer descriptor does not declare a contract.");
         }
 
         var suppliedImages = new Dictionary<string, ProducedImage>(StringComparer.OrdinalIgnoreCase);
@@ -154,7 +169,9 @@ internal static partial class PreviewTool
         var manifestPath = Path.GetFullPath(options.Required("manifest"));
         var policyPath = Path.GetFullPath(options.Required("policy"));
         var workDirectory = Path.GetFullPath(options.Required("work-directory"));
-        var packageFeed = Path.GetFullPath(options.Required("package-feed"));
+        var packageFeed = options.Optional("package-feed") is { } feed
+            ? Path.GetFullPath(feed)
+            : null;
         var resolutionPath = Path.GetFullPath(options.Required("resolution"));
         var consumerRepository = options.Required("consumer-repository");
         var consumerCommit = options.Required("consumer-commit");
@@ -190,10 +207,19 @@ internal static partial class PreviewTool
         var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken).ConfigureAwait(false);
         var policy = await ModulePreviewConsumerPolicy.LoadAsync(policyPath, cancellationToken).ConfigureAwait(false);
         var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
-        var properties = ParseMaterializationProperties(options.Many("property"), policy);
+        var properties = ParseMaterializationProperties(options.Many("property"), evaluation);
+
+        if (evaluation.Modules.Any(module => module.Contract is not null) && packageFeed is null)
+        {
+            throw new PreviewToolException(
+                "--package-feed is required when the preview request includes a contract.");
+        }
 
         EnsureEmptyWorkDirectory(workDirectory);
-        Directory.CreateDirectory(packageFeed);
+        if (packageFeed is not null)
+        {
+            Directory.CreateDirectory(packageFeed);
+        }
 
         var resolution = new ModulePreviewResolution
         {
@@ -215,52 +241,67 @@ internal static partial class PreviewTool
             var contractPolicy = module.Policy.Contract
                 ?? throw new PreviewToolException(
                     $"Consumer policy for module '{module.Selection.Name}' does not declare a contract.");
-            if (!contractPolicy.SourceFallback.Enabled ||
-                string.IsNullOrWhiteSpace(contractPolicy.SourceFallback.Project))
+            MaterializedContractPackage package;
+            if (contractPolicy.Published is not null)
             {
-                throw new PreviewToolException(
-                    $"Contract '{contract.PackageId}' is not available from a policy-owned source fallback. " +
-                    "This tool version materializes contract requests only from explicitly allowed source projects.");
+                await Console.Error.WriteLineAsync(
+                    $"resolving published contract {contract.PackageId} {contract.Version} " +
+                    $"from {contractPolicy.Published.Source}")
+                    .ConfigureAwait(false);
+                package = await ResolvePublishedContractAsync(
+                    contract,
+                    contractPolicy.Published,
+                    workDirectory,
+                    packageFeed!,
+                    nugetConfig,
+                    dotnetExecutable,
+                    cancellationToken).ConfigureAwait(false);
             }
-
-            await Console.Error.WriteLineAsync(
-                $"materializing contract {contract.PackageId} {contract.Version} from {module.Selection.Commit}")
-                .ConfigureAwait(false);
-            var checkoutPath = Path.Combine(
-                workDirectory,
-                GetSafeDirectoryName(module.Selection.Name));
-            await CheckoutExactCommitAsync(
-                module.Selection,
-                checkoutPath,
-                gitExecutable,
-                cancellationToken).ConfigureAwait(false);
-            var projectPath = GetContainedPath(
-                checkoutPath,
-                contractPolicy.SourceFallback.Project,
-                "contract source fallback project");
-            if (!File.Exists(projectPath))
+            else
             {
-                throw new PreviewToolException(
-                    $"Policy-owned contract project '{contractPolicy.SourceFallback.Project}' does not exist " +
-                    $"at commit '{module.Selection.Commit}'.");
-            }
-            EnsureNoSymbolicLinks(checkoutPath, contractPolicy.SourceFallback.Project);
+                var project = contractPolicy.SourceFallback.Project
+                    ?? throw new PreviewToolException(
+                        $"Contract '{contract.PackageId}' has no policy-owned materialization source.");
+                await Console.Error.WriteLineAsync(
+                    $"materializing contract {contract.PackageId} {contract.Version} from {module.Selection.Commit}")
+                    .ConfigureAwait(false);
+                var checkoutPath = Path.Combine(
+                    workDirectory,
+                    GetSafeDirectoryName(module.Selection.Name));
+                await CheckoutExactCommitAsync(
+                    module.Selection,
+                    checkoutPath,
+                    gitExecutable,
+                    cancellationToken).ConfigureAwait(false);
+                var projectPath = GetContainedPath(
+                    checkoutPath,
+                    project,
+                    "contract source fallback project");
+                if (!File.Exists(projectPath))
+                {
+                    throw new PreviewToolException(
+                        $"Policy-owned contract project '{project}' does not exist " +
+                        $"at commit '{module.Selection.Commit}'.");
+                }
+                EnsureNoSymbolicLinks(checkoutPath, project);
 
-            var package = await PackContractAsync(
-                contract,
-                contractPolicy,
-                projectPath,
-                packageFeed,
-                nugetConfig,
-                properties,
-                dotnetExecutable,
-                cancellationToken).ConfigureAwait(false);
+                package = await PackContractAsync(
+                    contract,
+                    contractPolicy,
+                    projectPath,
+                    packageFeed!,
+                    nugetConfig,
+                    properties,
+                    dotnetExecutable,
+                    cancellationToken).ConfigureAwait(false);
+            }
             resolution.Contracts.Add(new ModulePreviewResolvedContract
             {
                 Module = contract.Module,
                 PackageId = contract.PackageId,
                 Version = contract.Version,
                 Sha256 = package.Sha256,
+                Source = package.Source,
                 PackagePath = package.Path
             });
         }
@@ -297,11 +338,11 @@ internal static partial class PreviewTool
 
     private static Dictionary<string, string> ParseMaterializationProperties(
         IEnumerable<string> values,
-        ModulePreviewConsumerPolicy policy)
+        ModulePreviewPolicyEvaluation evaluation)
     {
-        var allowed = policy.Modules
+        var allowed = evaluation.Modules
             .Where(module => module.Contract is not null)
-            .SelectMany(module => module.Contract!.AllowedPackProperties)
+            .SelectMany(module => module.Policy.Contract!.AllowedPackProperties)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var value in values)
@@ -479,6 +520,95 @@ internal static partial class PreviewTool
         }
     }
 
+    private static async Task<MaterializedContractPackage> ResolvePublishedContractAsync(
+        ModulePreviewContractRequest contract,
+        ModulePreviewPublishedContractPolicy policy,
+        string workDirectory,
+        string packageFeed,
+        string? nugetConfig,
+        string dotnetExecutable,
+        CancellationToken cancellationToken)
+    {
+        var resolutionDirectory = Path.Combine(
+            workDirectory,
+            $"published-{GetSafeDirectoryName(contract.Module)}");
+        var packagesDirectory = Path.Combine(resolutionDirectory, "packages");
+        Directory.CreateDirectory(resolutionDirectory);
+        var projectPath = Path.Combine(resolutionDirectory, "ContractResolver.csproj");
+        var project = $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="{{contract.PackageId}}" Version="[{{contract.Version}}]" />
+              </ItemGroup>
+            </Project>
+            """;
+        await File.WriteAllTextAsync(
+            projectPath,
+            project,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            cancellationToken).ConfigureAwait(false);
+
+        var restoreArguments = new List<string>
+        {
+            "restore",
+            projectPath,
+            "--packages", packagesDirectory,
+            "--source", policy.Source,
+            "--no-cache",
+            "--force-evaluate",
+            "--nologo"
+        };
+        if (nugetConfig is not null)
+        {
+            restoreArguments.Add("--configfile");
+            restoreArguments.Add(nugetConfig);
+        }
+        await RunRequiredCommandAsync(
+            dotnetExecutable,
+            restoreArguments,
+            resolutionDirectory,
+            $"resolve published contract '{contract.PackageId}'",
+            cancellationToken).ConfigureAwait(false);
+
+        var candidates = Directory.Exists(packagesDirectory)
+            ? Directory.GetFiles(packagesDirectory, "*.nupkg", SearchOption.AllDirectories)
+                .Where(path => PackageIdentityMatches(path, contract.PackageId, contract.Version))
+                .ToArray()
+            : [];
+        var publishedPackage = candidates.Length switch
+        {
+            1 => Path.GetFullPath(candidates[0]),
+            0 => throw new PreviewToolException(
+                $"Published source '{policy.Source}' did not resolve package " +
+                $"'{contract.PackageId}' version '{contract.Version}'."),
+            _ => throw new PreviewToolException(
+                $"Published source '{policy.Source}' resolved multiple matching packages for " +
+                $"'{contract.PackageId}' version '{contract.Version}'.")
+        };
+
+        var sha256 = await ComputeFileSha256Async(publishedPackage, cancellationToken).ConfigureAwait(false);
+        var packagePath = Path.Combine(packageFeed, Path.GetFileName(publishedPackage));
+        if (File.Exists(packagePath))
+        {
+            var existingSha256 = await ComputeFileSha256Async(packagePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(existingSha256, sha256, StringComparison.Ordinal))
+            {
+                throw new PreviewToolException(
+                    $"Package feed already contains different bytes for '{contract.PackageId}' " +
+                    $"version '{contract.Version}'.");
+            }
+        }
+        else
+        {
+            File.Copy(publishedPackage, packagePath);
+        }
+
+        return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256, policy.Source);
+    }
+
     private static async Task<MaterializedContractPackage> PackContractInStagingDirectoryAsync(
         ModulePreviewContractRequest contract,
         ModulePreviewConsumerContractPolicy policy,
@@ -545,7 +675,7 @@ internal static partial class PreviewTool
         var sha256 = await ComputeFileSha256Async(producedPackage, cancellationToken).ConfigureAwait(false);
         var packagePath = Path.Combine(packageFeed, Path.GetFileName(producedPackage));
         File.Move(producedPackage, packagePath, overwrite: true);
-        return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256);
+        return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256, Source: null);
     }
 
     private static bool PackageIdentityMatches(string packagePath, string packageId, string version)
@@ -672,15 +802,19 @@ internal static partial class PreviewTool
     private static async Task WriteGitHubEnvironmentAsync(
         string path,
         string resolutionPath,
-        string packageFeed,
+        string? packageFeed,
         ModulePreviewPolicyEvaluation evaluation,
         CancellationToken cancellationToken)
     {
         var lines = new List<string>
         {
-            $"ModulePreview__Resolution={ValidateEnvironmentValue(resolutionPath, "resolution path")}",
-            $"ModulePreview__PackageFeed={ValidateEnvironmentValue(packageFeed, "package feed")}"
+            $"ModulePreview__Resolution={ValidateEnvironmentValue(resolutionPath, "resolution path")}"
         };
+        if (evaluation.Modules.Any(module => module.Contract is not null))
+        {
+            lines.Add(
+                $"ModulePreview__PackageFeed={ValidateEnvironmentValue(packageFeed!, "package feed")}");
+        }
         foreach (var module in evaluation.Modules.Where(module => module.Contract is not null))
         {
             var environmentName = module.Policy.Contract!.VersionEnvironment;
@@ -749,5 +883,5 @@ internal static partial class PreviewTool
 
     private sealed record ProducedImage(string Resource, string Repository, string Sha256);
 
-    private sealed record MaterializedContractPackage(string Path, string Sha256);
+    private sealed record MaterializedContractPackage(string Path, string Sha256, string? Source);
 }

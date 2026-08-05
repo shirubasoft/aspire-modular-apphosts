@@ -13,12 +13,14 @@ internal static partial class PreviewTool
     {
         WriteIndented = false
     };
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
     private const string Usage = """
         Aspire Modular AppHosts preview tool
 
         Usage:
           dotnet modular-apphosts preview produce --descriptor <path> --output <path>
+              [--contract-version <exact-version>]
               [--image <resource>=<repository>@<sha256-digest>]...
               [--pin <name>=<repository-url>@<full-commit>]...
           dotnet modular-apphosts preview export --module <name> --output <path>
@@ -26,12 +28,12 @@ internal static partial class PreviewTool
           dotnet modular-apphosts preview verify --manifest <path> --policy <path>
               [--output <path>]
           dotnet modular-apphosts preview materialize --manifest <path> --policy <path>
-              --work-directory <path> --package-feed <path> --resolution <path>
+              --work-directory <path> --resolution <path> [--package-feed <path>]
               --consumer-repository <url> --consumer-commit <full-commit>
               [--github-env <path>] [--property <name>=<value>]...
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
-              [--input <name>=<value>]...
+              [--input <name>=<value>]... [--wait] [--github-output <path>]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         --dependency is accepted as an alias for --pin.
@@ -137,13 +139,17 @@ internal static partial class PreviewTool
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
-        var options = CommandOptions.Parse(arguments, ["input"]);
+        var options = CommandOptions.Parse(arguments, ["input"], ["wait"]);
         var manifestPath = options.Required("manifest");
         var repository = ValidateTargetRepository(options.Required("repo"));
         var workflow = ValidateWorkflow(options.Required("workflow"));
         var targetRef = ValidateSimpleValue(options.Required("ref"), "ref");
         var inputName = ValidateInputName(options.Optional("input-name") ?? "manifest_json");
         var githubCli = options.Optional("gh-executable") ?? "gh";
+        var githubOutputPath = options.Optional("github-output") is { } githubOutput
+            ? Path.GetFullPath(githubOutput)
+            : null;
+        var wait = options.Flag("wait");
         options.EnsureOnly(
             "manifest",
             "repo",
@@ -151,6 +157,8 @@ internal static partial class PreviewTool
             "ref",
             "input-name",
             "gh-executable",
+            "github-output",
+            "wait",
             "input");
 
         var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken).ConfigureAwait(false);
@@ -188,11 +196,24 @@ internal static partial class PreviewTool
             cancellationToken).ConfigureAwait(false);
         EnsureSuccess(result, "GitHub workflow dispatch");
 
+        long runId;
         string? runUrl;
         try
         {
             using var response = JsonDocument.Parse(result.StandardOutput);
+            if (response.RootElement.ValueKind != JsonValueKind.Object ||
+                !response.RootElement.TryGetProperty("workflow_run_id", out var workflowRunId) ||
+                workflowRunId.ValueKind != JsonValueKind.Number ||
+                !workflowRunId.TryGetInt64(out runId) ||
+                runId <= 0)
+            {
+                throw new PreviewToolException(
+                    "GitHub workflow dispatch did not return a positive numeric workflow_run_id. " +
+                    "Ensure the API supports run details.");
+            }
+
             runUrl = response.RootElement.TryGetProperty("html_url", out var htmlUrl)
+                && htmlUrl.ValueKind == JsonValueKind.String
                 ? htmlUrl.GetString()
                 : null;
         }
@@ -209,7 +230,36 @@ internal static partial class PreviewTool
                 "GitHub workflow dispatch did not return a run URL. Ensure the API supports run details.");
         }
 
-        await Console.Out.WriteLineAsync(runUrl).ConfigureAwait(false);
+        if (runUrl.Any(char.IsControl))
+        {
+            throw new PreviewToolException("GitHub workflow dispatch returned an invalid run URL.");
+        }
+
+        var outputs = $"workflow_run_id={runId}{Environment.NewLine}" +
+            $"workflow_run_url={runUrl}{Environment.NewLine}";
+        await Console.Out.WriteAsync(outputs).ConfigureAwait(false);
+        if (githubOutputPath is not null)
+        {
+            await File.AppendAllTextAsync(
+                githubOutputPath,
+                outputs,
+                Utf8NoBom,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (wait)
+        {
+            var watchResult = await RunCommandAsync(
+                githubCli,
+                ["run", "watch", runId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    "--repo", repository, "--exit-status"],
+                Environment.CurrentDirectory,
+                standardInput: null,
+                cancellationToken,
+                applyTimeout: false).ConfigureAwait(false);
+            EnsureSuccess(watchResult, $"GitHub workflow run '{runId}'");
+        }
+
         return 0;
     }
 
@@ -356,7 +406,8 @@ internal static partial class PreviewTool
         IReadOnlyList<string> arguments,
         string workingDirectory,
         string? standardInput,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool applyTimeout = true)
     {
         var command = CliCommand.Wrap(executable)
             .WithArguments(arguments)
@@ -365,6 +416,15 @@ internal static partial class PreviewTool
         if (standardInput is not null)
         {
             command = command.WithStandardInputPipe(PipeSource.FromString(standardInput));
+        }
+
+        if (!applyTimeout)
+        {
+            var untimedResult = await command.ExecuteBufferedAsync(cancellationToken).ConfigureAwait(false);
+            return new CommandResult(
+                untimedResult.ExitCode,
+                untimedResult.StandardOutput,
+                untimedResult.StandardError);
         }
 
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
@@ -565,23 +625,25 @@ internal static partial class PreviewTool
     {
         private readonly Dictionary<string, List<string>> _values = new(StringComparer.Ordinal);
         private readonly HashSet<string> _repeatable;
+        private readonly HashSet<string> _flags;
 
-        private CommandOptions(IEnumerable<string> repeatable)
+        private CommandOptions(IEnumerable<string> repeatable, IEnumerable<string> flags)
         {
             _repeatable = new HashSet<string>(repeatable, StringComparer.Ordinal);
+            _flags = new HashSet<string>(flags, StringComparer.Ordinal);
         }
 
         public static CommandOptions Parse(
             IReadOnlyList<string> arguments,
-            IEnumerable<string>? repeatable = null)
+            IEnumerable<string>? repeatable = null,
+            IEnumerable<string>? flags = null)
         {
-            var options = new CommandOptions(repeatable ?? []);
-            for (var index = 0; index < arguments.Count; index += 2)
+            var options = new CommandOptions(repeatable ?? [], flags ?? []);
+            for (var index = 0; index < arguments.Count;)
             {
                 var option = arguments[index];
                 if (!option.StartsWith("--", StringComparison.Ordinal) ||
-                    option.Length == 2 ||
-                    index + 1 >= arguments.Count)
+                    option.Length == 2)
                 {
                     throw new PreviewToolException($"Expected --option value near '{option}'.");
                 }
@@ -598,7 +660,20 @@ internal static partial class PreviewTool
                     throw new PreviewToolException($"Option '--{name}' can only be specified once.");
                 }
 
+                if (options._flags.Contains(name))
+                {
+                    values.Add(string.Empty);
+                    index++;
+                    continue;
+                }
+
+                if (index + 1 >= arguments.Count)
+                {
+                    throw new PreviewToolException($"Expected --option value near '{option}'.");
+                }
+
                 values.Add(arguments[index + 1]);
+                index += 2;
             }
 
             return options;
@@ -612,6 +687,8 @@ internal static partial class PreviewTool
 
         public List<string> Many(string name) =>
             _values.TryGetValue(name, out var values) ? values : [];
+
+        public bool Flag(string name) => _values.ContainsKey(name);
 
         public void EnsureOnly(params string[] names)
         {

@@ -92,15 +92,15 @@ internal static class PreviewPolicyEvaluator
         ModulePreviewContractRequest? request,
         ModulePreviewConsumerContractPolicy? policy)
     {
-        if (request is null && policy is null)
-        {
-            return;
-        }
-
         if (request is null)
         {
-            throw new InvalidDataException(
-                $"Module '{module}' must request its policy-owned contract package.");
+            if (policy?.Required == true)
+            {
+                throw new InvalidDataException(
+                    $"Module '{module}' must request its required policy-owned contract package.");
+            }
+
+            return;
         }
 
         if (policy is null || !string.Equals(request.PackageId, policy.PackageId, StringComparison.Ordinal))
@@ -185,13 +185,14 @@ internal static class PreviewPolicyValidation
             "producer descriptor");
         ValidateName(descriptor.Module, "Producer descriptor.Module");
 
-        if (descriptor.Contract is null)
+        if (descriptor.Contract is not null)
         {
-            throw new InvalidDataException("The producer descriptor must declare a contract.");
+            ValidatePackageId(descriptor.Contract.PackageId, "Producer descriptor.Contract.PackageId");
+            if (!string.IsNullOrWhiteSpace(descriptor.Contract.Version))
+            {
+                ValidatePackageVersion(descriptor.Contract.Version, "Producer descriptor.Contract.Version");
+            }
         }
-
-        ValidatePackageId(descriptor.Contract.PackageId, "Producer descriptor.Contract.PackageId");
-        ValidatePackageVersion(descriptor.Contract.Version, "Producer descriptor.Contract.Version");
 
         var images = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var image in descriptor.Images)
@@ -298,17 +299,41 @@ internal static class PreviewPolicyValidation
                 $"Contract policy for module '{module}' must declare sourceFallback.");
         }
 
-        if (contract.SourceFallback.Enabled)
+        if (contract.Published is not null)
+        {
+            ModulePreviewValidation.ValidatePackageSource(
+                contract.Published.Source,
+                $"Contract policy for module '{module}'.Published.Source");
+            if (contract.SourceFallback.Enabled)
+            {
+                throw new InvalidDataException(
+                    $"Contract policy for module '{module}' cannot enable both published resolution " +
+                    "and source fallback.");
+            }
+        }
+        else if (contract.SourceFallback.Enabled)
         {
             ValidateRelativeProjectPath(
                 contract.SourceFallback.Project,
                 $"Contract policy for module '{module}'.SourceFallback.Project");
         }
-        else if (contract.SourceFallback.Project is not null)
+        else
+        {
+            throw new InvalidDataException(
+                $"Contract policy for module '{module}' must declare a published source or enable source fallback.");
+        }
+
+        if (!contract.SourceFallback.Enabled && contract.SourceFallback.Project is not null)
         {
             throw new InvalidDataException(
                 $"Contract policy for module '{module}' cannot specify a source fallback project " +
                 "when source fallback is disabled.");
+        }
+
+        if (contract.Published is not null && contract.AllowedPackProperties.Count > 0)
+        {
+            throw new InvalidDataException(
+                $"Contract policy for module '{module}' cannot allow pack properties in published mode.");
         }
 
         var properties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
