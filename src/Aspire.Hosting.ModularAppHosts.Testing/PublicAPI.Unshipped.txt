@@ -21,7 +21,6 @@ Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Build() -> 
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.BuildAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.DistributedApplication!>!
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Configuration.get -> Microsoft.Extensions.Configuration.ConfigurationManager!
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.CreateResourceBuilder<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
-Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Dispose() -> void
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DisposeAsync() -> System.Threading.Tasks.ValueTask
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Environment.get -> Microsoft.Extensions.Hosting.IHostEnvironment!
 Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Eventing.get -> Aspire.Hosting.Eventing.IDistributedApplicationEventing!

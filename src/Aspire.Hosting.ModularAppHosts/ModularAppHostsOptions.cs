@@ -6,7 +6,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 /// <summary>Controls how exported modules are materialized by a receiving AppHost.</summary>
 /// <remarks>
 /// Values are loaded from <c>Aspire:ModularAppHosts</c>. Configure these options before calling
-/// <c>Add</c> or <c>ImportModule</c> because they shape the Aspire application model.
+/// <c>AddAsync</c> or <c>ImportModuleAsync</c> because they shape the Aspire application model.
 /// </remarks>
 public sealed class ModularAppHostsOptions
 {

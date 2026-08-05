@@ -63,7 +63,7 @@ public interface IDistributedApplicationModuleBuilder
         string tag = "latest");
 
     /// <summary>
-    /// Overrides the Git repository used by <c>ImportModule</c>. When omitted, the origin remote is inferred
+    /// Overrides the Git repository used by <c>ImportModuleAsync</c>. When omitted, the origin remote is inferred
     /// from the projects' common Git worktree.
     /// </summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository);

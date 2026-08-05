@@ -44,8 +44,14 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly IDistributedApplicationBuilder _innerBuilder;
     private readonly OwnedDeployment? _ownedDeployment;
+    private readonly object _lifecycleLock = new();
+
+    [SuppressMessage(
+        "Usage",
+        "CA2213:Disposable fields should be disposed",
+        Justification = "The shared disposal task disposes the application asynchronously for both disposal APIs.")]
     private DistributedApplication? _application;
-    private int _disposeState;
+    private Task? _disposeTask;
 
     private DockerComposeDeploymentTestingBuilder(
         IDistributedApplicationBuilder innerBuilder,
@@ -72,8 +78,8 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <remarks>
     /// The deployment environment defaults to a unique name prefixed by <see cref="DefaultDeploymentEnvironmentName"/> and
     /// can be overridden with <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary
-    /// directory and can be overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Disposing the builder
-    /// destroys the deployment.
+    /// directory and can be overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Asynchronously
+    /// disposing the builder destroys the deployment.
     /// </remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         CancellationToken cancellationToken = default)
@@ -96,7 +102,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
     /// <param name="options">The deployment options.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    /// <remarks>Asynchronously disposing the returned builder runs <c>aspire destroy</c>.</remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         DockerComposeDeploymentOptions options,
         CancellationToken cancellationToken = default)
@@ -121,7 +127,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// The deployment output path. When omitted, a temporary directory is created and removed with the deployment.
     /// </param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <remarks>Disposing the returned builder runs <c>aspire destroy</c>.</remarks>
+    /// <remarks>Asynchronously disposing the returned builder runs <c>aspire destroy</c>.</remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         string environmentName,
         string? outputPath = null,
@@ -317,13 +323,16 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <inheritdoc />
     public DistributedApplication Build()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeState) != 0, this);
-        if (_application is not null)
+        lock (_lifecycleLock)
         {
-            throw new InvalidOperationException("The distributed application has already been built.");
-        }
+            ObjectDisposedException.ThrowIf(_disposeTask is not null, this);
+            if (_application is not null)
+            {
+                throw new InvalidOperationException("The distributed application has already been built.");
+            }
 
-        return _application = _innerBuilder.Build();
+            return _application = _innerBuilder.Build();
+        }
     }
 
     /// <inheritdoc />
@@ -334,23 +343,61 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     }
 
     /// <inheritdoc />
-    public void Dispose()
-    {
-        DisposeAsync().AsTask().GetAwaiter().GetResult();
-    }
+    [SuppressMessage(
+        "Design",
+        "CA1065:Do not raise exceptions in unexpected locations",
+        Justification = "Synchronous disposal cannot preserve the builder's required asynchronous deployment cleanup.")]
+    [SuppressMessage(
+        "Design",
+        "CA1063:Implement IDisposable correctly",
+        Justification = "The synchronous interface member is explicit so callers use the public asynchronous disposal contract.")]
+    void IDisposable.Dispose() => throw new InvalidOperationException(
+        $"{nameof(DockerComposeDeploymentTestingBuilder)} performs asynchronous cleanup. Use await using or await DisposeAsync().");
 
     /// <inheritdoc />
+    public ValueTask DisposeAsync() => new(GetOrCreateDisposalTask());
+
+    private Task GetOrCreateDisposalTask()
+    {
+        TaskCompletionSource? completion = null;
+        lock (_lifecycleLock)
+        {
+            if (_disposeTask is not null)
+            {
+                return _disposeTask;
+            }
+
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposeTask = completion.Task;
+        }
+
+        _ = CompleteDisposalAsync(completion);
+        return completion.Task;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Every disposal failure must be transferred to all callers of the shared disposal task.")]
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.SetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.SetException(exception);
+        }
+    }
+
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "All cleanup paths must run before disposal propagates failures.")]
-    public async ValueTask DisposeAsync()
+    private async Task DisposeCoreAsync()
     {
-        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
-        {
-            return;
-        }
-
         Exception? failure = null;
         try
         {

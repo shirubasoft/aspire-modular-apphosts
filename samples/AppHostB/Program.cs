@@ -10,8 +10,8 @@ builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfig
     appHostASource;
 builder.BuildModuleImages();
 
-AppHostAModule.Register(builder, appHostASource);
-var imported = AppHostAModule.ImportModule(builder);
+await AppHostAModule.RegisterAsync(builder, appHostASource);
+var imported = await AppHostAModule.ImportModuleAsync(builder);
 
 var api = imported.Api;
 var staticSite = imported.Static;
@@ -32,4 +32,4 @@ builder.AddDockerfile("dependency-gateway", "Gateway")
     .WaitFor(generatedStaticSite)
     .WithHttpHealthCheck("/health");
 
-builder.Build().Run();
+await builder.Build().RunAsync();

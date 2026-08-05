@@ -62,16 +62,16 @@ Add the module and use its generated resources like ordinary Aspire resource bui
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-var catalog = CatalogModule.AddModule(builder);
+var catalog = await CatalogModule.AddModuleAsync(builder);
 
 builder.AddContainer("storefront", "example/storefront", "latest")
     .WithReference(catalog.Api.GetEndpoint("http"))
     .WaitFor(catalog.Api);
 
-builder.Build().Run();
+await builder.Build().RunAsync();
 ```
 
-For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `CatalogModule.ImportModule(builder)`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
+For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `await CatalogModule.ImportModuleAsync(builder)`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
 
 The defaults are side-effect safe: local modules run as projects, imported modules run as containers, and repository updates and image build commands require an explicit opt-in. Use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent, with finer configuration available per module and resource.
 

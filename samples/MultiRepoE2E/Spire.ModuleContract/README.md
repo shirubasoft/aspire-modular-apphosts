@@ -9,7 +9,7 @@ Reference the package from an AppHost and import its typed module:
 ```csharp
 using Spire.ModuleContract;
 
-var spire = SpireModule.ImportModule(builder);
+var spire = await SpireModule.ImportModuleAsync(builder);
 ```
 
 The complete validation lives in the repository's `samples/MultiRepoE2E` directory.

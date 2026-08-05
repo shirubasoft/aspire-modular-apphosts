@@ -9,12 +9,18 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal static class RepositoryInspector
 {
-    public static string FindRepositoryRoot(
+    public static async Task<string> FindRepositoryRootAsync(
         string projectPath,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        if (TryFindRepositoryRoot(projectPath, out var root, gitExecutablePath, commandTimeout))
+        var root = await TryFindRepositoryRootAsync(
+            projectPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (root is not null)
         {
             return root;
         }
@@ -26,63 +32,66 @@ internal static class RepositoryInspector
         return Path.GetFullPath(startDirectory);
     }
 
-    public static bool TryFindRepositoryRoot(
+    public static async Task<string?> TryFindRepositoryRootAsync(
         string path,
-        out string repositoryRoot,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
         var startDirectory = GetWorkingDirectory(path);
-        if (TryRunGit(
-                startDirectory,
-                ["rev-parse", "--show-toplevel"],
-                gitExecutablePath,
-                commandTimeout,
-                out var root) &&
-            !string.IsNullOrWhiteSpace(root))
+        var result = await TryRunGitAsync(
+            startDirectory,
+            ["rev-parse", "--show-toplevel"],
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (result.Success && !string.IsNullOrWhiteSpace(result.Output))
         {
-            repositoryRoot = Path.GetFullPath(root.Trim());
-            return true;
+            return Path.GetFullPath(result.Output.Trim());
         }
 
-        repositoryRoot = string.Empty;
-        return false;
+        return null;
     }
 
-    public static string? TryGetRemote(
+    public static async Task<string?> TryGetRemoteAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        return TryRunGit(
+        var result = await TryRunGitAsync(
             repositoryPath,
             ["config", "--get", "remote.origin.url"],
             gitExecutablePath,
             commandTimeout,
-            out var remote)
-            ? remote.Trim() is { Length: > 0 } value ? value : null
+            cancellationToken).ConfigureAwait(false);
+        return result.Success
+            ? result.Output.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static bool IsGitRepository(
+    public static async Task<bool> IsGitRepositoryAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
         TimeSpan? commandTimeout = null,
-        bool requireSuccessfulInspection = false)
+        bool requireSuccessfulInspection = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!Directory.Exists(repositoryPath))
         {
             return false;
         }
 
-        if (TryRunGit(
-                repositoryPath,
-                ["rev-parse", "--is-inside-work-tree"],
-                gitExecutablePath,
-                commandTimeout,
-                out var result))
+        var result = await TryRunGitAsync(
+            repositoryPath,
+            ["rev-parse", "--is-inside-work-tree"],
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (result.Success)
         {
-            return string.Equals(result.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(result.Output.Trim(), "true", StringComparison.OrdinalIgnoreCase);
         }
 
         if (requireSuccessfulInspection && ContainsGitMetadata(repositoryPath))
@@ -93,29 +102,32 @@ internal static class RepositoryInspector
         return false;
     }
 
-    public static bool IsDirty(
+    public static async Task<bool> IsDirtyAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
         TimeSpan? commandTimeout = null,
-        bool requireSuccessfulInspection = false)
+        bool requireSuccessfulInspection = false,
+        CancellationToken cancellationToken = default)
     {
-        if (!IsGitRepository(
+        if (!await IsGitRepositoryAsync(
                 repositoryPath,
                 gitExecutablePath,
                 commandTimeout,
-                requireSuccessfulInspection))
+                requireSuccessfulInspection,
+                cancellationToken).ConfigureAwait(false))
         {
             return false;
         }
 
-        if (TryRunGit(
-                repositoryPath,
-                ["status", "--porcelain", "--untracked-files=normal"],
-                gitExecutablePath,
-                commandTimeout,
-                out var status))
+        var result = await TryRunGitAsync(
+            repositoryPath,
+            ["status", "--porcelain", "--untracked-files=normal"],
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (result.Success)
         {
-            return !string.IsNullOrWhiteSpace(status);
+            return !string.IsNullOrWhiteSpace(result.Output);
         }
 
         if (requireSuccessfulInspection)
@@ -126,49 +138,55 @@ internal static class RepositoryInspector
         return false;
     }
 
-    public static string? TryGetBranch(
+    public static async Task<string?> TryGetBranchAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        return TryRunGit(
+        var result = await TryRunGitAsync(
             repositoryPath,
             ["branch", "--show-current"],
             gitExecutablePath,
             commandTimeout,
-            out var branch)
-            ? branch.Trim() is { Length: > 0 } value ? value : null
+            cancellationToken).ConfigureAwait(false);
+        return result.Success
+            ? result.Output.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static string? TryGetCommit(
+    public static async Task<string?> TryGetCommitAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        return TryRunGit(
+        var result = await TryRunGitAsync(
             repositoryPath,
             ["rev-parse", "--short=12", "HEAD"],
             gitExecutablePath,
             commandTimeout,
-            out var commit)
-            ? commit.Trim() is { Length: > 0 } value ? value : null
+            cancellationToken).ConfigureAwait(false);
+        return result.Success
+            ? result.Output.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static string? TryResolveCommit(
+    public static async Task<string?> TryResolveCommitAsync(
         string repositoryPath,
         string revision = "HEAD",
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        return TryRunGit(
+        var result = await TryRunGitAsync(
             repositoryPath,
             ["rev-parse", $"{revision}^{{commit}}"],
             gitExecutablePath,
             commandTimeout,
-            out var commit)
-            ? commit.Trim() is { Length: > 0 } value ? value : null
+            cancellationToken).ConfigureAwait(false);
+        return result.Success
+            ? result.Output.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
@@ -189,38 +207,37 @@ internal static class RepositoryInspector
         return candidate;
     }
 
-    private static bool TryRunGit(
+    private static async Task<(bool Success, string Output)> TryRunGitAsync(
         string workingDirectory,
         IReadOnlyList<string> arguments,
         string gitExecutablePath,
         TimeSpan? commandTimeout,
-        out string output)
+        CancellationToken cancellationToken)
     {
-        output = string.Empty;
-
         try
         {
             using var timeout = new CancellationTokenSource(commandTimeout ?? TimeSpan.FromSeconds(5));
-            var result = CliCommand.Wrap(gitExecutablePath)
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token);
+            var result = await CliCommand.Wrap(gitExecutablePath)
                 .WithArguments(arguments)
                 .WithWorkingDirectory(Directory.Exists(workingDirectory)
                     ? workingDirectory
                     : Path.GetDirectoryName(workingDirectory) ?? workingDirectory)
                 .WithValidation(CommandResultValidation.None)
-                .ExecuteBufferedAsync(timeout.Token)
-                .GetAwaiter()
-                .GetResult();
+                .ExecuteBufferedAsync(linked.Token)
+                .ConfigureAwait(false);
 
-            output = result.StandardOutput;
-            return result.IsSuccess;
+            return (result.IsSuccess, result.StandardOutput);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or IOException
-                or OperationCanceledException)
+                || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
-            return false;
+            return (false, string.Empty);
         }
     }
 
@@ -430,12 +447,13 @@ internal static class GitHubRepositoryCloner
             workingDirectory);
     }
 
-    public static void Clone(
+    public static async Task CloneAsync(
         string executable,
         string repository,
         string repositoryPath,
         TimeSpan? commandTimeout = null,
-        string gitExecutablePath = "git")
+        string gitExecutablePath = "git",
+        CancellationToken cancellationToken = default)
     {
         var command = CreateCommand(executable, repository, repositoryPath);
         Directory.CreateDirectory(command.WorkingDirectory);
@@ -443,15 +461,13 @@ internal static class GitHubRepositoryCloner
         ModuleCliResult result;
         try
         {
-            result = ModuleCliRunner.RunAsync(
-                    command.Executable,
-                    command.Arguments,
-                    command.WorkingDirectory,
-                    commandTimeout ?? TimeSpan.FromMinutes(2),
-                    $"clone {repository}",
-                    CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
+            result = await ModuleCliRunner.RunAsync(
+                command.Executable,
+                command.Arguments,
+                command.WorkingDirectory,
+                commandTimeout ?? TimeSpan.FromMinutes(2),
+                $"clone {repository}",
+                cancellationToken).ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
@@ -480,11 +496,12 @@ internal static class GitHubRepositoryCloner
                 $"with exit code {result.ExitCode}: {error.Trim()}");
         }
 
-        if (!RepositoryInspector.IsGitRepository(
+        if (!await RepositoryInspector.IsGitRepositoryAsync(
                 repositoryPath,
                 gitExecutablePath,
                 commandTimeout,
-                requireSuccessfulInspection: true))
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException(
                 $"GitHub CLI reported success, but '{repositoryPath}' is not a Git repository.");
@@ -550,22 +567,24 @@ internal sealed record ModuleRepositoryResolution(
 
 internal static class ModuleRepositoryDiscovery
 {
-    public static ModuleRepositoryResolution Resolve(
+    public static async Task<ModuleRepositoryResolution> ResolveAsync(
         string appHostDirectory,
         DistributedApplicationModule module,
         string? repository,
         string githubCliPath,
         TimeSpan? commandTimeout = null,
-        string gitExecutablePath = "git")
+        string gitExecutablePath = "git",
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         ArgumentNullException.ThrowIfNull(module);
 
-        if (!RepositoryInspector.TryFindRepositoryRoot(
-                appHostDirectory,
-                out var appHostRepositoryRoot,
-                gitExecutablePath,
-                commandTimeout))
+        var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            appHostDirectory,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (appHostRepositoryRoot is null)
         {
             throw new InvalidOperationException(
                 $"Automatic module discovery requires AppHost directory '{appHostDirectory}' to be inside a Git repository.");
@@ -579,21 +598,23 @@ internal static class ModuleRepositoryDiscovery
             return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
         }
 
-        if (TryGetSameRepositoryLocalPath(
+        var sameRepositoryPath = await TryGetSameRepositoryLocalPathAsync(
             repository,
             appHostDirectory,
             appHostRepositoryRoot,
             gitExecutablePath,
             commandTimeout,
-            out var sameRepositoryPath))
+            cancellationToken).ConfigureAwait(false);
+        if (sameRepositoryPath is not null)
         {
             return new ModuleRepositoryResolution(sameRepositoryPath, UsesSiblingLayout: false);
         }
 
-        var appHostRemote = RepositoryInspector.TryGetRemote(
+        var appHostRemote = await RepositoryInspector.TryGetRemoteAsync(
             appHostRepositoryRoot,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(repository) && !string.IsNullOrWhiteSpace(appHostRemote) &&
             GitHubRepositoryCloner.RefersToSameRepository(repository, appHostRemote, appHostDirectory))
         {
@@ -613,23 +634,25 @@ internal static class ModuleRepositoryDiscovery
 
         if (Directory.Exists(siblingPath))
         {
-            if (!RepositoryInspector.IsGitRepository(
+            if (!await RepositoryInspector.IsGitRepositoryAsync(
                     siblingPath,
                     gitExecutablePath,
                     commandTimeout,
-                    requireSuccessfulInspection: true))
+                    requireSuccessfulInspection: true,
+                    cancellationToken).ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
                     $"Discovered module '{module.Name}' at '{siblingPath}', but that directory is not a Git repository.");
             }
 
-            EnsureExpectedOrigin(
+            await EnsureExpectedOriginAsync(
                 siblingPath,
                 repository,
                 appHostDirectory,
                 module.Name,
                 gitExecutablePath,
-                commandTimeout);
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false);
 
             return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
         }
@@ -642,19 +665,21 @@ internal static class ModuleRepositoryDiscovery
                 $"{DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(module.Name)} or WithRepository().");
         }
 
-        GitHubRepositoryCloner.Clone(
+        await GitHubRepositoryCloner.CloneAsync(
             githubCliPath,
             repository,
             siblingPath,
             commandTimeout,
-            gitExecutablePath);
-        EnsureExpectedOrigin(
+            gitExecutablePath,
+            cancellationToken).ConfigureAwait(false);
+        await EnsureExpectedOriginAsync(
             siblingPath,
             repository,
             appHostDirectory,
             module.Name,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
     }
 
@@ -700,27 +725,28 @@ internal static class ModuleRepositoryDiscovery
         }
     }
 
-    private static bool TryGetSameRepositoryLocalPath(
+    private static async Task<string?> TryGetSameRepositoryLocalPathAsync(
         string? repository,
         string appHostDirectory,
         string expectedRepositoryRoot,
         string gitExecutablePath,
         TimeSpan? commandTimeout,
-        out string localPath)
+        CancellationToken cancellationToken)
     {
-        localPath = string.Empty;
         if (string.IsNullOrWhiteSpace(repository) || !IsLocalRepository(repository, appHostDirectory))
         {
-            return false;
+            return null;
         }
 
-        localPath = Path.GetFullPath(repository, appHostDirectory);
-        return RepositoryInspector.TryFindRepositoryRoot(
-                localPath,
-                out var repositoryRoot,
-                gitExecutablePath,
-                commandTimeout) &&
-            PathSafety.AreEqual(repositoryRoot, expectedRepositoryRoot);
+        var localPath = Path.GetFullPath(repository, appHostDirectory);
+        var repositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            localPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return repositoryRoot is not null && PathSafety.AreEqual(repositoryRoot, expectedRepositoryRoot)
+            ? localPath
+            : null;
     }
 
     private static bool IsLocalRepository(string repository, string appHostDirectory)
@@ -728,13 +754,14 @@ internal static class ModuleRepositoryDiscovery
         return !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory);
     }
 
-    private static void EnsureExpectedOrigin(
+    private static async Task EnsureExpectedOriginAsync(
         string repositoryPath,
         string? expectedRepository,
         string baseDirectory,
         string moduleName,
         string gitExecutablePath,
-        TimeSpan? commandTimeout)
+        TimeSpan? commandTimeout,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(expectedRepository) ||
             !GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory))
@@ -742,10 +769,11 @@ internal static class ModuleRepositoryDiscovery
             return;
         }
 
-        var actualRepository = RepositoryInspector.TryGetRemote(
+        var actualRepository = await RepositoryInspector.TryGetRemoteAsync(
             repositoryPath,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(actualRepository) ||
             !GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory))
         {
@@ -760,37 +788,41 @@ internal sealed record RepositorySyncCommand(string Executable, IReadOnlyList<st
 
 internal static class RepositorySynchronizer
 {
-    public static RepositorySyncCommand? CreateCommand(
+    public static async Task<RepositorySyncCommand?> CreateCommandAsync(
         string repositoryPath,
         string? repository,
         bool updateRepository,
         string? revision = null,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        var commands = CreateCommands(
+        var commands = await CreateCommandsAsync(
             repositoryPath,
             repository,
             updateRepository,
             revision,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         return commands.Count == 0 ? null : commands[0];
     }
 
-    public static IReadOnlyList<RepositorySyncCommand> CreateCommands(
+    public static async Task<IReadOnlyList<RepositorySyncCommand>> CreateCommandsAsync(
         string repositoryPath,
         string? repository,
         bool updateRepository,
         string? revision = null,
         string gitExecutablePath = "git",
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
     {
-        if (!RepositoryInspector.IsGitRepository(
+        if (!await RepositoryInspector.IsGitRepositoryAsync(
                 repositoryPath,
                 gitExecutablePath,
                 commandTimeout,
-                requireSuccessfulInspection: true))
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false))
         {
             if (Directory.Exists(repositoryPath))
             {
@@ -823,19 +855,26 @@ internal static class RepositorySynchronizer
             return commands;
         }
 
-        EnsureExpectedOrigin(repositoryPath, repository, gitExecutablePath, commandTimeout);
+        await EnsureExpectedOriginAsync(
+            repositoryPath,
+            repository,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
 
-        if (RepositoryInspector.IsDirty(
+        if (await RepositoryInspector.IsDirtyAsync(
                 repositoryPath,
                 gitExecutablePath,
                 commandTimeout,
-                requireSuccessfulInspection: true))
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false))
         {
-            EnsureDirtyCheckoutMatchesRevision(
+            await EnsureDirtyCheckoutMatchesRevisionAsync(
                 repositoryPath,
                 revision,
                 gitExecutablePath,
-                commandTimeout);
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false);
             return [];
         }
 
@@ -863,13 +902,14 @@ internal static class RepositorySynchronizer
         TimeSpan? commandTimeout = null,
         Action<string>? progress = null)
     {
-        var commands = CreateCommands(
+        var commands = await CreateCommandsAsync(
             repositoryPath,
             repository,
             updateRepository,
             revision,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         foreach (var command in commands)
         {
             var result = await ModuleCliRunner.RunAsync(
@@ -915,11 +955,12 @@ internal static class RepositorySynchronizer
             ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"]));
     }
 
-    private static void EnsureExpectedOrigin(
+    private static async Task EnsureExpectedOriginAsync(
         string repositoryPath,
         string? expectedRepository,
         string gitExecutablePath,
-        TimeSpan? commandTimeout)
+        TimeSpan? commandTimeout,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(expectedRepository))
         {
@@ -928,20 +969,22 @@ internal static class RepositorySynchronizer
 
         var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
         if (!GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory) &&
-            LocalRepositoryRootsMatch(
+            await LocalRepositoryRootsMatchAsync(
                 expectedRepository,
                 repositoryPath,
                 baseDirectory,
                 gitExecutablePath,
-                commandTimeout))
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false))
         {
             return;
         }
 
-        var actualRepository = RepositoryInspector.TryGetRemote(
+        var actualRepository = await RepositoryInspector.TryGetRemoteAsync(
             repositoryPath,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
             (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
              LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
@@ -966,47 +1009,52 @@ internal static class RepositorySynchronizer
             Path.GetFullPath(second, baseDirectory));
     }
 
-    private static bool LocalRepositoryRootsMatch(
+    private static async Task<bool> LocalRepositoryRootsMatchAsync(
         string expectedRepository,
         string repositoryPath,
         string baseDirectory,
         string gitExecutablePath,
-        TimeSpan? commandTimeout)
+        TimeSpan? commandTimeout,
+        CancellationToken cancellationToken)
     {
         var expectedPath = Path.GetFullPath(expectedRepository, baseDirectory);
-        return RepositoryInspector.TryFindRepositoryRoot(
-                expectedPath,
-                out var expectedRoot,
-                gitExecutablePath,
-                commandTimeout) &&
-            RepositoryInspector.TryFindRepositoryRoot(
-                repositoryPath,
-                out var actualRoot,
-                gitExecutablePath,
-                commandTimeout) &&
+        var expectedRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            expectedPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var actualRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            repositoryPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return expectedRoot is not null && actualRoot is not null &&
             PathSafety.AreEqual(expectedRoot, actualRoot);
     }
 
-    private static void EnsureDirtyCheckoutMatchesRevision(
+    private static async Task EnsureDirtyCheckoutMatchesRevisionAsync(
         string repositoryPath,
         string? revision,
         string gitExecutablePath,
-        TimeSpan? commandTimeout)
+        TimeSpan? commandTimeout,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(revision))
         {
             return;
         }
 
-        var currentCommit = RepositoryInspector.TryResolveCommit(
+        var currentCommit = await RepositoryInspector.TryResolveCommitAsync(
             repositoryPath,
             gitExecutablePath: gitExecutablePath,
-            commandTimeout: commandTimeout);
-        var expectedCommit = RepositoryInspector.TryResolveCommit(
+            commandTimeout: commandTimeout,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var expectedCommit = await RepositoryInspector.TryResolveCommitAsync(
             repositoryPath,
             revision,
             gitExecutablePath,
-            commandTimeout);
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         if (currentCommit is null || expectedCommit is null ||
             !string.Equals(currentCommit, expectedCommit, StringComparison.OrdinalIgnoreCase))
         {

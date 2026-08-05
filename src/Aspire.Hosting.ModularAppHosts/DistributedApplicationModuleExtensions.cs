@@ -69,20 +69,22 @@ public static class DistributedApplicationModuleExtensions
     }
 
     /// <summary>Exports a named module definition without adding its services to the application model.</summary>
-    public static IDistributedApplicationModule ExportModule(
+    public static Task<IDistributedApplicationModule> ExportModuleAsync(
         this IDistributedApplicationBuilder builder,
         string name,
-        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        CancellationToken cancellationToken = default)
     {
-        return DefineModule(builder, name, "1", moduleBuilder);
+        return DefineModuleAsync(builder, name, "1", moduleBuilder, cancellationToken);
     }
 
     /// <summary>Defines a versioned module contract without adding its resources to the application model.</summary>
-    public static IDistributedApplicationModule DefineModule(
+    public static async Task<IDistributedApplicationModule> DefineModuleAsync(
         this IDistributedApplicationBuilder builder,
         string name,
         string version,
-        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -90,39 +92,40 @@ public static class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(moduleBuilder);
 
         var registry = GetOrCreateRegistry(builder);
-        registry.RefreshConfiguration();
-        ValidateOptions(registry.Options);
-        if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
+        return await registry.RunModuleOperationAsync(async () =>
         {
-            if (!string.Equals(existingModule.Version, version, StringComparison.Ordinal))
+            registry.RefreshConfiguration();
+            ValidateOptions(registry.Options);
+            if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
             {
-                throw new InvalidOperationException(
-                    $"Module '{name}' is already defined with contract version '{existingModule.Version}', " +
-                    $"not requested version '{version}'.");
+                if (!string.Equals(existingModule.Version, version, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Module '{name}' is already defined with contract version '{existingModule.Version}', " +
+                        $"not requested version '{version}'.");
+                }
+
+                return existingModule;
             }
 
-            return existingModule;
-        }
-
-        var gitExecutablePath = GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git";
-        var module = new DistributedApplicationModule(builder, name, version);
-        moduleBuilder(new DistributedApplicationModuleBuilder(
-            builder,
-            module,
-            gitExecutablePath,
-            registry.Options.RepositoryCommandTimeout));
-        module.Validate(
-            gitExecutablePath,
-            registry.Options.RepositoryCommandTimeout);
-        ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
-        registry.AddModule(module);
-        return module;
+            var gitExecutablePath = GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git";
+            var module = new DistributedApplicationModule(builder, name, version);
+            moduleBuilder(new DistributedApplicationModuleBuilder(builder, module));
+            await module.ValidateAsync(
+                gitExecutablePath,
+                registry.Options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false);
+            ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
+            registry.AddModule(module);
+            return module;
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Adds an exported module using its local source worktree.</summary>
-    public static IDistributedApplicationModule Add(
+    public static async Task<IDistributedApplicationModule> AddAsync(
         this IDistributedApplicationBuilder builder,
-        IDistributedApplicationModule module)
+        IDistributedApplicationModule module,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(module);
@@ -130,7 +133,7 @@ public static class DistributedApplicationModuleExtensions
         if (module is not DistributedApplicationModule typedModule)
         {
             throw new ArgumentException(
-                "The module must have been created by ExportModule on this extension.", nameof(module));
+                "The module must have been created by ExportModuleAsync on this extension.", nameof(module));
         }
 
         if (!ReferenceEquals(typedModule.DefinitionApplicationBuilder, builder))
@@ -142,50 +145,70 @@ public static class DistributedApplicationModuleExtensions
         }
 
         var registry = GetOrCreateRegistry(builder);
-        if (!registry.TryGetDefinition(typedModule.Name, out _))
+        return await registry.RunModuleOperationAsync(async () =>
         {
-            registry.AddModule(typedModule);
-        }
+            if (!registry.TryGetDefinition(typedModule.Name, out _))
+            {
+                registry.AddModule(typedModule);
+            }
 
-        Materialize(builder, typedModule, registry, imported: false);
-        return module;
+            await MaterializeAsync(
+                builder,
+                typedModule,
+                registry,
+                imported: false,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            return module;
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Imports an exported module by name using a managed Git clone.</summary>
-    public static IDistributedApplicationModule ImportModule(
+    public static Task<IDistributedApplicationModule> ImportModuleAsync(
         this IDistributedApplicationBuilder builder,
-        string name)
+        string name,
+        CancellationToken cancellationToken = default)
     {
-        return ImportModule(builder, name, new ModuleImportOptions());
+        return ImportModuleAsync(builder, name, new ModuleImportOptions(), cancellationToken);
     }
 
     /// <summary>Imports an exported module by name with resource aliases or a common prefix.</summary>
-    public static IDistributedApplicationModule ImportModule(
+    public static async Task<IDistributedApplicationModule> ImportModuleAsync(
         this IDistributedApplicationBuilder builder,
         string name,
-        ModuleImportOptions importOptions)
+        ModuleImportOptions importOptions,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(importOptions);
 
         var registry = GetOrCreateRegistry(builder);
-        if (!registry.TryGetDefinition(name, out var module) || module is null)
+        return await registry.RunModuleOperationAsync(async () =>
         {
-            throw new InvalidOperationException(
-                $"Module '{name}' has not been exported. Call ExportModule before ImportModule.");
-        }
+            if (!registry.TryGetDefinition(name, out var module) || module is null)
+            {
+                throw new InvalidOperationException(
+                    $"Module '{name}' has not been exported. Call ExportModuleAsync before ImportModuleAsync.");
+            }
 
-        Materialize(builder, module, registry, imported: true, importOptions);
-        return module;
+            await MaterializeAsync(
+                builder,
+                module,
+                registry,
+                imported: true,
+                importOptions,
+                cancellationToken).ConfigureAwait(false);
+            return module;
+        }, cancellationToken).ConfigureAwait(false);
     }
 
-    private static void Materialize(
+    private static async Task MaterializeAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
         bool imported,
-        ModuleImportOptions? importOptions = null)
+        ModuleImportOptions? importOptions = null,
+        CancellationToken cancellationToken = default)
     {
         registry.RefreshConfiguration();
         ValidateOptions(registry.Options);
@@ -222,13 +245,14 @@ public static class DistributedApplicationModuleExtensions
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
         var repositoryResolution = autoCloneRepository &&
             (requiresRepository || !string.IsNullOrWhiteSpace(repository))
-            ? ModuleRepositoryDiscovery.Resolve(
+            ? await ModuleRepositoryDiscovery.ResolveAsync(
                 builder.AppHostDirectory,
                 module,
                 repository,
                 GetConfiguredValue(options.GitHubCliPath) ?? "gh",
                 options.RepositoryCommandTimeout,
-                GetConfiguredValue(options.GitExecutablePath) ?? "git")
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                cancellationToken).ConfigureAwait(false)
             : null;
         if (imported && factoryRequiresRepository && repositoryResolution is null &&
             string.IsNullOrWhiteSpace(repository))
@@ -240,11 +264,12 @@ public static class DistributedApplicationModuleExtensions
         }
 
         var existingSameWorktreeRepository = imported
-            ? TryGetExistingSameWorktreeRepository(
+            ? await TryGetExistingSameWorktreeRepositoryAsync(
                 builder.AppHostDirectory,
                 repository,
                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                options.RepositoryCommandTimeout)
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false)
             : null;
         var repositoryParameter = imported &&
             (configuredRepository is not null ||
@@ -267,38 +292,44 @@ public static class DistributedApplicationModuleExtensions
             repositoryResolution?.UsesSiblingLayout is not false &&
             existingSameWorktreeRepository is null;
 
-        var synchronizedRepository =
+        var synchronizationRequired =
             ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
              (builder.ExecutionContext.IsRunMode && imported) ||
              (imported && factoryRequiresRepository)) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
-            !string.IsNullOrWhiteSpace(repository) &&
-            (factoryRequiresRepository || RepositoryInspector.IsGitRepository(
-                repositoryPath,
-                GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                options.RepositoryCommandTimeout));
+            !string.IsNullOrWhiteSpace(repository);
+        var synchronizedRepository = synchronizationRequired &&
+            (factoryRequiresRepository ||
+             await RepositoryInspector.IsGitRepositoryAsync(
+                 repositoryPath,
+                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                 options.RepositoryCommandTimeout,
+                 cancellationToken: cancellationToken).ConfigureAwait(false));
         if (synchronizedRepository)
         {
-            registry.SynchronizeRepositoryAsync(
+            await registry.SynchronizeRepositoryAsync(
+                repositoryPath,
+                () => RepositorySynchronizer.SynchronizeAsync(
                     repositoryPath,
-                    () => RepositorySynchronizer.SynchronizeAsync(
-                        repositoryPath,
-                        repository,
-                        updateRepository,
-                        CancellationToken.None,
-                        repositoryRevision,
-                        GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                        options.RepositoryCommandTimeout))
-                .GetAwaiter()
-                .GetResult();
+                    repository,
+                    updateRepository,
+                    cancellationToken,
+                    repositoryRevision,
+                    GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                    options.RepositoryCommandTimeout)).ConfigureAwait(false);
         }
 
-        var repositoryDirty = RepositoryInspector.IsDirty(
+        var repositoryDirty = await RepositoryInspector.IsDirtyAsync(
             repositoryPath,
             GetConfiguredValue(options.GitExecutablePath) ?? "git",
             options.RepositoryCommandTimeout,
-            requireSuccessfulInspection: true);
-        var defaultImageTag = GetDefaultImageTag(builder, repositoryPath, options);
+            requireSuccessfulInspection: true,
+            cancellationToken).ConfigureAwait(false);
+        var defaultImageTag = await GetDefaultImageTagAsync(
+            builder,
+            repositoryPath,
+            options,
+            cancellationToken).ConfigureAwait(false);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
         if (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported)
@@ -325,7 +356,7 @@ public static class DistributedApplicationModuleExtensions
             switch (definition)
             {
                 case DistributedApplicationModuleProject project:
-                    MaterializeProject(
+                    await MaterializeProjectAsync(
                         builder,
                         module,
                         project,
@@ -338,10 +369,11 @@ public static class DistributedApplicationModuleExtensions
                         options,
                         moduleOptions,
                         repository,
-                        updateRepository);
+                        updateRepository,
+                        cancellationToken).ConfigureAwait(false);
                     break;
                 case DistributedApplicationModuleContainer container:
-                    MaterializeContainer(
+                    await MaterializeContainerAsync(
                         builder,
                         module,
                         container,
@@ -354,7 +386,8 @@ public static class DistributedApplicationModuleExtensions
                         options,
                         moduleOptions,
                         repository,
-                        updateRepository);
+                        updateRepository,
+                        cancellationToken).ConfigureAwait(false);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
                     MaterializeResource(
@@ -375,7 +408,7 @@ public static class DistributedApplicationModuleExtensions
         registry.MarkMaterialized(module.Name, materializationKey);
     }
 
-    private static void MaterializeProject(
+    private static async Task MaterializeProjectAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         DistributedApplicationModuleProject project,
@@ -388,7 +421,8 @@ public static class DistributedApplicationModuleExtensions
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         string? repository,
-        bool updateRepository)
+        bool updateRepository,
+        CancellationToken cancellationToken)
     {
         var export = project.Export;
         var sourceProjectDirectory = Path.GetDirectoryName(project.ProjectPath)
@@ -426,11 +460,12 @@ public static class DistributedApplicationModuleExtensions
             repositoryPath,
             normalizedWorkingDirectoryRelativePath,
             nameof(ModuleContainerExportOptions.WorkingDirectory));
-        var publishPlan = CreateImagePublishPlan(
+        var publishPlan = await CreateImagePublishPlanAsync(
             builder,
             effectiveExportOptions,
             repositoryDirty && publishImage,
-            inspectExistingImage: publishImage);
+            inspectExistingImage: publishImage,
+            cancellationToken).ConfigureAwait(false);
 
         var container = builder
             .AddContainer(resourceName, publishPlan.ImageName, publishPlan.ImageTag)
@@ -466,7 +501,7 @@ public static class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, project.Name, container.Resource);
     }
 
-    private static void MaterializeContainer(
+    private static async Task MaterializeContainerAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         DistributedApplicationModuleContainer definition,
@@ -479,7 +514,8 @@ public static class DistributedApplicationModuleExtensions
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         string? repository,
-        bool updateRepository)
+        bool updateRepository,
+        CancellationToken cancellationToken)
     {
         var containerOptions = moduleOptions?.FindContainer(definition.Name);
         var publishOptions = definition.ImagePublishOptions is null
@@ -490,11 +526,12 @@ public static class DistributedApplicationModuleExtensions
             (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
         var publishPlan = publishOptions is null
             ? null
-            : CreateImagePublishPlan(
+            : await CreateImagePublishPlanAsync(
                 builder,
                 publishOptions,
                 repositoryDirty && publishImage,
-                inspectExistingImage: publishImage);
+                inspectExistingImage: publishImage,
+                cancellationToken).ConfigureAwait(false);
         var container = builder
             .AddContainer(
                 resourceName,
@@ -611,18 +648,20 @@ public static class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, definition.Name, resource);
     }
 
-    private static ModuleImagePublishPlan CreateImagePublishPlan(
+    private static Task<ModuleImagePublishPlan> CreateImagePublishPlanAsync(
         IDistributedApplicationBuilder builder,
         ModuleContainerExportOptions options,
         bool useDirtyImage,
-        bool inspectExistingImage = true)
+        bool inspectExistingImage,
+        CancellationToken cancellationToken)
     {
-        return ModuleImagePublishPlan.Create(
+        return ModuleImagePublishPlan.CreateAsync(
             options,
             useDirtyImage,
             builder.ExecutionContext.IsRunMode && inspectExistingImage
-                ? ContainerImageInspector.Exists
-                : _ => false);
+                ? ContainerImageInspector.ExistsAsync
+                : (_, _) => Task.FromResult(false),
+            cancellationToken);
     }
 
     private static ModuleContainerExportOptions ApplyImageOptions(
@@ -872,11 +911,12 @@ public static class DistributedApplicationModuleExtensions
         return builder.AppHostDirectory;
     }
 
-    private static string? TryGetExistingSameWorktreeRepository(
+    private static async Task<string?> TryGetExistingSameWorktreeRepositoryAsync(
         string appHostDirectory,
         string? repository,
         string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout)
+        TimeSpan repositoryCommandTimeout,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(repository) ||
             GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
@@ -885,17 +925,22 @@ public static class DistributedApplicationModuleExtensions
         }
 
         var repositoryPath = Path.GetFullPath(repository, appHostDirectory);
-        return Directory.Exists(repositoryPath) &&
-            RepositoryInspector.TryFindRepositoryRoot(
-                appHostDirectory,
-                out var appHostRoot,
-                gitExecutablePath,
-                repositoryCommandTimeout) &&
-            RepositoryInspector.TryFindRepositoryRoot(
-                repositoryPath,
-                out var repositoryRoot,
-                gitExecutablePath,
-                repositoryCommandTimeout) &&
+        if (!Directory.Exists(repositoryPath))
+        {
+            return null;
+        }
+
+        var appHostRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            appHostDirectory,
+            gitExecutablePath,
+            repositoryCommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var repositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            repositoryPath,
+            gitExecutablePath,
+            repositoryCommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return appHostRoot is not null && repositoryRoot is not null &&
             PathSafety.AreEqual(appHostRoot, repositoryRoot)
                 ? repositoryPath
                 : null;
@@ -993,35 +1038,43 @@ public static class DistributedApplicationModuleExtensions
         }
     }
 
-    private static string GetDefaultImageTag(
+    private static async Task<string> GetDefaultImageTagAsync(
         IDistributedApplicationBuilder builder,
         string repositoryPath,
-        ModularAppHostsOptions options)
+        ModularAppHostsOptions options,
+        CancellationToken cancellationToken)
     {
         var gitExecutablePath = GetConfiguredValue(options.GitExecutablePath) ?? "git";
-        var branch = RepositoryInspector.TryGetBranch(
+        var branch = await RepositoryInspector.TryGetBranchAsync(
             repositoryPath,
             gitExecutablePath,
-            options.RepositoryCommandTimeout);
-        var commit = RepositoryInspector.TryGetCommit(
+            options.RepositoryCommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var commit = await RepositoryInspector.TryGetCommitAsync(
             repositoryPath,
             gitExecutablePath,
-            options.RepositoryCommandTimeout);
-        if ((branch is null || commit is null) &&
-            RepositoryInspector.TryFindRepositoryRoot(
-                builder.AppHostDirectory,
-                out var appHostRepositoryRoot,
-                gitExecutablePath,
-                options.RepositoryCommandTimeout))
+            options.RepositoryCommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (branch is null || commit is null)
         {
-            branch ??= RepositoryInspector.TryGetBranch(
-                appHostRepositoryRoot,
+            var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+                builder.AppHostDirectory,
                 gitExecutablePath,
-                options.RepositoryCommandTimeout);
-            commit ??= RepositoryInspector.TryGetCommit(
-                appHostRepositoryRoot,
-                gitExecutablePath,
-                options.RepositoryCommandTimeout);
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false);
+            if (appHostRepositoryRoot is not null)
+            {
+                branch ??= await RepositoryInspector.TryGetBranchAsync(
+                    appHostRepositoryRoot,
+                    gitExecutablePath,
+                    options.RepositoryCommandTimeout,
+                    cancellationToken).ConfigureAwait(false);
+                commit ??= await RepositoryInspector.TryGetCommitAsync(
+                    appHostRepositoryRoot,
+                    gitExecutablePath,
+                    options.RepositoryCommandTimeout,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF"));

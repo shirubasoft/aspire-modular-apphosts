@@ -21,14 +21,15 @@ public static partial class AppHostAModule
     public const string ContainerRegistryResourceName = "sample-container-registry";
     public const string CustomResourceName = "sample-custom";
 
-    public static IDistributedApplicationModule Register(
+    public static async Task<IDistributedApplicationModule> RegisterAsync(
         IDistributedApplicationBuilder builder,
-        string sourceRoot)
+        string sourceRoot,
+        CancellationToken cancellationToken = default)
     {
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
-        var containerRuntime = SampleContainerRuntime.Resolve();
+        var containerRuntime = await SampleContainerRuntime.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
-        return builder.ExportModule(Name, module =>
+        return await builder.ExportModuleAsync(Name, module =>
         {
             module.WithRepository(absoluteSourceRoot);
 
@@ -130,7 +131,7 @@ public static partial class AppHostAModule
 
             module.AddResource<SampleCustomResource>(CustomResourceName, context =>
                 context.ApplicationBuilder.AddResource(new SampleCustomResource(context.ResourceName)));
-        });
+        }, cancellationToken).ConfigureAwait(false);
     }
 
 }

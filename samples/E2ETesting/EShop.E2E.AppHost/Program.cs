@@ -15,9 +15,9 @@ var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);
 var ordersApiKey = builder.AddParameter("orders-api-key", secret: true);
 
-var catalog = CatalogModule.AddModule(builder);
+var catalog = await CatalogModule.AddModuleAsync(builder);
 
-var orders = OrdersModule.AddModule(builder);
+var orders = await OrdersModule.AddModuleAsync(builder);
 
 orders.Api
     .WithReference(catalog.Api.GetEndpoint("http"))
@@ -36,4 +36,4 @@ compose
         healthCheckPath: "/health")
     .WithTestValue("Parameters:orders-api-key", ordersApiKey.Resource);
 
-builder.Build().Run();
+await builder.Build().RunAsync();

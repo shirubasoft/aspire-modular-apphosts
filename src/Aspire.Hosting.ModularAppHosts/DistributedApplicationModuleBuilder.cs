@@ -4,9 +4,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal sealed class DistributedApplicationModuleBuilder(
     IDistributedApplicationBuilder applicationBuilder,
-    DistributedApplicationModule module,
-    string gitExecutablePath,
-    TimeSpan repositoryCommandTimeout) : IDistributedApplicationModuleBuilder
+    DistributedApplicationModule module) : IDistributedApplicationModuleBuilder
 {
     public IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
@@ -32,31 +30,8 @@ internal sealed class DistributedApplicationModuleBuilder(
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
 
         var absoluteProjectPath = Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory);
-        var repositoryRoot = RepositoryInspector.FindRepositoryRoot(
-            absoluteProjectPath,
-            gitExecutablePath,
-            repositoryCommandTimeout);
-        var appHostDirectory = Path.GetFullPath(applicationBuilder.AppHostDirectory);
-        var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
-            module.Repository,
-            appHostDirectory,
-            absoluteProjectPath,
-            gitExecutablePath,
-            repositoryCommandTimeout);
-
-        if (configuredRepositoryRoot is not null)
-        {
-            repositoryRoot = configuredRepositoryRoot;
-        }
-        else if (!RepositoryInspector.IsGitRepository(
-                repositoryRoot,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                requireSuccessfulInspection: true) &&
-            PathSafety.IsContainedBy(appHostDirectory, absoluteProjectPath))
-        {
-            repositoryRoot = appHostDirectory;
-        }
+        var repositoryRoot = Path.GetDirectoryName(absoluteProjectPath)
+            ?? throw new InvalidOperationException($"Unable to determine the directory for '{absoluteProjectPath}'.");
 
         var project = new DistributedApplicationModuleProject(name, absoluteProjectPath, repositoryRoot);
         module.AddProject(project);
@@ -99,65 +74,7 @@ internal sealed class DistributedApplicationModuleBuilder(
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         module.Repository = repository;
         module.RepositoryRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
-        foreach (var project in module.ProjectDefinitions)
-        {
-            var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
-                repository,
-                Path.GetFullPath(applicationBuilder.AppHostDirectory),
-                project.ProjectPath,
-                gitExecutablePath,
-                repositoryCommandTimeout);
-            if (configuredRepositoryRoot is not null)
-            {
-                project.SourceRepositoryRoot = configuredRepositoryRoot;
-            }
-        }
-
         return this;
-    }
-
-    internal static string? TryGetConfiguredLocalRepositoryRoot(
-        string? repository,
-        string appHostDirectory,
-        string projectPath,
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout)
-    {
-        if (string.IsNullOrWhiteSpace(repository))
-        {
-            return null;
-        }
-
-        string candidate;
-        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
-        {
-            if (!RepositoryInspector.TryFindRepositoryRoot(
-                    appHostDirectory,
-                    out var appHostRepositoryRoot,
-                    gitExecutablePath,
-                    repositoryCommandTimeout))
-            {
-                return null;
-            }
-
-            var repositoryParent = Path.GetDirectoryName(appHostRepositoryRoot);
-            if (repositoryParent is null)
-            {
-                return null;
-            }
-
-            candidate = Path.Combine(
-                repositoryParent,
-                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
-        }
-        else
-        {
-            candidate = Path.GetFullPath(repository, appHostDirectory);
-        }
-
-        return PathSafety.IsContainedBy(candidate, projectPath)
-            ? candidate
-            : null;
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
@@ -14,6 +15,10 @@ public interface IDistributedApplicationModuleCatalog
     bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule);
 }
 
+[SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "The registry and its operation gate live for the AppHost builder lifetime; disposing the gate could race active module operations.")]
 internal sealed class ModuleApplicationRegistry(
     ModularAppHostsOptions? options = null,
     IConfiguration? configuration = null)
@@ -32,6 +37,7 @@ internal sealed class ModuleApplicationRegistry(
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
+    private readonly SemaphoreSlim _moduleOperationGate = new(1, 1);
 
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
 
@@ -66,6 +72,21 @@ internal sealed class ModuleApplicationRegistry(
     internal void TrackResource(IResource resource)
     {
         _resources.TryAdd(resource.Name, resource);
+    }
+
+    internal async Task<T> RunModuleOperationAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        await _moduleOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        finally
+        {
+            _moduleOperationGate.Release();
+        }
     }
 
     internal Task SynchronizeRepositoryAsync(string repositoryPath, Func<Task> synchronize)

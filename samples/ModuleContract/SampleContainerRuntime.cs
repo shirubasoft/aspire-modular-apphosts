@@ -14,11 +14,13 @@ internal static class SampleContainerRuntime
         new(Podman, IsDefault: false)
     ];
 
-    public static string Resolve()
+    public static Task<string> ResolveAsync(CancellationToken cancellationToken = default)
     {
         var configuredRuntime = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME") ??
             Environment.GetEnvironmentVariable("DOTNET_ASPIRE_CONTAINER_RUNTIME");
-        return ResolveAsync(configuredRuntime, RunAsync).GetAwaiter().GetResult();
+        return ResolveAsync(
+            configuredRuntime,
+            (executable, arguments) => RunAsync(executable, arguments, cancellationToken));
     }
 
     internal static async Task<string> ResolveAsync(
@@ -106,17 +108,23 @@ internal static class SampleContainerRuntime
         return best!;
     }
 
-    private static async Task<int?> RunAsync(string executable, IReadOnlyList<string> arguments)
+    private static async Task<int?> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
     {
         try
         {
             using var timeout = new CancellationTokenSource(CommandTimeout);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token);
             var result = await CliCommand.Wrap(executable)
                 .WithArguments(arguments)
                 .WithValidation(CommandResultValidation.None)
                 .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
                 .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
-                .ExecuteAsync(timeout.Token)
+                .ExecuteAsync(linked.Token)
                 .ConfigureAwait(false);
             return result.ExitCode;
         }
@@ -124,7 +132,7 @@ internal static class SampleContainerRuntime
             exception is InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or IOException
-                or OperationCanceledException)
+                || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             return null;
         }

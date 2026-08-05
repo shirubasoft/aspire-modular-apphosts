@@ -4,5 +4,5 @@ using Spire.ModuleContract;
 var builder = DistributedApplication.CreateBuilder(args);
 builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
 
-SpireModule.ImportModule(builder);
-builder.Build().Run();
+await SpireModule.ImportModuleAsync(builder);
+await builder.Build().RunAsync();

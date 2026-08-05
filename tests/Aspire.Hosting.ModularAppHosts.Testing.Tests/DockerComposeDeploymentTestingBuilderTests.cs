@@ -307,6 +307,49 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public async Task Concurrent_disposal_callers_share_cleanup_and_completion()
+    {
+        var destroyStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDestroy = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new RecordingAspireCommandRunner(async invocation =>
+        {
+            await WriteConfigurationOnDeploy(invocation);
+            if (invocation.Command == "destroy")
+            {
+                destroyStarted.SetResult();
+                await releaseDestroy.Task;
+            }
+        });
+        var builder = await DeployAsync(
+            runner,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var first = builder.DisposeAsync().AsTask();
+        await destroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+        var second = builder.DisposeAsync().AsTask();
+
+        Assert.Same(first, second);
+        Assert.False(second.IsCompleted);
+        Assert.Equal(["deploy", "destroy"], runner.Invocations.Select(invocation => invocation.Command));
+
+        releaseDestroy.SetResult();
+        await Task.WhenAll(first, second);
+    }
+
+    [Fact]
+    public async Task Synchronous_dispose_requires_the_async_disposal_contract()
+    {
+        var runner = new RecordingAspireCommandRunner(WriteConfigurationOnDeploy);
+        var builder = await DeployAsync(
+            runner,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var exception = Assert.Throws<InvalidOperationException>(() => ((IDisposable)builder).Dispose());
+
+        Assert.Contains("DisposeAsync", exception.Message, StringComparison.Ordinal);
+        await builder.DisposeAsync();
+    }
+
+    [Fact]
     public async Task DeployAsync_retains_an_explicit_output_directory_after_destroy()
     {
         using var output = TemporaryDirectory.Create();

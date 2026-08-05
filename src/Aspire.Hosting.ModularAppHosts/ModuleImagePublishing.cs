@@ -11,10 +11,11 @@ internal sealed record ModuleImagePublishPlan(
     bool RepositoryDirty,
     bool ShouldPublish)
 {
-    public static ModuleImagePublishPlan Create(
+    public static async Task<ModuleImagePublishPlan> CreateAsync(
         ModuleContainerExportOptions options,
         bool repositoryDirty,
-        Func<string, bool> imageExists)
+        Func<string, CancellationToken, Task<bool>> imageExists,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(imageExists);
@@ -36,13 +37,15 @@ internal sealed record ModuleImagePublishPlan(
                 repositoryDirty))
             .ToArray();
 
+        var shouldPublish = repositoryDirty ||
+            !await imageExists(cleanImageReference, cancellationToken).ConfigureAwait(false);
         return new ModuleImagePublishPlan(
             options.ImageName,
             effectiveTag,
             effectiveImageReference,
             publishArguments,
             repositoryDirty,
-            repositoryDirty || !imageExists(cleanImageReference));
+            shouldPublish);
     }
 
     private static string ResolveArgument(
@@ -161,47 +164,63 @@ internal static class ContainerImageInspector
 {
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(5);
 
-    public static bool Exists(string imageReference)
+    public static async Task<bool> ExistsAsync(
+        string imageReference,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
 
         var configuredRuntime = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME");
         if (!string.IsNullOrWhiteSpace(configuredRuntime))
         {
-            return Run(configuredRuntime, ["image", "inspect", imageReference]) == 0;
+            return await RunAsync(
+                configuredRuntime,
+                ["image", "inspect", imageReference],
+                cancellationToken).ConfigureAwait(false) == 0;
         }
 
         foreach (var runtime in new[] { "docker", "podman" })
         {
-            if (Run(runtime, ["container", "ls", "-n", "1"]) == 0)
+            if (await RunAsync(
+                    runtime,
+                    ["container", "ls", "-n", "1"],
+                    cancellationToken).ConfigureAwait(false) == 0)
             {
-                return Run(runtime, ["image", "inspect", imageReference]) == 0;
+                return await RunAsync(
+                    runtime,
+                    ["image", "inspect", imageReference],
+                    cancellationToken).ConfigureAwait(false) == 0;
             }
         }
 
         return false;
     }
 
-    private static int? Run(string executable, IReadOnlyList<string> arguments)
+    private static async Task<int?> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
     {
         try
         {
             using var timeout = new CancellationTokenSource(CommandTimeout);
-            var result = CliCommand.Wrap(executable)
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                timeout.Token);
+            var result = await CliCommand.Wrap(executable)
                 .WithArguments(arguments)
                 .WithValidation(CommandResultValidation.None)
                 .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
                 .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
-                .ExecuteAsync(timeout.Token)
-                .GetAwaiter()
-                .GetResult();
+                .ExecuteAsync(linked.Token)
+                .ConfigureAwait(false);
             return result.ExitCode;
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or IOException
-                or OperationCanceledException)
+                || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             return null;
         }
