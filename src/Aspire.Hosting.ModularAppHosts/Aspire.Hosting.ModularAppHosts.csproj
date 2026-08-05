@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Title>Shirubasoft Aspire Modular AppHosts</Title>
+    <Authors>Shirubasoft</Authors>
+    <Description>Composable module import and export support for Aspire AppHosts.</Description>
+    <AssemblyName>Shirubasoft.Aspire.ModularAppHosts</AssemblyName>
+    <PackageId>Shirubasoft.Aspire.ModularAppHosts</PackageId>
+    <PackageTags>aspire;apphost;modules;containers</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Shirubasoft/aspire-modular-apphosts.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting" />
+    <PackageReference Include="CliWrap" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../Aspire.Hosting.ModularAppHosts.Generators/bin/$(Configuration)/netstandard2.0/Shirubasoft.Aspire.ModularAppHosts.Generators.dll"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
+    <None Include="../Aspire.Hosting.ModularAppHosts.Generators/bin/$(Configuration)/netstandard2.0/Shirubasoft.Aspire.ModularAppHosts.Generators.pdb"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs"
+          Visible="false" />
+  </ItemGroup>
+</Project>

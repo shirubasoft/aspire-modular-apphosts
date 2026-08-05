@@ -1,0 +1,41 @@
+{
+  "branches": [
+    "main"
+  ],
+  "tagFormat": "v${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "verifyConditionsCmd": "if [ -z \"$NUGET_API_KEY\" ]; then echo \"NUGET_API_KEY is required.\"; exit 1; fi",
+        "prepareCmd": "./build.sh --package-version ${nextRelease.version}",
+        "publishCmd": "dotnet nuget push \"artifacts/Shirubasoft.Aspire.ModularAppHosts.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Testing.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Templates.${nextRelease.version}.nupkg\" --source https://api.nuget.org/v3/index.json --api-key \"$NUGET_API_KEY\" --skip-duplicate"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "artifacts/*.nupkg",
+            "label": "NuGet package"
+          }
+        ],
+        "successComment": false,
+        "failComment": false
+      }
+    ]
+  ]
+}

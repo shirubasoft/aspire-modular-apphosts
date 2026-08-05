@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Title>Shirubasoft Aspire Modular AppHosts Testing</Title>
+    <Authors>Shirubasoft</Authors>
+    <Description>Docker Compose deployment testing support for Shirubasoft Aspire Modular AppHosts.</Description>
+    <AssemblyName>Shirubasoft.Aspire.ModularAppHosts.Testing</AssemblyName>
+    <PackageId>Shirubasoft.Aspire.ModularAppHosts.Testing</PackageId>
+    <PackageTags>aspire;apphost;testing;docker-compose</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Shirubasoft/aspire-modular-apphosts.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" />
+    <PackageReference Include="Aspire.Hosting.Testing" />
+    <PackageReference Include="CliWrap" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>
