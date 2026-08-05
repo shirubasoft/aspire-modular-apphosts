@@ -54,7 +54,7 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
     [Obsolete($"Use {nameof(ResourceName)} instead.")]
     public string ProjectName => ResourceName;
 
-    /// <summary>Gets the worktree used by the service installer.</summary>
+    /// <summary>Gets the module-definition worktree associated with the resource.</summary>
     public string RepositoryPath { get; } = repositoryPath;
 
     /// <summary>Gets whether the resource came from <c>ImportModuleAsync</c>.</summary>

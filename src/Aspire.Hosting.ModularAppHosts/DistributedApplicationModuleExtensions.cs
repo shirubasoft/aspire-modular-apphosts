@@ -255,11 +255,21 @@ public static partial class DistributedApplicationModuleExtensions
         var repositoryRevision = GetConfiguredValue(previewSelection?.Commit) ??
             GetConfiguredValue(moduleOptions?.RepositoryRevision) ??
             module.RepositoryRevision;
-        var factoryRequiresRepository = module.RequiresRepositoryContent &&
+        var factoryRequiresRepository = module.ExplicitlyRequiresRepositoryContent &&
             module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
         var materializeWithoutRepository = registry.CanMaterializePreviewWithoutRepository(module);
+        var containerPublishersRequireModuleRepository = !materializeWithoutRepository &&
+            ContainerPublishersRequireModuleRepository(
+                builder,
+                module,
+                options,
+                moduleOptions,
+                repository,
+                repositoryRevision);
         var requiresRepository = !materializeWithoutRepository &&
-            (module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent);
+            (module.ProjectDefinitions.Count > 0 ||
+                module.ExplicitlyRequiresRepositoryContent ||
+                containerPublishersRequireModuleRepository);
         ValidateModuleConfiguration(module, moduleOptions);
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
@@ -350,7 +360,10 @@ public static partial class DistributedApplicationModuleExtensions
                  options.RepositoryCommandTimeout,
                  cancellationToken: cancellationToken).ConfigureAwait(false));
         if (synchronizationRequired &&
-            (factoryRequiresRepository || repositoryPathIsGit || repositoryCanSupplyImageTag))
+            (factoryRequiresRepository ||
+                containerPublishersRequireModuleRepository ||
+                repositoryPathIsGit ||
+                repositoryCanSupplyImageTag))
         {
             await registry.SynchronizeRepositoryAsync(
                 repositorySynchronizationKey,
@@ -367,19 +380,28 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         var repositoryDirty = !materializeWithoutRepository &&
+            requiresRepository &&
             await RepositoryInspector.IsDirtyAsync(
                 repositoryPath,
                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
                 options.RepositoryCommandTimeout,
                 requireSuccessfulInspection: true,
                 cancellationToken).ConfigureAwait(false);
-        var defaultImageTag = materializeWithoutRepository
+        var defaultImageTag = materializeWithoutRepository || !requiresRepository
             ? "latest"
             : await GetDefaultImageTagAsync(
                 builder,
                 repositoryPath,
                 options,
                 cancellationToken).ConfigureAwait(false);
+        var definitionRepository = new MaterializedModuleRepository(
+            repositoryPath,
+            repository,
+            repositoryRevision,
+            imported && updateRepository,
+            repositoryDirty,
+            defaultImageTag,
+            UsesModuleRepository: true);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
         if (!materializeWithoutRepository &&
@@ -416,15 +438,11 @@ public static partial class DistributedApplicationModuleExtensions
                         module,
                         project,
                         resourceNames[project.Name],
-                        repositoryPath,
-                        repositoryDirty,
-                        defaultImageTag,
+                        definitionRepository,
                         imported,
                         registry,
                         options,
                         moduleOptions,
-                        repository,
-                        updateRepository,
                         cancellationToken).ConfigureAwait(false);
                     break;
                 case DistributedApplicationModuleContainer container:
@@ -433,15 +451,11 @@ public static partial class DistributedApplicationModuleExtensions
                         module,
                         container,
                         resourceNames[container.Name],
-                        repositoryPath,
-                        repositoryDirty,
-                        defaultImageTag,
+                        definitionRepository,
                         imported,
                         registry,
                         options,
                         moduleOptions,
-                        repository,
-                        updateRepository,
                         cancellationToken).ConfigureAwait(false);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
@@ -450,7 +464,7 @@ public static partial class DistributedApplicationModuleExtensions
                         module,
                         resource,
                         resourceNames[resource.Name],
-                        repositoryPath,
+                        definitionRepository.RepositoryPath,
                         imported,
                         registry);
                     break;
@@ -468,15 +482,11 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         DistributedApplicationModuleProject project,
         string resourceName,
-        string repositoryPath,
-        bool repositoryDirty,
-        string defaultImageTag,
+        MaterializedModuleRepository definitionRepository,
         bool imported,
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
-        string? repository,
-        bool updateRepository,
         CancellationToken cancellationToken)
     {
         var export = project.Export;
@@ -495,30 +505,51 @@ public static partial class DistributedApplicationModuleExtensions
                 project,
                 resourceName,
                 projectOptions,
-                repositoryPath,
+                definitionRepository.RepositoryPath,
                 imported,
                 registry);
             return;
         }
 
-        var effectiveExportOptions = ApplyImageOptions(export.Options, projectOptions, defaultImageTag);
         var publishImage = projectOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
+        var buildRepository = await ResolveBuildRepositoryAsync(
+            builder,
+            module,
+            project.Name,
+            export.Options,
+            projectOptions,
+            definitionRepository,
+            publishImage,
+            registry,
+            options,
+            moduleOptions,
+            cancellationToken).ConfigureAwait(false);
+        var effectiveExportOptions = ApplyImageOptions(
+            export.Options,
+            projectOptions,
+            buildRepository.DefaultImageTag);
         var workingDirectoryRelativePath = effectiveExportOptions.WorkingDirectory ?? projectDirectoryRelativePath;
-        var sourceWorkingDirectory = PathSafety.GetContainedPath(
-            project.SourceRepositoryRoot,
-            workingDirectoryRelativePath,
-            nameof(ModuleContainerExportOptions.WorkingDirectory));
-        var normalizedWorkingDirectoryRelativePath = Path.GetRelativePath(
-            project.SourceRepositoryRoot,
-            sourceWorkingDirectory);
+        if (!buildRepository.UsesModuleRepository && effectiveExportOptions.WorkingDirectory is null)
+        {
+            workingDirectoryRelativePath = ".";
+        }
+
+        var normalizedWorkingDirectoryRelativePath = buildRepository.UsesModuleRepository
+            ? Path.GetRelativePath(
+                project.SourceRepositoryRoot,
+                PathSafety.GetContainedPath(
+                    project.SourceRepositoryRoot,
+                    workingDirectoryRelativePath,
+                    nameof(ModuleContainerExportOptions.WorkingDirectory)))
+            : workingDirectoryRelativePath;
         var publishWorkingDirectory = PathSafety.GetContainedPath(
-            repositoryPath,
+            buildRepository.RepositoryPath,
             normalizedWorkingDirectoryRelativePath,
             nameof(ModuleContainerExportOptions.WorkingDirectory));
         var publishPlan = await CreateImagePublishPlanAsync(
             builder,
             effectiveExportOptions,
-            repositoryDirty && publishImage,
+            buildRepository.RepositoryDirty && publishImage,
             inspectExistingImage: publishImage,
             cancellationToken).ConfigureAwait(false);
 
@@ -527,7 +558,7 @@ public static partial class DistributedApplicationModuleExtensions
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 project.Name,
-                repositoryPath,
+                definitionRepository.RepositoryPath,
                 imported));
 
         export.ConfigureContainer?.Invoke(container);
@@ -544,11 +575,10 @@ public static partial class DistributedApplicationModuleExtensions
                 resourceName,
                 effectiveExportOptions,
                 publishPlan,
-                repositoryPath,
+                buildRepository.RepositoryPath,
                 publishWorkingDirectory,
-                imported,
-                repository,
-                updateRepository,
+                buildRepository.Repository,
+                buildRepository.UpdateRepository,
                 container,
                 registry);
         }
@@ -562,30 +592,43 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         DistributedApplicationModuleContainer definition,
         string resourceName,
-        string repositoryPath,
-        bool repositoryDirty,
-        string defaultImageTag,
+        MaterializedModuleRepository definitionRepository,
         bool imported,
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
-        string? repository,
-        bool updateRepository,
         CancellationToken cancellationToken)
     {
         var containerOptions = moduleOptions?.FindContainer(definition.Name);
+        ValidatePublishOverrides(definition, containerOptions);
+        var publishImage = definition.ImagePublishOptions is not null &&
+            (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
+        var buildRepository = definition.ImagePublishOptions is null
+            ? definitionRepository
+            : await ResolveBuildRepositoryAsync(
+                builder,
+                module,
+                definition.Name,
+                definition.ImagePublishOptions,
+                containerOptions,
+                definitionRepository,
+                publishImage,
+                registry,
+                options,
+                moduleOptions,
+                cancellationToken).ConfigureAwait(false);
         var publishOptions = definition.ImagePublishOptions is null
             ? null
-            : ApplyImageOptions(definition.ImagePublishOptions, containerOptions, defaultImageTag);
-        ValidatePublishOverrides(definition, containerOptions);
-        var publishImage = publishOptions is not null &&
-            (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
+            : ApplyImageOptions(
+                definition.ImagePublishOptions,
+                containerOptions,
+                buildRepository.DefaultImageTag);
         var publishPlan = publishOptions is null
             ? null
             : await CreateImagePublishPlanAsync(
                 builder,
                 publishOptions,
-                repositoryDirty && publishImage,
+                buildRepository.RepositoryDirty && publishImage,
                 inspectExistingImage: publishImage,
                 cancellationToken).ConfigureAwait(false);
         var container = builder
@@ -596,7 +639,7 @@ public static partial class DistributedApplicationModuleExtensions
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 definition.Name,
-                repositoryPath,
+                definitionRepository.RepositoryPath,
                 imported));
 
         definition.ConfigureContainer?.Invoke(container);
@@ -609,7 +652,7 @@ public static partial class DistributedApplicationModuleExtensions
         if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan is { ShouldPublish: true })
         {
             var publishWorkingDirectory = PathSafety.GetContainedPath(
-                repositoryPath,
+                buildRepository.RepositoryPath,
                 publishOptions!.WorkingDirectory ?? ".",
                 nameof(ModuleContainerExportOptions.WorkingDirectory));
             AddImagePublishInstaller(
@@ -617,11 +660,10 @@ public static partial class DistributedApplicationModuleExtensions
                 resourceName,
                 publishOptions,
                 publishPlan,
-                repositoryPath,
+                buildRepository.RepositoryPath,
                 publishWorkingDirectory,
-                imported,
-                repository,
-                updateRepository,
+                buildRepository.Repository,
+                buildRepository.UpdateRepository,
                 container,
                 registry);
         }
@@ -740,8 +782,174 @@ public static partial class DistributedApplicationModuleExtensions
         return new ModuleContainerExportOptions(imageName, publishCommand, publishArguments)
         {
             ImageTag = imageTag,
-            WorkingDirectory = configured?.PublishWorkingDirectory ?? declared.WorkingDirectory
+            WorkingDirectory = configured?.PublishWorkingDirectory ?? declared.WorkingDirectory,
+            BuildRepository = GetConfiguredValue(configured?.BuildRepository) ??
+                GetConfiguredValue(declared.BuildRepository),
+            BuildRepositoryRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
+                GetConfiguredValue(declared.BuildRepositoryRevision)
         };
+    }
+
+    private static async Task<MaterializedModuleRepository> ResolveBuildRepositoryAsync(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        string resourceName,
+        ModuleContainerExportOptions declared,
+        DistributedApplicationModuleImageOptions? configured,
+        MaterializedModuleRepository definitionRepository,
+        bool publishImage,
+        ModuleApplicationRegistry registry,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        CancellationToken cancellationToken)
+    {
+        var requestedRepository = GetConfiguredValue(configured?.BuildRepository) ??
+            GetConfiguredValue(declared.BuildRepository);
+        var requestedRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
+            GetConfiguredValue(declared.BuildRepositoryRevision);
+        if (requestedRepository is null && requestedRevision is null)
+        {
+            return definitionRepository;
+        }
+
+        var effectiveRepository = requestedRepository ??
+            definitionRepository.Repository ??
+            definitionRepository.RepositoryPath;
+        if (!GitHubRepositoryCloner.IsRemoteRepository(effectiveRepository, builder.AppHostDirectory))
+        {
+            effectiveRepository = Path.GetFullPath(effectiveRepository, builder.AppHostDirectory);
+        }
+
+        var sameRepository = RepositoryIdentitiesMatch(
+            effectiveRepository,
+            definitionRepository.Repository ?? definitionRepository.RepositoryPath,
+            builder.AppHostDirectory);
+        if (sameRepository && string.Equals(
+                requestedRevision,
+                definitionRepository.RepositoryRevision,
+                StringComparison.Ordinal))
+        {
+            return definitionRepository;
+        }
+
+        var hasExplicitTag = GetConfiguredValue(configured?.ImageTag) is not null ||
+            GetConfiguredValue(declared.ImageTag) is not null;
+        var hasImmutableImage = GetConfiguredValue(configured?.ImageSHA256) is not null;
+        if (!publishImage && (hasExplicitTag || hasImmutableImage))
+        {
+            return definitionRepository;
+        }
+
+        var gitExecutablePath = GetConfiguredValue(options.GitExecutablePath) ?? "git";
+        var localRepository = !GitHubRepositoryCloner.IsRemoteRepository(
+            effectiveRepository,
+            builder.AppHostDirectory);
+        var useDirectLocalRepository = localRepository &&
+            requestedRevision is null &&
+            Directory.Exists(effectiveRepository);
+        var autoCloneRepository = configured?.AutoCloneBuildRepository ??
+            moduleOptions?.AutoCloneRepository ??
+            options.AutoCloneRepositories;
+        var repositoryResolution = !useDirectLocalRepository && autoCloneRepository &&
+            requestedRevision is null
+            ? await ModuleRepositoryDiscovery.ResolveAsync(
+                builder.AppHostDirectory,
+                $"{module.Name}/{resourceName} build",
+                sourceRepositoryRoot: null,
+                effectiveRepository,
+                GetConfiguredValue(options.GitHubCliPath) ?? "gh",
+                options.RepositoryCommandTimeout,
+                gitExecutablePath,
+                cancellationToken).ConfigureAwait(false)
+            : null;
+        var repositoryPath = useDirectLocalRepository
+            ? effectiveRepository
+            : repositoryResolution?.RepositoryPath ?? GetImportedRepositoryPath(
+                builder,
+                options,
+                effectiveRepository,
+                $"{module.Name}-{resourceName}-build");
+        var synchronizationKey = await RepositoryInspector.TryFindRepositoryRootAsync(
+                repositoryPath,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false) ??
+            Path.GetFullPath(repositoryPath);
+        var updateRepository = (configured?.UpdateBuildRepository ??
+                (useDirectLocalRepository
+                    ? false
+                    : moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories)) &&
+            repositoryResolution?.UsesSiblingLayout is not false;
+        var synchronizationPolicy = RepositorySynchronizationPolicy.Create(
+            updateRepository,
+            requestedRevision);
+
+        if (!useDirectLocalRepository || updateRepository || requestedRevision is not null)
+        {
+            await registry.SynchronizeRepositoryAsync(
+                synchronizationKey,
+                synchronizationPolicy,
+                progress => RepositorySynchronizer.SynchronizeAsync(
+                    repositoryPath,
+                    effectiveRepository,
+                    updateRepository,
+                    cancellationToken,
+                    requestedRevision,
+                    gitExecutablePath,
+                    options.RepositoryCommandTimeout,
+                    progress)).ConfigureAwait(false);
+        }
+
+        if (!await RepositoryInspector.IsGitRepositoryAsync(
+                repositoryPath,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout,
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                $"Build repository '{effectiveRepository}' for module '{module.Name}' resource '{resourceName}' " +
+                $"did not resolve to a Git checkout at '{repositoryPath}'.");
+        }
+
+        var repositoryDirty = await RepositoryInspector.IsDirtyAsync(
+            repositoryPath,
+            gitExecutablePath,
+            options.RepositoryCommandTimeout,
+            requireSuccessfulInspection: true,
+            cancellationToken).ConfigureAwait(false);
+        var defaultImageTag = await GetDefaultImageTagAsync(
+            builder,
+            repositoryPath,
+            options,
+            cancellationToken).ConfigureAwait(false);
+        return new MaterializedModuleRepository(
+            repositoryPath,
+            effectiveRepository,
+            requestedRevision,
+            updateRepository,
+            repositoryDirty,
+            defaultImageTag,
+            UsesModuleRepository: false);
+    }
+
+    private static bool RepositoryIdentitiesMatch(
+        string first,
+        string second,
+        string baseDirectory)
+    {
+        var firstIsRemote = GitHubRepositoryCloner.IsRemoteRepository(first, baseDirectory);
+        var secondIsRemote = GitHubRepositoryCloner.IsRemoteRepository(second, baseDirectory);
+        if (firstIsRemote != secondIsRemote)
+        {
+            return false;
+        }
+
+        return firstIsRemote
+            ? GitHubRepositoryCloner.RefersToSameRepository(first, second, baseDirectory)
+            : PathSafety.AreEqual(
+                Path.GetFullPath(first, baseDirectory),
+                Path.GetFullPath(second, baseDirectory));
     }
 
     private static void ValidatePublishOverrides(
@@ -756,12 +964,64 @@ public static partial class DistributedApplicationModuleExtensions
         if (!string.IsNullOrWhiteSpace(configured.PublishCommand) ||
             configured.PublishArguments is not null ||
             configured.PublishWorkingDirectory is not null ||
+            configured.BuildRepository is not null ||
+            configured.BuildRepositoryRevision is not null ||
+            configured.AutoCloneBuildRepository is not null ||
+            configured.UpdateBuildRepository is not null ||
             configured.PublishImage is true)
         {
             throw new InvalidOperationException(
                 $"Container '{definition.Name}' configures image publishing, but its module definition does not call " +
                 $"{nameof(IDistributedApplicationModuleContainerBuilder.WithImagePublishCommand)}().");
         }
+    }
+
+    private static bool ContainerPublishersRequireModuleRepository(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        string? definitionRepository,
+        string? definitionRevision)
+    {
+        var definitionRepositoryIdentity = definitionRepository ??
+            GetLocalRepositoryPath(builder, module, repository: null);
+        foreach (var container in module.ContainerDefinitions)
+        {
+            var declared = container.ImagePublishOptions;
+            if (declared is null)
+            {
+                continue;
+            }
+
+            var configured = moduleOptions?.FindContainer(container.Name);
+            var buildRepository = GetConfiguredValue(configured?.BuildRepository) ??
+                GetConfiguredValue(declared.BuildRepository);
+            var buildRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
+                GetConfiguredValue(declared.BuildRepositoryRevision);
+            var effectiveBuildRepository = buildRepository ?? definitionRepositoryIdentity;
+            var usesSeparateBuildCheckout =
+                !RepositoryIdentitiesMatch(
+                    effectiveBuildRepository,
+                    definitionRepositoryIdentity,
+                    builder.AppHostDirectory) ||
+                !string.Equals(buildRevision, definitionRevision, StringComparison.Ordinal);
+            if (usesSeparateBuildCheckout)
+            {
+                continue;
+            }
+
+            var publishImage = configured?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
+            var hasExplicitImageIdentity = GetConfiguredValue(configured?.ImageTag) is not null ||
+                GetConfiguredValue(declared.ImageTag) is not null ||
+                GetConfiguredValue(configured?.ImageSHA256) is not null;
+            if (publishImage || !hasExplicitImageIdentity)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ApplyImagePullPolicy(
@@ -792,7 +1052,6 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleImagePublishPlan publishPlan,
         string repositoryPath,
         string publishWorkingDirectory,
-        bool imported,
         string? repository,
         bool updateRepository,
         IResourceBuilder<ContainerResource> container,
@@ -802,7 +1061,7 @@ public static partial class DistributedApplicationModuleExtensions
             GetInstallerName(resourceName),
             repositoryPath,
             repository,
-            imported && updateRepository,
+            updateRepository,
             options.PublishCommand,
             publishPlan.PublishArguments,
             publishWorkingDirectory,
@@ -1138,31 +1397,37 @@ public static partial class DistributedApplicationModuleExtensions
             gitExecutablePath,
             options.RepositoryCommandTimeout,
             cancellationToken).ConfigureAwait(false);
-        if (branch is null || commit is null)
+        if (commit is not null)
         {
-            var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
-                builder.AppHostDirectory,
+            return ModuleImageTag.FromRepository(branch, commit);
+        }
+
+        var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            builder.AppHostDirectory,
+            gitExecutablePath,
+            options.RepositoryCommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (appHostRepositoryRoot is not null)
+        {
+            var appHostBranch = await RepositoryInspector.TryGetBranchAsync(
+                appHostRepositoryRoot,
                 gitExecutablePath,
                 options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false);
-            if (appHostRepositoryRoot is not null)
+            var appHostCommit = await RepositoryInspector.TryGetCommitAsync(
+                appHostRepositoryRoot,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false);
+            if (appHostCommit is not null)
             {
-                branch ??= await RepositoryInspector.TryGetBranchAsync(
-                    appHostRepositoryRoot,
-                    gitExecutablePath,
-                    options.RepositoryCommandTimeout,
-                    cancellationToken).ConfigureAwait(false);
-                commit ??= await RepositoryInspector.TryGetCommitAsync(
-                    appHostRepositoryRoot,
-                    gitExecutablePath,
-                    options.RepositoryCommandTimeout,
-                    cancellationToken).ConfigureAwait(false);
+                return ModuleImageTag.FromRepository(appHostBranch, appHostCommit);
             }
         }
 
-        branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF"));
-        branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
-        return ModuleImageTag.FromRepository(branch, commit);
+        var ciBranch = GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF")) ??
+            GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
+        return ModuleImageTag.FromRepository(ciBranch, commit: null);
     }
 
     private static string FormatNames(IEnumerable<string> names)
@@ -1207,8 +1472,11 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(moduleOptions?.FindProject(project.Name)?.ImageTag) is null &&
                 GetConfiguredValue(project.Export.Options.ImageTag) is null,
             DistributedApplicationModuleContainer container when container.ImagePublishOptions is not null =>
+                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.ImageSHA256) is null &&
                 GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.ImageTag) is null &&
-                GetConfiguredValue(container.ImagePublishOptions.ImageTag) is null,
+                GetConfiguredValue(container.ImagePublishOptions.ImageTag) is null &&
+                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.BuildRepository) is null &&
+                GetConfiguredValue(container.ImagePublishOptions.BuildRepository) is null,
             _ => false
         });
     }
@@ -1320,5 +1588,14 @@ public static partial class DistributedApplicationModuleExtensions
     }
 
     private static string GetInstallerName(string projectName) => $"{projectName}-installer";
+
+    private sealed record MaterializedModuleRepository(
+        string RepositoryPath,
+        string? Repository,
+        string? RepositoryRevision,
+        bool UpdateRepository,
+        bool RepositoryDirty,
+        string DefaultImageTag,
+        bool UsesModuleRepository);
 
 }
