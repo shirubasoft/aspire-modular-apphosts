@@ -131,7 +131,7 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
     }
 
     [Fact]
-    public void WithTestEndpoint_requires_an_explicit_host_port()
+    public void WithTestEndpoint_allocates_a_host_port_when_the_endpoint_omits_one()
     {
         var builder = CreateBuilder();
         var environment = builder.AddDockerComposeEnvironment("compose");
@@ -139,14 +139,23 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
             .WithHttpEndpoint(targetPort: 80, name: "http")
             .WithExternalHttpEndpoints();
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            environment.WithTestEndpoint("catalog", api.GetEndpoint("http")));
+        environment.WithTestEndpoint("catalog", api.GetEndpoint("http"));
+        var values = CaptureEnvironmentVariables(environment.Resource);
+        var variable = values[
+            DockerComposeDeploymentTestingBuilder.GetEndpointVariableName("catalog", "http")];
+        var exportedEndpoint = new Uri(Assert.IsType<string>(variable.DefaultValue));
 
-        Assert.Contains("explicit host port", exception.Message, StringComparison.Ordinal);
+        Assert.InRange(exportedEndpoint.Port, 1, 65535);
+        Assert.Equal(exportedEndpoint.Port, api.Resource.Annotations
+            .OfType<EndpointAnnotation>()
+            .Single(annotation => annotation.Name == "http")
+            .Port);
     }
 
-    [Fact]
-    public void WithTestEndpoint_rejects_an_absolute_health_check_uri()
+    [Theory]
+    [InlineData("https://example.test/health")]
+    [InlineData("health")]
+    public void WithTestEndpoint_rejects_a_health_check_that_is_not_root_relative(string healthCheckPath)
     {
         var builder = CreateBuilder();
         var environment = builder.AddDockerComposeEnvironment("compose");
@@ -158,7 +167,7 @@ public sealed class DockerComposeTestConfigurationExtensionsTests
             environment.WithTestEndpoint(
                 "catalog",
                 api.GetEndpoint("http"),
-                healthCheckPath: "https://example.test/health"));
+                healthCheckPath: healthCheckPath));
 
         Assert.Equal("healthCheckPath", exception.ParamName);
     }

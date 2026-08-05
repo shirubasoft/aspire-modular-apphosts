@@ -9,8 +9,6 @@ public static partial class CatalogModule
 {
     public const string Name = "catalog";
     public const string ApiResourceName = "catalog-api";
-    public const int ExternalHttpPort = 55101;
-
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
         module.RequiresRepository();
@@ -19,7 +17,7 @@ public static partial class CatalogModule
                 .AddProject(
                     context.ResourceName,
                     Path.Combine(context.RepositoryPath, "EShop.Catalog.Api", "EShop.Catalog.Api.csproj"))
-                .WithHttpEndpoint(port: ExternalHttpPort, name: "http")
+                .WithHttpEndpoint(name: "http")
                 .WithExternalHttpEndpoints()
                 .WithHttpHealthCheck("/health"));
     }

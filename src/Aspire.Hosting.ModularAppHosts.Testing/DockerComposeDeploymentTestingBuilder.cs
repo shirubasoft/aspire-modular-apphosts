@@ -34,12 +34,13 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <summary>The environment variable that selects the Aspire deployment output path used by <see cref="DeployAsync{TEntryPoint}(CancellationToken)"/>.</summary>
     public const string DeploymentOutputPathEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH";
 
-    /// <summary>The default Aspire deployment environment name.</summary>
+    /// <summary>The prefix used for generated Aspire test deployment environment names.</summary>
     public const string DefaultDeploymentEnvironmentName = "Tests";
 
     private const string EndpointPrefix = "ASPIRE_TEST_ENDPOINT__";
     private const string EndpointHealthPathPrefix = "ASPIRE_TEST_ENDPOINT_HEALTH_PATH__";
     private const string ValuePrefix = "ASPIRE_TEST_VALUE__";
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly IDistributedApplicationBuilder _innerBuilder;
     private readonly OwnedDeployment? _ownedDeployment;
     private DistributedApplication? _application;
@@ -68,9 +69,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <typeparam name="TEntryPoint">A type in the AppHost assembly to deploy.</typeparam>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <remarks>
-    /// The deployment environment defaults to <see cref="DefaultDeploymentEnvironmentName"/> and can be overridden with
-    /// <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary directory and can be
-    /// overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Disposing the builder destroys the deployment.
+    /// The deployment environment defaults to a unique name prefixed by <see cref="DefaultDeploymentEnvironmentName"/> and
+    /// can be overridden with <see cref="DeploymentEnvironmentVariableName"/>. The output path defaults to a temporary
+    /// directory and can be overridden with <see cref="DeploymentOutputPathEnvironmentVariableName"/>. Disposing the builder
+    /// destroys the deployment.
     /// </remarks>
     public static Task<DockerComposeDeploymentTestingBuilder> DeployAsync<TEntryPoint>(
         CancellationToken cancellationToken = default)
@@ -78,11 +80,13 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         var environmentName = System.Environment.GetEnvironmentVariable(DeploymentEnvironmentVariableName);
         var outputPath = System.Environment.GetEnvironmentVariable(DeploymentOutputPathEnvironmentVariableName);
-        return DeployAsync<TEntryPoint>(new DockerComposeDeploymentOptions
+        var options = new DockerComposeDeploymentOptions { OutputPath = outputPath };
+        if (!string.IsNullOrWhiteSpace(environmentName))
         {
-            EnvironmentName = environmentName ?? DefaultDeploymentEnvironmentName,
-            OutputPath = outputPath
-        }, cancellationToken);
+            options.EnvironmentName = environmentName;
+        }
+
+        return DeployAsync<TEntryPoint>(options, cancellationToken);
     }
 
     /// <summary>
@@ -174,10 +178,19 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             var configurationFilePath = Path.Combine(absoluteOutputPath, $".env.{options.EnvironmentName}");
             return Create<TEntryPoint>(configurationFilePath, deployment);
         }
-        catch
+        catch (Exception deploymentFailure)
         {
-            await TryDestroyDeploymentAsync(deployment).ConfigureAwait(false);
-            TryDeleteOwnedOutputDirectory(deployment);
+            var cleanupFailure = await CleanupFailedDeploymentAsync(deployment).ConfigureAwait(false);
+            if (cleanupFailure is not null)
+            {
+                throw new AggregateException(
+                    $"The Compose deployment failed and cleanup also failed. Deployment state was retained at " +
+                    $"'{deployment.OutputPath}' for recovery.",
+                    deploymentFailure,
+                    cleanupFailure);
+            }
+
+            ExceptionDispatchInfo.Capture(deploymentFailure).Throw();
             throw;
         }
     }
@@ -207,7 +220,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         });
         innerBuilder.Services.AddHttpClient();
 
-        var values = LoadValues(absolutePath);
+        var values = DotEnvFile.Load(absolutePath);
         ImportConfiguration(innerBuilder, values);
         ImportEndpoints(innerBuilder, values);
 
@@ -275,6 +288,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     /// <inheritdoc />
     public DistributedApplication Build()
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeState) != 0, this);
         if (_application is not null)
         {
             throw new InvalidOperationException("The distributed application has already been built.");
@@ -311,7 +325,6 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         Exception? failure = null;
         try
         {
-            EnsureApplicationBuiltForDisposal();
             if (_application is not null)
             {
                 await _application.DisposeAsync().ConfigureAwait(false);
@@ -324,9 +337,11 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
         if (_ownedDeployment is not null)
         {
+            var deploymentDestroyed = false;
             try
             {
                 await RunAspireCommandAsync("destroy", _ownedDeployment, CancellationToken.None).ConfigureAwait(false);
+                deploymentDestroyed = true;
             }
             catch (Exception exception)
             {
@@ -337,7 +352,10 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
             try
             {
-                DeleteOwnedOutputDirectory(_ownedDeployment);
+                if (deploymentDestroyed)
+                {
+                    DeleteOwnedOutputDirectory(_ownedDeployment);
+                }
             }
             catch (Exception exception)
             {
@@ -366,6 +384,9 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
 
     internal static string GetValueVariableName(string configurationKey) =>
         ValuePrefix + EncodeName(configurationKey);
+
+    internal static string CreateDefaultDeploymentEnvironmentName() =>
+        $"{DefaultDeploymentEnvironmentName}-{System.Environment.ProcessId}-{Guid.NewGuid():N}";
 
     private static string ResolveProjectDirectory(Assembly appHostAssembly)
     {
@@ -562,33 +583,28 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
-        Justification = "Best-effort cleanup must preserve the deployment failure.")]
-    private static async Task TryDestroyDeploymentAsync(OwnedDeployment deployment)
+        Justification = "Cleanup failures are returned so they can be reported with the deployment failure.")]
+    private static async Task<Exception?> CleanupFailedDeploymentAsync(OwnedDeployment deployment)
     {
         try
         {
             await RunAspireCommandAsync("destroy", deployment, CancellationToken.None).ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
-            // Preserve the deployment failure.
+            return exception;
         }
-    }
 
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Best-effort cleanup must preserve the deployment failure.")]
-    private static void TryDeleteOwnedOutputDirectory(OwnedDeployment deployment)
-    {
         try
         {
             DeleteOwnedOutputDirectory(deployment);
         }
-        catch
+        catch (Exception exception)
         {
-            // Preserve the deployment failure.
+            return exception;
         }
+
+        return null;
     }
 
     private static void DeleteOwnedOutputDirectory(OwnedDeployment deployment)
@@ -599,40 +615,20 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         }
     }
 
-    private static Dictionary<string, string> LoadValues(string filePath)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in File.ReadLines(filePath))
-        {
-            var content = line.TrimStart('\uFEFF').TrimStart();
-            if (content.Length == 0 || content[0] == '#')
-            {
-                continue;
-            }
-
-            var separator = content.IndexOf('=', StringComparison.Ordinal);
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            var key = content[..separator].Trim();
-            values[key] = content[(separator + 1)..];
-        }
-
-        return values;
-    }
-
     private static void ImportConfiguration(
         IDistributedApplicationBuilder builder,
         Dictionary<string, string> values)
     {
-        var configuration = values
-            .Where(pair => pair.Key.StartsWith(ValuePrefix, StringComparison.Ordinal))
-            .ToDictionary(
-                pair => DecodeName(pair.Key[ValuePrefix.Length..]),
-                pair => (string?)pair.Value,
-                StringComparer.OrdinalIgnoreCase);
+        var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in values.Where(pair => pair.Key.StartsWith(ValuePrefix, StringComparison.Ordinal)))
+        {
+            var configurationKey = DecodeName(pair.Key[ValuePrefix.Length..]);
+            if (!configuration.TryAdd(configurationKey, pair.Value))
+            {
+                throw new InvalidOperationException(
+                    $"The deployment test configuration exports configuration key '{configurationKey}' more than once.");
+            }
+        }
 
         builder.Configuration.AddInMemoryCollection(configuration);
     }
@@ -642,9 +638,11 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
         Dictionary<string, string> values)
     {
         var resources = new Dictionary<string, (DeployedEndpointResource Resource, IResourceBuilder<DeployedEndpointResource> Builder)>(
-            StringComparer.Ordinal);
+            StringComparer.OrdinalIgnoreCase);
+        var endpointVariableNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pair in values.Where(pair => pair.Key.StartsWith(EndpointPrefix, StringComparison.Ordinal)))
         {
+            endpointVariableNames.Add(pair.Key);
             var encodedEndpoint = pair.Key[EndpointPrefix.Length..];
             var separator = encodedEndpoint.IndexOf("__", StringComparison.Ordinal);
             var encodedResourceName = separator < 0 ? encodedEndpoint : encodedEndpoint[..separator];
@@ -654,10 +652,15 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
                 : DecodeName(encodedEndpoint[(separator + 2)..]);
             if (!Uri.TryCreate(pair.Value, UriKind.Absolute, out var endpoint)
                 || !(string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+                    || string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                || endpoint.AbsolutePath != "/"
+                || endpoint.Query.Length > 0
+                || endpoint.Fragment.Length > 0
+                || endpoint.UserInfo.Length > 0)
             {
                 throw new InvalidOperationException(
-                    $"The exported test endpoint '{resourceName}' has invalid HTTP URI value '{pair.Value}'.");
+                    $"The exported test endpoint '{resourceName}' must be an absolute HTTP(S) origin without " +
+                    $"credentials, path, query, or fragment; found '{pair.Value}'.");
             }
 
             endpointName ??= endpoint.Scheme;
@@ -677,7 +680,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             }
 
             if (imported.Resource.Annotations.OfType<EndpointAnnotation>().Any(annotation =>
-                string.Equals(annotation.Name, endpointName, StringComparison.Ordinal)))
+                string.Equals(annotation.Name, endpointName, StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidOperationException(
                     $"The exported test endpoint '{resourceName}/{endpointName}' is defined more than once.");
@@ -702,12 +705,31 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             var healthKey = EndpointHealthPathPrefix + encodedEndpoint;
             if (values.TryGetValue(healthKey, out var healthPath))
             {
+                if (healthPath.Length == 0 || healthPath[0] != '/' ||
+                    !Uri.IsWellFormedUriString(healthPath, UriKind.Relative))
+                {
+                    throw new InvalidOperationException(
+                        $"The exported health check for '{resourceName}/{endpointName}' must be a root-relative URI path; " +
+                        $"found '{healthPath}'.");
+                }
+
                 var healthCheckKey = $"{resourceName}_{endpointName}_deployment_check";
                 var healthCheckUri = new Uri(endpoint, healthPath);
                 builder.Services.AddHealthChecks().AddUrlGroup(
                     options => options.AddUri(healthCheckUri),
                     healthCheckKey);
                 imported.Builder.WithHealthCheck(healthCheckKey);
+            }
+        }
+
+        foreach (var healthPair in values.Where(pair =>
+            pair.Key.StartsWith(EndpointHealthPathPrefix, StringComparison.Ordinal)))
+        {
+            var endpointVariableName = EndpointPrefix + healthPair.Key[EndpointHealthPathPrefix.Length..];
+            if (!endpointVariableNames.Contains(endpointVariableName))
+            {
+                throw new InvalidOperationException(
+                    $"The deployment test configuration exports health check '{healthPair.Key}' without its endpoint.");
             }
         }
     }
@@ -722,34 +744,19 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
     {
         try
         {
-            return Encoding.UTF8.GetString(Convert.FromHexString(encodedName));
+            var decodedName = StrictUtf8.GetString(Convert.FromHexString(encodedName));
+            if (string.IsNullOrWhiteSpace(decodedName))
+            {
+                throw new FormatException("The decoded name is empty.");
+            }
+
+            return decodedName;
         }
-        catch (FormatException exception)
+        catch (Exception exception) when (exception is FormatException or DecoderFallbackException)
         {
             throw new InvalidOperationException(
                 $"The Aspire deployment test configuration contains invalid encoded name '{encodedName}'.",
                 exception);
-        }
-    }
-
-    [SuppressMessage(
-        "Design",
-        "CA1031:Do not catch general exception types",
-        Justification = "Disposal matches Aspire's testing builder and must not hide the original test failure.")]
-    private void EnsureApplicationBuiltForDisposal()
-    {
-        if (_application is not null)
-        {
-            return;
-        }
-
-        try
-        {
-            Build();
-        }
-        catch
-        {
-            // Match Aspire's testing builder by suppressing build failures during disposal.
         }
     }
 

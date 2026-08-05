@@ -24,7 +24,7 @@ public static partial class SpireModule
                         "sample",
                         "Sample.ApiService",
                         "Sample.ApiService.csproj"))
-                .WithHttpEndpoint(port: 55201, name: "http")
+                .WithHttpEndpoint(name: "http")
                 .WithExternalHttpEndpoints()
                 .WithHttpHealthCheck("/health"));
     }
