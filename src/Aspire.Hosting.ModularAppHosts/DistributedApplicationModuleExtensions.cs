@@ -124,6 +124,7 @@ public static partial class DistributedApplicationModuleExtensions
                 registry.Options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false);
             ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
+            registry.ValidatePreviewSelection(module, builder.AppHostDirectory);
             registry.AddModule(module);
             return module;
         }, cancellationToken).ConfigureAwait(false);
@@ -199,6 +200,8 @@ public static partial class DistributedApplicationModuleExtensions
                     $"Module '{name}' has not been exported. Call ExportModuleAsync before ImportModuleAsync.");
             }
 
+            registry.ValidatePreviewSelection(module, builder.AppHostDirectory);
+
             await MaterializeAsync(
                 builder,
                 module,
@@ -235,15 +238,23 @@ public static partial class DistributedApplicationModuleExtensions
         var options = registry.Options;
         var moduleOptions = options.FindModule(module.Name);
         var repositoryConfigurationKey = GetRepositoryConfigurationKey(module.Name);
-        var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
-        var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
+        var hasPreviewSelection = registry.TryGetPreviewSelection(module.Name, out var previewSelection);
+        var configuredRepository = hasPreviewSelection
+            ? null
+            : GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
+        var repository = GetConfiguredValue(previewSelection?.Repository) ??
+            configuredRepository ??
+            GetConfiguredValue(moduleOptions?.Repository) ??
+            module.Repository;
         if (!string.IsNullOrWhiteSpace(repository) &&
             !GitHubRepositoryCloner.IsRemoteRepository(repository, builder.AppHostDirectory))
         {
             repository = Path.GetFullPath(repository, builder.AppHostDirectory);
         }
 
-        var repositoryRevision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ?? module.RepositoryRevision;
+        var repositoryRevision = GetConfiguredValue(previewSelection?.Commit) ??
+            GetConfiguredValue(moduleOptions?.RepositoryRevision) ??
+            module.RepositoryRevision;
         var requiresRepository = module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent;
         var factoryRequiresRepository = module.RequiresRepositoryContent &&
             module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
@@ -877,6 +888,9 @@ public static partial class DistributedApplicationModuleExtensions
         });
         return registry;
     }
+
+    internal static ModuleApplicationRegistry GetOrCreateRegistryForPreview(
+        IDistributedApplicationBuilder builder) => GetOrCreateRegistry(builder);
 
     private static string GetImportedRepositoryPath(
         IDistributedApplicationBuilder builder,

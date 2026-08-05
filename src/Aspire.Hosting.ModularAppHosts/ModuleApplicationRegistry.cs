@@ -33,6 +33,9 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, ModulePreviewSelection> _previewSelections =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private readonly ConcurrentDictionary<string, RepositorySynchronization> _repositorySynchronizations =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -65,6 +68,67 @@ internal sealed class ModuleApplicationRegistry(
 
     internal void MarkMaterialized(string moduleName, string materializationKey) =>
         _materializedModules.Add(moduleName, materializationKey);
+
+    internal void ApplyPreviewManifest(ModulePreviewManifest manifest, string baseDirectory)
+    {
+        if (_materializedModules.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "A module preview manifest must be applied before importing or adding modules.");
+        }
+
+        foreach (var selection in manifest.Modules)
+        {
+            if (_previewSelections.TryGetValue(selection.Name, out var existing) &&
+                (!GitHubRepositoryCloner.RefersToSameRepository(
+                    existing.Repository,
+                    selection.Repository,
+                    baseDirectory) ||
+                 !string.Equals(existing.Commit, selection.Commit, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"Module '{selection.Name}' already has a different preview selection.");
+            }
+        }
+
+        foreach (var selection in manifest.Modules)
+        {
+            _previewSelections[selection.Name] = new ModulePreviewSelection
+            {
+                Name = selection.Name,
+                Repository = selection.Repository,
+                Commit = selection.Commit,
+                Branch = selection.Branch,
+                BaseRef = selection.BaseRef,
+                BaseCommit = selection.BaseCommit
+            };
+        }
+
+        RefreshConfiguration();
+    }
+
+    internal void ValidatePreviewSelection(DistributedApplicationModule module, string baseDirectory)
+    {
+        if (!_previewSelections.TryGetValue(module.Name, out var selection) ||
+            string.IsNullOrWhiteSpace(module.Repository) ||
+            !GitHubRepositoryCloner.IsRemoteRepository(module.Repository, baseDirectory))
+        {
+            return;
+        }
+
+        if (!GitHubRepositoryCloner.RefersToSameRepository(
+                selection.Repository,
+                module.Repository,
+                baseDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Preview module '{module.Name}' selects repository '{selection.Repository}', but its " +
+                $"contract declares repository '{module.Repository}'.");
+        }
+    }
+
+    internal bool TryGetPreviewSelection(string moduleName, out ModulePreviewSelection? selection) =>
+        _previewSelections.TryGetValue(moduleName, out selection);
 
     internal bool TryGetResource(string name, out IResource? resource) =>
         _resources.TryGetValue(name, out resource);
@@ -122,6 +186,18 @@ internal sealed class ModuleApplicationRegistry(
         foreach (var configure in _configurations)
         {
             configure(Options);
+        }
+
+        foreach (var selection in _previewSelections.Values)
+        {
+            if (!Options.Modules.TryGetValue(selection.Name, out var moduleOptions))
+            {
+                moduleOptions = new DistributedApplicationModuleOptions();
+                Options.Modules.Add(selection.Name, moduleOptions);
+            }
+
+            moduleOptions.Repository = selection.Repository;
+            moduleOptions.RepositoryRevision = selection.Commit;
         }
     }
 

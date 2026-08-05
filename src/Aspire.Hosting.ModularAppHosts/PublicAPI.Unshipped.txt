@@ -1,3 +1,46 @@
 #nullable enable
 Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver
+Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.ModulePreviewManifest() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Modules.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewSelection!>!
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Producer.get -> Aspire.Hosting.ModularAppHosts.ModulePreviewProducer!
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Producer.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.SchemaVersion.get -> int
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.SchemaVersion.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Validate() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.BaseCommit.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.BaseCommit.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.BaseRef.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.BaseRef.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Branch.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Branch.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Commit.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Commit.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Dirty.get -> bool
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Dirty.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.ModulePreviewProducer() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseCommit.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseCommit.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseRef.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseRef.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Branch.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Branch.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Commit.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Commit.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.ModulePreviewSelection() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Name.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Name.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.set -> void
+const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 1 -> int
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifest(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.ModulePreviewManifest! manifest) -> Aspire.Hosting.IDistributedApplicationBuilder!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifestAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! manifestPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewManifest!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewManifest!>!

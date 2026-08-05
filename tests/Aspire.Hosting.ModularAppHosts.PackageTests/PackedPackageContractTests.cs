@@ -15,6 +15,7 @@ public sealed class PackedPackageContractTests
     private const string CorePackageId = "Shirubasoft.Aspire.ModularAppHosts";
     private const string TestingPackageId = "Shirubasoft.Aspire.ModularAppHosts.Testing";
     private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
+    private const string ToolPackageId = "Shirubasoft.Aspire.ModularAppHosts.Tool";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
     private static PackageArtifacts? _packageArtifacts;
     private readonly PackageTestWorkspace _workspace;
@@ -55,6 +56,59 @@ public sealed class PackedPackageContractTests
     }
 
     [Fact]
+    public async Task Preview_tool_package_is_self_contained_without_the_Aspire_hosting_runtime()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/DotnetToolSettings.xml"));
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/dotnet-modular-apphosts.dll"));
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/CliWrap.dll"));
+        Assert.False(ContainsEntry(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/Aspire.Hosting.dll"));
+    }
+
+    [Fact]
+    public async Task Packed_preview_tool_installs_and_exposes_the_documented_command()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        var toolPath = _workspace.CreateDirectory("preview-tool");
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "tool",
+            "install",
+            ToolPackageId,
+            "--tool-path",
+            toolPath,
+            "--version",
+            packages.Version,
+            "--add-source",
+            packages.OutputPath,
+            "--ignore-failed-sources",
+            "--no-cache");
+
+        var executable = Path.Combine(
+            toolPath,
+            OperatingSystem.IsWindows() ? "dotnet-modular-apphosts.exe" : "dotnet-modular-apphosts");
+        var result = await CliCommand.Wrap(executable)
+            .WithArguments("--help")
+            .WithWorkingDirectory(packages.RepositoryRoot)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess, result.StandardError);
+        Assert.Contains("dotnet modular-apphosts preview export", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("dotnet modular-apphosts preview trigger", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Packages_publish_license_repository_and_debugging_metadata()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
@@ -63,7 +117,8 @@ public sealed class PackedPackageContractTests
                  {
                      packages.CorePackagePath,
                      packages.TestingPackagePath,
-                     packages.TemplatePackagePath
+                     packages.TemplatePackagePath,
+                     packages.ToolPackagePath
                  })
         {
             var metadata = ReadMetadata(packagePath);
@@ -93,6 +148,10 @@ public sealed class PackedPackageContractTests
         Assert.Equal(expectedVersion, ReadAssemblyVersion(
             packages.TestingPackagePath,
             "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll",
+            packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/dotnet-modular-apphosts.dll",
             packages.OutputPath));
         Assert.StartsWith(packages.Version, ReadInformationalVersion(
             packages.CorePackagePath,
@@ -313,6 +372,17 @@ public sealed class PackedPackageContractTests
                 repositoryRoot,
                 cancellationToken,
                 "pack",
+                "src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj",
+                "--configuration",
+                "Release",
+                "--no-restore",
+                "--output",
+                outputPath,
+                $"-p:Version={version}");
+            await RunDotNetAsync(
+                repositoryRoot,
+                cancellationToken,
+                "pack",
                 "templates/Aspire.Hosting.ModularAppHosts.Templates.csproj",
                 "--configuration",
                 "Release",
@@ -328,6 +398,7 @@ public sealed class PackedPackageContractTests
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TemplatePackageId}.{version}.nupkg"),
+                Path.Combine(outputPath, $"{ToolPackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.snupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"));
         }
@@ -531,6 +602,7 @@ public sealed class PackedPackageContractTests
         string CorePackagePath,
         string TestingPackagePath,
         string TemplatePackagePath,
+        string ToolPackagePath,
         string CoreSymbolPackagePath,
         string TestingSymbolPackagePath);
 
