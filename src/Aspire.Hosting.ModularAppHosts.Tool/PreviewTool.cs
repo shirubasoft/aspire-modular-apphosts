@@ -9,9 +9,9 @@ namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
 internal static partial class PreviewTool
 {
-    private static readonly JsonSerializerOptions CompactJsonOptions = new(JsonSerializerDefaults.Web)
+    private static readonly JsonSerializerOptions CompactJsonOptions = new(ModulePreviewJson.SerializerOptions)
     {
-        PreferredObjectCreationHandling = System.Text.Json.Serialization.JsonObjectCreationHandling.Populate
+        WriteIndented = false
     };
 
     private const string Usage = """

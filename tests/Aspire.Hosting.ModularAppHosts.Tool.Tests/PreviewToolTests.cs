@@ -207,6 +207,14 @@ public sealed class PreviewToolTests
             Repository = "https://github.com/shirubasoft/repo-c.git",
             Commit = Commit
         });
+        manifest.Images.Add(new ModulePreviewImageArtifact
+        {
+            Module = "module-c",
+            Resource = "module-c-api",
+            ResourceKind = ModulePreviewResourceKind.Container,
+            Repository = "ghcr.io/shirubasoft/module-c",
+            Sha256 = $"sha256:{new string('a', 64)}"
+        });
         await manifest.SaveAsync(manifestPath, TestContext.Current.CancellationToken);
         var argumentsPath = Path.Combine(directory.Path, "arguments.txt");
         var bodyPath = Path.Combine(directory.Path, "body.json");
@@ -244,6 +252,9 @@ public sealed class PreviewToolTests
         Assert.NotNull(manifestJson);
         using var dispatchedManifest = JsonDocument.Parse(manifestJson);
         Assert.Equal(Commit, dispatchedManifest.RootElement.GetProperty("producer").GetProperty("commit").GetString());
+        Assert.Equal(
+            "container",
+            dispatchedManifest.RootElement.GetProperty("images")[0].GetProperty("resourceKind").GetString());
     }
 
     private sealed class TestDirectory : IDisposable
