@@ -26,6 +26,7 @@ public static partial class AppHostAModule
         string sourceRoot)
     {
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
+        var containerRuntime = GetContainerRuntime();
 
         return builder.ExportModule(Name, module =>
         {
@@ -40,7 +41,7 @@ public static partial class AppHostAModule
                 .ExportAsContainer(
                     new ModuleContainerExportOptions(
                         imageName: "modular-sample-api",
-                        publishCommand: "podman",
+                        publishCommand: containerRuntime,
                         publishArguments:
                         [
                             "build",
@@ -76,7 +77,7 @@ public static partial class AppHostAModule
             module.AddContainer(GeneratedStaticResourceName, "modular-sample-static")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     imageName: "modular-sample-static",
-                    publishCommand: "podman",
+                    publishCommand: containerRuntime,
                     publishArguments:
                     [
                         "build",
@@ -130,5 +131,23 @@ public static partial class AppHostAModule
             module.AddResource<SampleCustomResource>(CustomResourceName, context =>
                 context.ApplicationBuilder.AddResource(new SampleCustomResource(context.ResourceName)));
         });
+    }
+
+    private static string GetContainerRuntime()
+    {
+        var configured = Environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME")?.Trim();
+        if (string.IsNullOrEmpty(configured) ||
+            string.Equals(configured, "docker", StringComparison.OrdinalIgnoreCase))
+        {
+            return "docker";
+        }
+
+        if (string.Equals(configured, "podman", StringComparison.OrdinalIgnoreCase))
+        {
+            return "podman";
+        }
+
+        throw new InvalidOperationException(
+            "ASPIRE_CONTAINER_RUNTIME must be either 'docker' or 'podman' for the modular AppHost sample.");
     }
 }

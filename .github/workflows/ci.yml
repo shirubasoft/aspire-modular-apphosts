@@ -92,6 +92,84 @@ jobs:
           --yes
           --non-interactive
 
+  e2e-modular-samples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore the pinned Aspire CLI and sample graph
+        run: |
+          dotnet tool restore
+          dotnet restore Aspire.ModularAppHosts.slnx
+
+      - name: Start and validate both modular AppHosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          active_apphost=""
+          stop_active_apphost() {
+            if [[ -n "$active_apphost" ]]; then
+              dotnet tool run aspire -- stop \
+                --apphost "$active_apphost" \
+                --non-interactive || true
+              active_apphost=""
+            fi
+          }
+          trap stop_active_apphost EXIT
+
+          active_apphost="samples/AppHostA/ModularSample.AppHostA.csproj"
+          dotnet tool run aspire -- start \
+            --apphost "$active_apphost" \
+            --isolated \
+            --format Json \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-api \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-generated-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          stop_active_apphost
+
+          active_apphost="samples/AppHostB/ModularSample.AppHostB.csproj"
+          dotnet tool run aspire -- start \
+            --apphost "$active_apphost" \
+            --isolated \
+            --format Json \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-api \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait sample-generated-static \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+          dotnet tool run aspire -- wait dependency-gateway \
+            --apphost "$active_apphost" \
+            --timeout 180 \
+            --non-interactive
+
   e2e-multi-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15

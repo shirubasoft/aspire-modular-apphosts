@@ -2,6 +2,7 @@ using Aspire.Hosting.ModularAppHosts;
 using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
+builder.BuildModuleImages();
 
 var exported = AppHostAModule.Register(builder, builder.AppHostDirectory);
 var module = AppHostAModule.AddModule(builder, exported);

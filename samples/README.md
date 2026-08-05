@@ -8,7 +8,7 @@ AppHost A
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
 ├── sample-static (ContainerResource, nginx:alpine)
-├── sample-generated-static ── podman build ──> branch-tagged modular-sample-static
+├── sample-generated-static ── container build ──> branch-tagged modular-sample-static
 ├── sample-executable (ExecutableResource, explicit start)
 ├── sample-dotnet-tool (DotnetToolResource, explicit start)
 ├── sample-message (ParameterResource)
@@ -30,8 +30,8 @@ AppHost B imports every resource
 The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleContract/AppHostAModule.cs). It demonstrates every public core top-level Aspire resource type alongside the specialized project/container exports. Internal helper resources created by Aspire itself are intentionally excluded. Its project and generated-container exports supply the exact commands that produce their configured images:
 
 ```text
-podman build --tag modular-sample-api:<sanitized-branch> .
-podman build --tag modular-sample-static:<sanitized-branch> .
+docker build --tag modular-sample-api:<sanitized-branch> .
+docker build --tag modular-sample-static:<sanitized-branch> .
 ```
 
 For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
@@ -42,7 +42,9 @@ For a dirty repository, the exact image-reference argument is changed to its `-d
 
 - .NET 10 SDK
 - Aspire CLI 13.4 or later
-- A running Podman-compatible container runtime
+- A running Docker 28+ or Podman 5+ container runtime
+
+The explicit sample image commands use Docker by default. Set `ASPIRE_CONTAINER_RUNTIME=podman` to use Podman for both the sample publishers and Aspire-managed containers.
 
 ## Run AppHost A
 
@@ -51,7 +53,7 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module. Development configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module and opts into the module-declared image publishers. Development configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
