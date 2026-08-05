@@ -910,6 +910,7 @@ internal static class RepositorySynchronizer
             gitExecutablePath,
             commandTimeout,
             cancellationToken).ConfigureAwait(false);
+        progress?.Invoke($"Synchronizing repository '{repositoryPath}'.");
         foreach (var command in commands)
         {
             var result = await ModuleCliRunner.RunAsync(
@@ -931,6 +932,8 @@ internal static class RepositorySynchronizer
                     $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
             }
         }
+
+        progress?.Invoke($"Repository '{repositoryPath}' is synchronized.");
     }
 
     private static void AddRevisionCommands(

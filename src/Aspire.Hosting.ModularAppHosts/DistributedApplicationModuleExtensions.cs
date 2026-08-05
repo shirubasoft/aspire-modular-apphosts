@@ -1,12 +1,13 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
 /// <summary>Extensions for composing reusable modules in an Aspire AppHost.</summary>
-public static class DistributedApplicationModuleExtensions
+public static partial class DistributedApplicationModuleExtensions
 {
     /// <summary>The legacy <c>Parameters</c> key used as the parent directory for managed repository clones.</summary>
     public const string RepositoryBaseLocationParameterName = "module-repository-base-location";
@@ -287,10 +288,20 @@ public static class DistributedApplicationModuleExtensions
                 (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
                 ? GetImportedRepositoryPath(builder, options, repository, module.Name)
                 : GetLocalRepositoryPath(builder, module, repository));
+        var repositorySynchronizationKey =
+            await RepositoryInspector.TryFindRepositoryRootAsync(
+                repositoryPath,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false) ??
+            Path.GetFullPath(repositoryPath);
         var updateRepository =
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             existingSameWorktreeRepository is null;
+        var repositorySynchronizationPolicy = RepositorySynchronizationPolicy.Create(
+            updateRepository,
+            repositoryRevision);
 
         var synchronizationRequired =
             ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
@@ -308,15 +319,17 @@ public static class DistributedApplicationModuleExtensions
         if (synchronizedRepository)
         {
             await registry.SynchronizeRepositoryAsync(
-                repositoryPath,
-                () => RepositorySynchronizer.SynchronizeAsync(
+                repositorySynchronizationKey,
+                repositorySynchronizationPolicy,
+                progress => RepositorySynchronizer.SynchronizeAsync(
                     repositoryPath,
                     repository,
                     updateRepository,
                     cancellationToken,
                     repositoryRevision,
                     GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                    options.RepositoryCommandTimeout)).ConfigureAwait(false);
+                    options.RepositoryCommandTimeout,
+                    progress)).ConfigureAwait(false);
         }
 
         var repositoryDirty = await RepositoryInspector.IsDirtyAsync(
@@ -342,14 +355,15 @@ public static class DistributedApplicationModuleExtensions
             registry,
             module,
             repositoryPath,
+            repositorySynchronizationKey,
+            repositorySynchronizationPolicy,
             repositoryParameter is null ? repository : null,
             repositoryParameter,
             imported,
             updateRepository,
             repositoryRevision,
             GetConfiguredValue(options.GitExecutablePath) ?? "git",
-            options.RepositoryCommandTimeout,
-            deferSynchronization: !synchronizedRepository);
+            options.RepositoryCommandTimeout);
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -763,23 +777,23 @@ public static class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry,
         DistributedApplicationModule module,
         string repositoryPath,
+        string repositorySynchronizationKey,
+        RepositorySynchronizationPolicy repositorySynchronizationPolicy,
         string? repository,
         IResourceBuilder<ParameterResource>? repositoryParameter,
         bool imported,
         bool updateRepository,
         string? repositoryRevision,
         string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        bool deferSynchronization)
+        TimeSpan repositoryCommandTimeout)
     {
         if (!builder.ExecutionContext.IsRunMode || !imported ||
-            !deferSynchronization ||
             (string.IsNullOrWhiteSpace(repository) && repositoryParameter is null))
         {
             return;
         }
 
-        builder.Eventing.Subscribe<BeforeStartEvent>(async (_, cancellationToken) =>
+        builder.Eventing.Subscribe<BeforeStartEvent>(async (@event, cancellationToken) =>
         {
             var resolvedRepository = repository ??
                 await repositoryParameter!.Resource.GetValueAsync(cancellationToken).ConfigureAwait(false);
@@ -789,16 +803,28 @@ public static class DistributedApplicationModuleExtensions
                     $"A Git repository is required for imported module content at '{repositoryPath}'.");
             }
 
+            var logResource = @event.Model.Resources.FirstOrDefault(resource =>
+                resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>().Any(annotation =>
+                    string.Equals(annotation.ModuleName, module.Name, StringComparison.OrdinalIgnoreCase) &&
+                    PathSafety.AreEqual(annotation.RepositoryPath, repositoryPath)));
+            var resourceLoggerService = @event.Services.GetRequiredService<ResourceLoggerService>();
+            var logger = logResource is null
+                ? resourceLoggerService.GetLogger(module.Name)
+                : resourceLoggerService.GetLogger(logResource);
+
             await registry.SynchronizeRepositoryAsync(
-                repositoryPath,
-                () => RepositorySynchronizer.SynchronizeAsync(
+                repositorySynchronizationKey,
+                repositorySynchronizationPolicy,
+                progress => RepositorySynchronizer.SynchronizeAsync(
                     repositoryPath,
                     resolvedRepository,
                     updateRepository,
                     cancellationToken,
                     repositoryRevision,
                     gitExecutablePath,
-                    repositoryCommandTimeout)).ConfigureAwait(false);
+                    repositoryCommandTimeout,
+                    progress),
+                progress => LogRepositoryProgress(logger, progress)).ConfigureAwait(false);
 
             ValidateProjectFiles(module, repositoryPath);
         });
@@ -1127,6 +1153,9 @@ public static class DistributedApplicationModuleExtensions
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    [LoggerMessage(EventId = 1, Level = LogLevel.Information, Message = "{Progress}")]
+    private static partial void LogRepositoryProgress(ILogger logger, string progress);
 
     private static string GetMaterializationKey(bool imported, ModuleImportOptions? options)
     {

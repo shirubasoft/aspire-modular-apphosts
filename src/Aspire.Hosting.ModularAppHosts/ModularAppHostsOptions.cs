@@ -35,7 +35,7 @@ public sealed class ModularAppHostsOptions
     public TimeSpan RepositoryCommandTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>Gets or sets whether existing clean imported repositories are fast-forwarded before startup.</summary>
-    public bool UpdateImportedRepositories { get; set; }
+    public bool UpdateImportedRepositories { get; set; } = true;
 
     /// <summary>Gets or sets how exported projects run in Aspire run mode.</summary>
     public ModuleProjectMode ProjectMode { get; set; } = ModuleProjectMode.Auto;

@@ -7,12 +7,12 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class SafeMaterializationDefaultsTests
 {
     [Fact]
-    public void Defaults_do_not_update_repositories_or_execute_image_builds()
+    public void Defaults_update_imported_repositories_without_executing_image_builds()
     {
         var options = new ModularAppHostsOptions();
 
         Assert.Equal(ModuleProjectMode.Auto, options.ProjectMode);
-        Assert.False(options.UpdateImportedRepositories);
+        Assert.True(options.UpdateImportedRepositories);
         Assert.False(options.PublishImages);
         Assert.Equal("git", options.GitExecutablePath);
         Assert.Equal("gh", options.GitHubCliPath);

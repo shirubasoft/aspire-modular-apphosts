@@ -3,6 +3,7 @@ using Aspire.Hosting.ModularAppHosts;
 using CliWrap;
 using CliWrap.Buffered;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 using CliCommand = global::CliWrap.Cli;
@@ -1570,9 +1571,8 @@ public sealed class DistributedApplicationModuleExtensionsTests
 
         await builder.ImportModuleAsync(module.Name);
 
-        var image = Assert.Single(
-            Assert.Single(builder.Resources.OfType<ContainerResource>())
-                .Annotations.OfType<ContainerImageAnnotation>());
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal(currentCommit, await RepositoryInspector.TryResolveCommitAsync(
             checkout,
             cancellationToken: TestContext.Current.CancellationToken));
@@ -1580,25 +1580,70 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public async Task Module_registry_deduplicates_concurrent_repository_synchronization()
+    public async Task Module_registry_deduplicates_repository_work_and_replays_progress_to_resource_logs()
     {
+        using var workspace = TemporaryDirectory.Create();
+        var builder = CreateBuilder(workspace.Path);
+        var resource = builder.AddContainer("orders-api", "example/orders-api").Resource;
+        await using var application = builder.Build();
         var registry = new ModuleApplicationRegistry();
+        var resourceLoggerService = application.Services.GetRequiredService<ResourceLoggerService>();
+        var logger = resourceLoggerService.GetLogger(resource);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var invocationCount = 0;
 
-        Task SynchronizeAsync()
+        Task SynchronizeAsync(Action<string> progress)
         {
             Interlocked.Increment(ref invocationCount);
+            progress("pulling");
             return release.Task;
         }
 
-        var first = registry.SynchronizeRepositoryAsync("repository", SynchronizeAsync);
-        var second = registry.SynchronizeRepositoryAsync("repository", SynchronizeAsync);
+        var policy = RepositorySynchronizationPolicy.Create(updateRepository: true, revision: null);
+        var first = registry.SynchronizeRepositoryAsync("repository", policy, SynchronizeAsync);
+        var second = registry.SynchronizeRepositoryAsync(
+            Path.Combine("repository", "."),
+            policy,
+            SynchronizeAsync,
+            progress => logger.LogInformation("{Progress}", progress));
 
         Assert.Same(first, second);
         Assert.Equal(1, Volatile.Read(ref invocationCount));
         release.SetResult();
         await Task.WhenAll(first, second);
+
+        resourceLoggerService.Complete(resource);
+        var logs = new List<LogLine>();
+        await foreach (var lines in resourceLoggerService.WatchAsync(resource))
+        {
+            logs.AddRange(lines);
+        }
+
+        Assert.Contains(logs, line => line.Content.Contains("pulling", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Module_registry_rejects_conflicting_policies_for_a_shared_repository()
+    {
+        var registry = new ModuleApplicationRegistry();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var synchronization = registry.SynchronizeRepositoryAsync(
+            "repository",
+            RepositorySynchronizationPolicy.Create(updateRepository: true, revision: null),
+            _ => release.Task);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+        {
+            _ = registry.SynchronizeRepositoryAsync(
+                Path.Combine("repository", "."),
+                RepositorySynchronizationPolicy.Create(updateRepository: false, revision: null),
+                _ => Task.CompletedTask);
+        });
+
+        Assert.Contains("conflicting", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(DistributedApplicationModuleOptions.UpdateRepository), exception.Message, StringComparison.Ordinal);
+        release.SetResult();
+        await synchronization;
     }
 
     private static async Task<IDistributedApplicationModule> ExportModuleAsync(
@@ -1634,7 +1679,6 @@ public sealed class DistributedApplicationModuleExtensionsTests
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:ProjectMode"] =
             nameof(ModuleProjectMode.Container);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "true";
-        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:UpdateImportedRepositories"] = "true";
         return builder;
     }
 

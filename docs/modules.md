@@ -208,7 +208,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
       "GitHubCliPath": "gh",
       "GitExecutablePath": "git",
       "RepositoryCommandTimeout": "00:02:00",
-      "UpdateImportedRepositories": false,
+      "UpdateImportedRepositories": true,
       "ProjectMode": "Auto",
       "PublishImages": false,
       "Modules": {
@@ -257,7 +257,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 `ProjectMode` is honored only in Aspire run mode. Its safe `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Running an imported project directly requires its managed checkout to exist when the AppHost model is built.
 
-Repository updates and image build commands are opt-in. Set `UpdateRepository`/`UpdateImportedRepositories` or `PublishImage`/`PublishImages` only where that mutation is intended. Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
+Existing clean imported repositories update by default. Set `UpdateRepository` or `UpdateImportedRepositories` to `false` where a checkout must remain fixed. Image build commands remain opt-in through `PublishImage`/`PublishImages`. Image and command settings override a publish command declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy.
 
 Configured module, project, and container names are validated against exported definitions. A typo fails with the missing name and the available names instead of being silently ignored. With sibling discovery enabled, every specialized `AddProject` path is also checked after discovery or cloning; an absent service project fails with its module name, resource name, and expected path.
 
@@ -269,7 +269,7 @@ builder.UseModuleContainers();
 builder.BuildModuleImages();
 ```
 
-Repository clone, fetch, checkout, and pull operations stream progress to the AppHost output. Deferred synchronization before startup honors startup cancellation; repository work required while constructing the application model is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
+Managed repository synchronization buffers clone, fetch, checkout, and pull progress and replays it through Aspire's resource logging service so it appears with the module resource in the dashboard. Discovery and cloning that must finish while constructing the application model continue to stream to the AppHost output. Deferred synchronization before startup honors startup cancellation, and every repository operation is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts.
 
 ## Repository imports
 
@@ -301,7 +301,7 @@ Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repo
 
 `RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
-Repository synchronization is shared by resources in the same module. Repeated export, add, and import calls are deduplicated by the AppHost's module registry.
+Repository synchronization is keyed by the canonical Git root and shared across modules. When multiple modules belong to the same checkout, the AppHost's module registry executes one synchronization task and routes its buffered progress to the first module resource's log stream.
 
 Repository-relative project and publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
 
