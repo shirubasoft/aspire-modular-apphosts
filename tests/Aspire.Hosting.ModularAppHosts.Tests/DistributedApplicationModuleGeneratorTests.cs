@@ -258,6 +258,34 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Fact]
+    public void Generator_reports_an_inaccessible_custom_resource_type()
+    {
+        const string source = """
+            using Aspire.Hosting.ApplicationModel;
+            using Aspire.Hosting.ModularAppHosts;
+
+            internal sealed class HiddenResource(string name) : Resource(name);
+
+            [GenerateDistributedApplicationModule("invalid")]
+            public static partial class InvalidModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddResource<HiddenResource>("hidden", context =>
+                        context.ApplicationBuilder.AddResource(new HiddenResource(context.ResourceName)));
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        var diagnostic = Assert.Single(
+            result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Id == "SAMHSG008"));
+        Assert.Contains("HiddenResource", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain(result.CompilationDiagnostics, diagnostic => diagnostic.Id == "CS0053");
+    }
+
+    [Fact]
     public void Generator_rejects_colliding_resource_property_names()
     {
         const string source = """

@@ -83,6 +83,14 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor InaccessibleResourceType = new(
+        "SAMHSG008",
+        "Resource type is less accessible than the generated module API",
+        "Resource type '{0}' cannot be exposed by generated module '{1}'; make the resource type and its containing types at least as accessible as the module",
+        "Shirubasoft.Aspire.ModularAppHosts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     private static readonly HashSet<string> ReservedResourcePropertyNames = new(StringComparer.Ordinal)
     {
         "Name",
@@ -267,6 +275,16 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                     continue;
                 }
 
+                if (!IsAccessibleForGeneratedApi(resourceType, moduleSymbol, compilation))
+                {
+                    diagnostics.Add(new DiagnosticInfo(
+                        InaccessibleResourceType,
+                        invocation.GetLocation(),
+                        resourceType.ToDisplayString(),
+                        moduleSymbol.ToDisplayString()));
+                    continue;
+                }
+
                 var nameArgument = operation.Arguments.FirstOrDefault(
                     argument => argument.Parameter?.Name == "name");
                 if (nameArgument is null ||
@@ -296,6 +314,54 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .OrderBy(resource => resource.FilePath, StringComparer.Ordinal)
             .ThenBy(resource => resource.SpanStart)
             .ToImmutableArray();
+    }
+
+    private static bool IsAccessibleForGeneratedApi(
+        ITypeSymbol resourceType,
+        INamedTypeSymbol moduleSymbol,
+        Compilation compilation)
+    {
+        if (!compilation.IsSymbolAccessibleWithin(resourceType, moduleSymbol))
+        {
+            return false;
+        }
+
+        var requiresPublicAccessibility = moduleSymbol.DeclaredAccessibility == Accessibility.Public;
+        return HasSufficientAccessibility(resourceType, requiresPublicAccessibility);
+    }
+
+    private static bool HasSufficientAccessibility(ITypeSymbol type, bool requiresPublicAccessibility)
+    {
+        if (type is IArrayTypeSymbol arrayType)
+        {
+            return HasSufficientAccessibility(arrayType.ElementType, requiresPublicAccessibility);
+        }
+
+        if (type is not INamedTypeSymbol namedType)
+        {
+            return true;
+        }
+
+        for (var current = namedType; current is not null; current = current.ContainingType)
+        {
+            if (requiresPublicAccessibility)
+            {
+                if (current.DeclaredAccessibility != Accessibility.Public)
+                {
+                    return false;
+                }
+            }
+            else if (current.DeclaredAccessibility is not (
+                Accessibility.Public or
+                Accessibility.Internal or
+                Accessibility.ProtectedOrInternal))
+            {
+                return false;
+            }
+        }
+
+        return namedType.TypeArguments.All(argument =>
+            HasSufficientAccessibility(argument, requiresPublicAccessibility));
     }
 
     private static bool IsInsideModuleDefinitionLambda(

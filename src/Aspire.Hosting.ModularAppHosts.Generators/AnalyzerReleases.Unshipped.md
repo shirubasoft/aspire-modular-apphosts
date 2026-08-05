@@ -9,3 +9,4 @@ SAMHSG004 | Shirubasoft.Aspire.ModularAppHosts | Error | Generated resource prop
 SAMHSG005 | Shirubasoft.Aspire.ModularAppHosts | Error | Generated module member collision
 SAMHSG006 | Shirubasoft.Aspire.ModularAppHosts | Warning | No module resources found
 SAMHSG007 | Shirubasoft.Aspire.ModularAppHosts | Error | Invalid generated module version
+SAMHSG008 | Shirubasoft.Aspire.ModularAppHosts | Error | Resource type is less accessible than the generated module API

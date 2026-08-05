@@ -15,18 +15,18 @@ function Invoke-DotNet {
 Invoke-DotNet tool restore
 Invoke-DotNet restore Aspire.ModularAppHosts.slnx
 Invoke-DotNet format Aspire.ModularAppHosts.slnx --verify-no-changes --no-restore
-Invoke-DotNet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
-Invoke-DotNet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
-$packageVersionArguments = @()
+$versionArguments = @()
 if (-not [string]::IsNullOrWhiteSpace($PackageVersion)) {
-    $packageVersionArguments += "-p:PackageVersion=$PackageVersion"
+    $versionArguments += "-p:Version=$PackageVersion"
 }
+Invoke-DotNet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore @versionArguments
+Invoke-DotNet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
 Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj `
-    --configuration Release --no-build --no-restore --output artifacts @packageVersionArguments
+    --configuration Release --no-build --no-restore --output artifacts @versionArguments
 Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj `
-    --configuration Release --no-build --no-restore --output artifacts @packageVersionArguments
+    --configuration Release --no-build --no-restore --output artifacts @versionArguments
 Invoke-DotNet pack templates/Aspire.Hosting.ModularAppHosts.Templates.csproj `
-    --configuration Release --no-build --no-restore --output artifacts @packageVersionArguments
+    --configuration Release --no-build --no-restore --output artifacts @versionArguments
 
 if ($Containers) {
     $previousMode = $env:ESHOP_E2E_MODE

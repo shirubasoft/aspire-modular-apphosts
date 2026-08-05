@@ -1,4 +1,7 @@
 using System.IO.Compression;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Xml.Linq;
 using CliWrap;
 using CliWrap.Buffered;
@@ -71,6 +74,49 @@ public sealed class PackedPackageContractTests
 
         Assert.True(File.Exists(packages.CoreSymbolPackagePath));
         Assert.True(File.Exists(packages.TestingSymbolPackagePath));
+    }
+
+    [Fact]
+    public async Task Package_version_is_embedded_in_every_shipped_assembly()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        var expectedVersion = new Version(8, 7, 6, 0);
+
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.CorePackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.dll",
+            packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.CorePackagePath,
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.dll",
+            packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.TestingPackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll",
+            packages.OutputPath));
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.CorePackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.dll"),
+            StringComparison.Ordinal);
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.CorePackagePath,
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.dll"),
+            StringComparison.Ordinal);
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.TestingPackagePath,
+            "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Core_package_ships_generator_symbols_with_the_analyzer()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        const string generatorPdb =
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.pdb";
+
+        Assert.True(ContainsEntry(packages.CorePackagePath, generatorPdb));
+        Assert.True(ContainsEntry(packages.CoreSymbolPackagePath, generatorPdb));
     }
 
     [Fact]
@@ -235,7 +281,7 @@ public sealed class PackedPackageContractTests
 
             var repositoryRoot = FindRepositoryRoot();
             var outputPath = _workspace.CreateDirectory("packages");
-            var version = $"0.0.0-package-tests-{Guid.NewGuid():N}";
+            var version = $"8.7.6-package-tests-{Guid.NewGuid():N}";
 
             await RunDotNetAsync(
                 repositoryRoot,
@@ -247,7 +293,7 @@ public sealed class PackedPackageContractTests
                 "--no-restore",
                 "--output",
                 outputPath,
-                $"-p:PackageVersion={version}");
+                $"-p:Version={version}");
             await RunDotNetAsync(
                 repositoryRoot,
                 cancellationToken,
@@ -258,7 +304,7 @@ public sealed class PackedPackageContractTests
                 "--no-restore",
                 "--output",
                 outputPath,
-                $"-p:PackageVersion={version}");
+                $"-p:Version={version}");
             await RunDotNetAsync(
                 repositoryRoot,
                 cancellationToken,
@@ -269,7 +315,7 @@ public sealed class PackedPackageContractTests
                 "--no-restore",
                 "--output",
                 outputPath,
-                $"-p:PackageVersion={version}");
+                $"-p:Version={version}");
 
             return _packageArtifacts = new PackageArtifacts(
                 repositoryRoot,
@@ -321,6 +367,72 @@ public sealed class PackedPackageContractTests
             license.Value,
             (string?)repository.Attribute("url") ?? string.Empty,
             (string?)repository.Attribute("commit") ?? string.Empty);
+    }
+
+    private static bool ContainsEntry(string packagePath, string entryPath)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        return archive.Entries.Any(entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static Version ReadAssemblyVersion(
+        string packagePath,
+        string entryPath,
+        string extractionDirectory)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        var extractedPath = Path.Combine(
+            extractionDirectory,
+            $"{Guid.NewGuid():N}-{Path.GetFileName(entryPath)}");
+        entry.ExtractToFile(extractedPath);
+        return Assert.IsType<Version>(AssemblyName.GetAssemblyName(extractedPath).Version);
+    }
+
+    private static string ReadInformationalVersion(string packagePath, string entryPath)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        using var stream = entry.Open();
+        using var assemblyStream = new MemoryStream();
+        stream.CopyTo(assemblyStream);
+        assemblyStream.Position = 0;
+        using var peReader = new PEReader(assemblyStream);
+        var metadata = peReader.GetMetadataReader();
+        var assembly = metadata.GetAssemblyDefinition();
+        foreach (var attributeHandle in assembly.GetCustomAttributes())
+        {
+            var attribute = metadata.GetCustomAttribute(attributeHandle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            {
+                continue;
+            }
+
+            var constructor = metadata.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            var attributeType = metadata.GetTypeReference((TypeReferenceHandle)constructor.Parent);
+            if (!string.Equals(
+                    metadata.GetString(attributeType.Name),
+                    nameof(AssemblyInformationalVersionAttribute),
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = metadata.GetBlobReader(attribute.Value);
+            Assert.Equal(1, value.ReadUInt16());
+            return Assert.IsType<string>(value.ReadSerializedString());
+        }
+
+        throw new InvalidOperationException(
+            $"Assembly '{entryPath}' does not declare {nameof(AssemblyInformationalVersionAttribute)}.");
     }
 
     private static async Task BuildConsumerAsync(

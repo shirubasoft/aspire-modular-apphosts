@@ -25,25 +25,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-package_version_arguments=()
+version_arguments=()
 if [[ -n "$package_version" ]]; then
-  package_version_arguments+=("-p:PackageVersion=$package_version")
+  version_arguments+=("-p:Version=$package_version")
 fi
 
 dotnet tool restore
 dotnet restore Aspire.ModularAppHosts.slnx
 dotnet format Aspire.ModularAppHosts.slnx --verify-no-changes --no-restore
-dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
+dotnet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore \
+  "${version_arguments[@]}"
 dotnet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
 dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj \
   --configuration Release --no-build --no-restore --output artifacts \
-  "${package_version_arguments[@]}"
+  "${version_arguments[@]}"
 dotnet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj \
   --configuration Release --no-build --no-restore --output artifacts \
-  "${package_version_arguments[@]}"
+  "${version_arguments[@]}"
 dotnet pack templates/Aspire.Hosting.ModularAppHosts.Templates.csproj \
   --configuration Release --no-build --no-restore --output artifacts \
-  "${package_version_arguments[@]}"
+  "${version_arguments[@]}"
 
 if [[ "$run_containers" == true ]]; then
   Parameters__orders_api_key=e2e-orders-key \
