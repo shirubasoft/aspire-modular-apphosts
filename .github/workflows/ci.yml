@@ -147,5 +147,13 @@ jobs:
           test -d "$MULTI_REPO_ROOT/spire/.git"
           origin="$(git -C "$MULTI_REPO_ROOT/spire" remote get-url origin)"
           test "${origin,,}" = "https://github.com/shirubasoft/spire.git"
-          curl --fail --show-error --silent http://localhost:55201/weatherforecast |
+          spire_api_url="$(
+            dotnet tool run aspire -- describe spire-api \
+              --apphost "$MULTI_REPO_APPHOST" \
+              --format Json \
+              --non-interactive |
+              jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
+          )"
+          test -n "$spire_api_url"
+          curl --fail --show-error --silent "${spire_api_url%/}/weatherforecast" |
             jq --exit-status 'length == 5 and all(.[]; has("date") and has("temperatureC"))'
