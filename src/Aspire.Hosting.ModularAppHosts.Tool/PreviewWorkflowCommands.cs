@@ -556,7 +556,6 @@ internal static partial class PreviewTool
             "restore",
             projectPath,
             "--packages", packagesDirectory,
-            "--source", policy.Source,
             "--no-cache",
             "--force-evaluate",
             "--nologo"
@@ -589,6 +588,10 @@ internal static partial class PreviewTool
                 $"'{contract.PackageId}' version '{contract.Version}'.")
         };
 
+        await VerifyPublishedPackageSourceAndContentHashAsync(
+            publishedPackage,
+            policy.Source,
+            cancellationToken).ConfigureAwait(false);
         var sha256 = await ComputeFileSha256Async(publishedPackage, cancellationToken).ConfigureAwait(false);
         var packagePath = Path.Combine(packageFeed, Path.GetFileName(publishedPackage));
         if (File.Exists(packagePath))
@@ -607,6 +610,100 @@ internal static partial class PreviewTool
         }
 
         return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256, policy.Source);
+    }
+
+    private static async Task VerifyPublishedPackageSourceAndContentHashAsync(
+        string packagePath,
+        string expectedSource,
+        CancellationToken cancellationToken)
+    {
+        var metadataPath = Path.Combine(
+            Path.GetDirectoryName(packagePath)!,
+            ".nupkg.metadata");
+        if (!File.Exists(metadataPath))
+        {
+            throw new PreviewToolException(
+                $"Published package '{Path.GetFileName(packagePath)}' has no NuGet source metadata.");
+        }
+
+        JsonDocument metadata;
+        var metadataStream = new FileStream(
+            metadataPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            metadata = await JsonDocument.ParseAsync(
+                metadataStream,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException exception)
+        {
+            throw new PreviewToolException(
+                $"Published package '{Path.GetFileName(packagePath)}' has invalid NuGet source metadata.",
+                exception);
+        }
+        finally
+        {
+            await metadataStream.DisposeAsync().ConfigureAwait(false);
+        }
+
+        using (metadata)
+        {
+            var actualSource = metadata.RootElement.TryGetProperty("source", out var source)
+                && source.ValueKind == JsonValueKind.String
+                ? source.GetString()
+                : null;
+            if (!string.Equals(actualSource, expectedSource, StringComparison.Ordinal))
+            {
+                throw new PreviewToolException(
+                    $"Published package '{Path.GetFileName(packagePath)}' resolved from '{actualSource}', " +
+                    $"not policy-owned source '{expectedSource}'.");
+            }
+
+            var contentHash = metadata.RootElement.TryGetProperty("contentHash", out var hash)
+                && hash.ValueKind == JsonValueKind.String
+                ? hash.GetString()
+                : null;
+            byte[] expectedHash;
+            try
+            {
+                expectedHash = Convert.FromBase64String(contentHash ?? string.Empty);
+            }
+            catch (FormatException exception)
+            {
+                throw new PreviewToolException(
+                    $"Published package '{Path.GetFileName(packagePath)}' has invalid NuGet content hash metadata.",
+                    exception);
+            }
+
+            var packageStream = new FileStream(
+                packagePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            byte[] actualHash;
+            try
+            {
+                actualHash = await SHA512.HashDataAsync(packageStream, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                await packageStream.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (expectedHash.Length != actualHash.Length ||
+                !CryptographicOperations.FixedTimeEquals(expectedHash, actualHash))
+            {
+                throw new PreviewToolException(
+                    $"Published package '{Path.GetFileName(packagePath)}' does not match its NuGet content hash.");
+            }
+        }
     }
 
     private static async Task<MaterializedContractPackage> PackContractInStagingDirectoryAsync(

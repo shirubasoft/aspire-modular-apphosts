@@ -261,8 +261,11 @@ dotnet modular-apphosts preview materialize \
 Materialization performs these operations:
 
 1. Revalidates the strict request and consumer policy.
-2. In published mode, restores the exact requested package ID and version from the policy-owned
-   source. It does not fetch the producer repository or run `dotnet pack`.
+2. In published mode, restores the exact requested package ID and version with the consumer's NuGet
+   configuration, then verifies NuGet's recorded source equals the policy-owned source and verifies
+   the package bytes against NuGet's SHA-512 content hash. This permits separately trusted sources
+   for transitive dependencies without allowing the requested contract to come from one of them. It
+   does not fetch the producer repository or run `dotnet pack`.
 3. In source fallback mode, fetches only the exact producer commit and runs fixed `dotnet restore`
    and `dotnet pack` commands against only the policy-owned project path.
 4. Opens the resolved `.nupkg`, verifies its nuspec ID and version, records its SHA-256, and copies it

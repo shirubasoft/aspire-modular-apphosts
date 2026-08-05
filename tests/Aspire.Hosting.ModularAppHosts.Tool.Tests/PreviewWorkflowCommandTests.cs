@@ -371,6 +371,7 @@ public sealed class PreviewWorkflowCommandTests
         var packageTemplate = Path.Combine(directory.Path, "published-contract.nupkg");
         await CreateContractPackageAsync(packageTemplate, cancellationToken);
         var expectedPackageSha256 = await ComputeSha256Async(packageTemplate, cancellationToken);
+        var expectedPackageContentHash = await ComputeSha512Base64Async(packageTemplate, cancellationToken);
         var dotnetLog = Path.Combine(directory.Path, "dotnet-arguments.txt");
         var dotnet = await directory.WriteExecutableAsync(
             "fake-published-dotnet",
@@ -391,6 +392,9 @@ public sealed class PreviewWorkflowCommandTests
             target="$packages/{{ContractPackageId.ToLowerInvariant()}}/{{ContractVersion}}"
             mkdir -p "$target"
             cp '{{packageTemplate}}' "$target/{{ContractPackageId.ToLowerInvariant()}}.{{ContractVersion}}.nupkg"
+            printf '%s\n' \
+              '{"version":2,"contentHash":"{{expectedPackageContentHash}}","source":"https://nuget.pkg.github.com/shirubasoft/index.json"}' \
+              > "$target/.nupkg.metadata"
             """,
             cancellationToken);
         var gitMarker = Path.Combine(directory.Path, "git-was-called");
@@ -440,10 +444,7 @@ public sealed class PreviewWorkflowCommandTests
         Assert.False(File.Exists(gitMarker));
         var restore = Assert.Single(await File.ReadAllLinesAsync(dotnetLog, cancellationToken));
         Assert.StartsWith("restore ", restore, StringComparison.Ordinal);
-        Assert.Contains(
-            "--source https://nuget.pkg.github.com/shirubasoft/index.json",
-            restore,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("--source", restore, StringComparison.Ordinal);
         var resolverProject = Assert.Single(
             Directory.GetFiles(workDirectory, "ContractResolver.csproj", SearchOption.AllDirectories));
         Assert.Contains(
@@ -730,6 +731,28 @@ public sealed class PreviewWorkflowCommandTests
         {
             var digest = await SHA256.HashDataAsync(stream, cancellationToken);
             return Convert.ToHexStringLower(digest);
+        }
+        finally
+        {
+            await stream.DisposeAsync();
+        }
+    }
+
+    private static async Task<string> ComputeSha512Base64Async(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            var digest = await SHA512.HashDataAsync(stream, cancellationToken);
+            return Convert.ToBase64String(digest);
         }
         finally
         {
