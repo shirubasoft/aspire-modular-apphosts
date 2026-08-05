@@ -77,17 +77,35 @@ public static class DistributedApplicationModuleExtensions
         string name,
         Action<IDistributedApplicationModuleBuilder> moduleBuilder)
     {
+        return DefineModule(builder, name, "1", moduleBuilder);
+    }
+
+    /// <summary>Defines a versioned module contract without adding its resources to the application model.</summary>
+    public static IDistributedApplicationModule DefineModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string version,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
         ArgumentNullException.ThrowIfNull(moduleBuilder);
 
         var registry = GetOrCreateRegistry(builder);
         if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
         {
+            if (!string.Equals(existingModule.Version, version, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Module '{name}' is already defined with contract version '{existingModule.Version}', " +
+                    $"not requested version '{version}'.");
+            }
+
             return existingModule;
         }
 
-        var module = new DistributedApplicationModule(name);
+        var module = new DistributedApplicationModule(name, version);
         moduleBuilder(new DistributedApplicationModuleBuilder(builder, module));
         module.Validate();
         ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
@@ -124,8 +142,18 @@ public static class DistributedApplicationModuleExtensions
         this IDistributedApplicationBuilder builder,
         string name)
     {
+        return ImportModule(builder, name, new ModuleImportOptions());
+    }
+
+    /// <summary>Imports an exported module by name with resource aliases or a common prefix.</summary>
+    public static IDistributedApplicationModule ImportModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        ModuleImportOptions importOptions)
+    {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(importOptions);
 
         var registry = GetOrCreateRegistry(builder);
         if (!registry.TryGetDefinition(name, out var module) || module is null)
@@ -134,7 +162,7 @@ public static class DistributedApplicationModuleExtensions
                 $"Module '{name}' has not been exported. Call ExportModule before ImportModule.");
         }
 
-        Materialize(builder, module, registry, imported: true);
+        Materialize(builder, module, registry, imported: true, importOptions);
         return module;
     }
 
@@ -142,11 +170,19 @@ public static class DistributedApplicationModuleExtensions
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
-        bool imported)
+        bool imported,
+        ModuleImportOptions? importOptions = null)
     {
-        if (registry.IsMaterialized(module.Name))
+        var materializationKey = GetMaterializationKey(imported, importOptions);
+        if (registry.TryGetMaterialization(module.Name, out var existingMaterialization))
         {
-            return;
+            if (string.Equals(existingMaterialization, materializationKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Module '{module.Name}' is already materialized with different local/import or resource naming options.");
         }
 
         var options = registry.Options;
@@ -157,6 +193,7 @@ public static class DistributedApplicationModuleExtensions
         var repositoryRevision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ?? module.RepositoryRevision;
         var requiresRepository = module.ProjectDefinitions.Count > 0;
         ValidateModuleConfiguration(module, moduleOptions);
+        var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
         var repositoryResolution = autoCloneRepository &&
@@ -211,7 +248,7 @@ public static class DistributedApplicationModuleExtensions
         var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
         var defaultImageTag = GetDefaultImageTag(builder, repositoryPath);
 
-        ValidateResourceNames(builder, module, registry, options, moduleOptions, imported);
+        ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
         if (repositoryResolution is not null || !imported)
         {
             ValidateProjectFiles(module, repositoryPath);
@@ -240,6 +277,7 @@ public static class DistributedApplicationModuleExtensions
                         builder,
                         module,
                         project,
+                        resourceNames[project.Name],
                         repositoryPath,
                         repositoryDirty,
                         defaultImageTag,
@@ -255,6 +293,7 @@ public static class DistributedApplicationModuleExtensions
                         builder,
                         module,
                         container,
+                        resourceNames[container.Name],
                         repositoryPath,
                         repositoryDirty,
                         defaultImageTag,
@@ -266,7 +305,14 @@ public static class DistributedApplicationModuleExtensions
                         updateRepository);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
-                    MaterializeResource(builder, module, resource, repositoryPath, imported, registry);
+                    MaterializeResource(
+                        builder,
+                        module,
+                        resource,
+                        resourceNames[resource.Name],
+                        repositoryPath,
+                        imported,
+                        registry);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -274,13 +320,14 @@ public static class DistributedApplicationModuleExtensions
             }
         }
 
-        registry.MarkMaterialized(module.Name);
+        registry.MarkMaterialized(module.Name, materializationKey);
     }
 
     private static void MaterializeProject(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         DistributedApplicationModuleProject project,
+        string resourceName,
         string repositoryPath,
         bool repositoryDirty,
         string defaultImageTag,
@@ -305,6 +352,7 @@ public static class DistributedApplicationModuleExtensions
                 builder,
                 module,
                 project,
+                resourceName,
                 projectOptions,
                 repositoryPath,
                 imported,
@@ -332,7 +380,7 @@ public static class DistributedApplicationModuleExtensions
             repositoryDirty && publishImage);
 
         var container = builder
-            .AddContainer(project.Name, publishPlan.ImageName, publishPlan.ImageTag)
+            .AddContainer(resourceName, publishPlan.ImageName, publishPlan.ImageTag)
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 project.Name,
@@ -349,7 +397,7 @@ public static class DistributedApplicationModuleExtensions
         {
             AddImagePublishInstaller(
                 builder,
-                project.Name,
+                resourceName,
                 effectiveExportOptions,
                 publishPlan,
                 repositoryPath,
@@ -362,13 +410,14 @@ public static class DistributedApplicationModuleExtensions
         }
 
         registry.TrackResource(container.Resource);
-        module.TrackMaterializedResource(builder, container.Resource);
+        module.TrackMaterializedResource(builder, project.Name, container.Resource);
     }
 
     private static void MaterializeContainer(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         DistributedApplicationModuleContainer definition,
+        string resourceName,
         string repositoryPath,
         bool repositoryDirty,
         string defaultImageTag,
@@ -391,7 +440,7 @@ public static class DistributedApplicationModuleExtensions
             : CreateImagePublishPlan(builder, publishOptions, repositoryDirty && publishImage);
         var container = builder
             .AddContainer(
-                definition.Name,
+                resourceName,
                 publishPlan?.ImageName ?? GetConfiguredValue(containerOptions?.ImageName) ?? definition.Image,
                 publishPlan?.ImageTag ?? GetConfiguredValue(containerOptions?.ImageTag) ?? definition.Tag)
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
@@ -414,7 +463,7 @@ public static class DistributedApplicationModuleExtensions
                 nameof(ModuleContainerExportOptions.WorkingDirectory));
             AddImagePublishInstaller(
                 builder,
-                definition.Name,
+                resourceName,
                 publishOptions,
                 publishPlan,
                 repositoryPath,
@@ -427,13 +476,14 @@ public static class DistributedApplicationModuleExtensions
         }
 
         registry.TrackResource(container.Resource);
-        module.TrackMaterializedResource(builder, container.Resource);
+        module.TrackMaterializedResource(builder, definition.Name, container.Resource);
     }
 
     private static void MaterializeProjectResource(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         DistributedApplicationModuleProject project,
+        string resourceName,
         DistributedApplicationModuleProjectOptions? options,
         string repositoryPath,
         bool imported,
@@ -449,7 +499,7 @@ public static class DistributedApplicationModuleExtensions
         }
 
         var resource = builder
-            .AddProject(project.Name, materializedProjectPath, projectOptions =>
+            .AddProject(resourceName, materializedProjectPath, projectOptions =>
             {
                 if (options?.LaunchProfileName is not null)
                 {
@@ -474,13 +524,14 @@ public static class DistributedApplicationModuleExtensions
 
         project.ConfigureProject?.Invoke(resource);
         registry.TrackResource(resource.Resource);
-        module.TrackMaterializedResource(builder, resource.Resource);
+        module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
 
     private static void MaterializeResource(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         IDistributedApplicationModuleFactoryResource definition,
+        string resourceName,
         string repositoryPath,
         bool imported,
         ModuleApplicationRegistry registry)
@@ -488,7 +539,7 @@ public static class DistributedApplicationModuleExtensions
         var context = new DistributedApplicationModuleResourceContext(
             builder,
             module,
-            definition.Name,
+            resourceName,
             repositoryPath,
             imported);
         var resource = definition.Materialize(
@@ -500,7 +551,7 @@ public static class DistributedApplicationModuleExtensions
                 imported));
 
         registry.TrackResource(resource);
-        module.TrackMaterializedResource(builder, resource);
+        module.TrackMaterializedResource(builder, definition.Name, resource);
     }
 
     private static ModuleImagePublishPlan CreateImagePublishPlan(
@@ -752,15 +803,27 @@ public static class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
-        bool imported)
+        bool imported,
+        ModuleResourceNameMap resourceNames)
     {
-        var resourceNames = module.ResourceDefinitions.SelectMany(definition =>
+        var plannedResourceNames = module.ResourceDefinitions.SelectMany(definition =>
             RequiresImagePublishInstaller(definition, options, moduleOptions, imported) &&
                 builder.ExecutionContext.IsRunMode
-                ? new[] { definition.Name, GetInstallerName(definition.Name) }
-                : new[] { definition.Name });
+                ? new[] { resourceNames[definition.Name], GetInstallerName(resourceNames[definition.Name]) }
+                : new[] { resourceNames[definition.Name] })
+            .ToArray();
 
-        foreach (var resourceName in resourceNames)
+        var duplicateResourceName = plannedResourceNames
+            .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1)?.Key;
+        if (duplicateResourceName is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot materialize module '{module.Name}' because its aliases, prefix, and installer names " +
+                $"produce duplicate resource '{duplicateResourceName}'.");
+        }
+
+        foreach (var resourceName in plannedResourceNames)
         {
             var existing = builder.Resources.FirstOrDefault(resource =>
                 string.Equals(resource.Name, resourceName, StringComparison.OrdinalIgnoreCase));
@@ -901,6 +964,14 @@ public static class DistributedApplicationModuleExtensions
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static string GetMaterializationKey(bool imported, ModuleImportOptions? options)
+    {
+        var aliases = options?.ResourceAliases
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => $"{pair.Key}={pair.Value}") ?? [];
+        return $"{imported}|{options?.ResourcePrefix}|{string.Join("|", aliases)}";
+    }
 
     private static void ValidateOptions(ModularAppHostsOptions options)
     {

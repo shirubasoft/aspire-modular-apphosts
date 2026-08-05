@@ -4,10 +4,10 @@
 
 ## Define and materialize a module
 
-`ExportModule` registers a definition. It does not add resources until the AppHost calls one of the materialization APIs:
+The generated API defines and materializes a conventional `Define(IDistributedApplicationModuleBuilder)` contract in one call:
 
-- `builder.Add(definition)` uses the definition in the current application.
-- `builder.ImportModule(name)` uses a managed checkout when the module configures a repository.
+- `OrdersModule.AddModule(builder)` uses the definition in the current application.
+- `OrdersModule.ImportModule(builder)` uses a managed checkout when the module configures a repository.
 
 Keep the definition in a project referenced by every participating AppHost:
 
@@ -16,43 +16,42 @@ using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
 
-[GenerateDistributedApplicationModule(Name)]
+[GenerateDistributedApplicationModule(Name, Version = "1")]
 public static partial class OrdersModule
 {
     public const string Name = "orders";
     public const string ApiResourceName = "orders-api";
     public const string CacheResourceName = "orders-cache";
 
-    public static IDistributedApplicationModule Register(
-        IDistributedApplicationBuilder builder,
-        string repository) =>
-        builder.ExportModule(Name, module =>
-        {
-            module.WithRepository(repository);
-            module.AddResource<ProjectResource>(ApiResourceName, context =>
-                context.ApplicationBuilder
-                    .AddProject(
-                        context.ResourceName,
-                        Path.Combine(
-                            context.RepositoryPath,
-                            "src/Orders.Api/Orders.Api.csproj"))
-                    .WithHttpEndpoint(name: "http"));
-            module.AddContainer(CacheResourceName, "redis", "8-alpine");
-        });
+    public static void Define(IDistributedApplicationModuleBuilder module)
+    {
+        module.AddResource<ProjectResource>(ApiResourceName, context =>
+            context.ApplicationBuilder
+                .AddProject(
+                    context.ResourceName,
+                    Path.Combine(
+                        context.RepositoryPath,
+                        "src/Orders.Api/Orders.Api.csproj"))
+                .WithHttpEndpoint(name: "http"));
+        module.AddContainer(CacheResourceName, "redis", "8-alpine");
+    }
 }
 ```
 
 An AppHost using the local definition adds it directly:
 
 ```csharp
-var definition = OrdersModule.Register(builder, sourcePath);
-var orders = OrdersModule.AddModule(builder, definition);
+builder.Configuration[
+    DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] = sourcePath;
+var orders = OrdersModule.AddModule(builder);
 ```
 
 An importing AppHost registers the contract and imports by name:
 
 ```csharp
-OrdersModule.Register(builder, "https://github.com/example/orders.git");
+builder.Configuration[
+    DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] =
+    "https://github.com/example/orders.git";
 var orders = OrdersModule.ImportModule(builder);
 ```
 
@@ -67,7 +66,9 @@ builder.AddContainer("consumer", "example/consumer", "latest")
 
 ## Generated resource API
 
-`GenerateDistributedApplicationModule` generates `AddModule`, `ImportModule`, and a `Module` wrapper with one typed property per declared resource. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`.
+`GenerateDistributedApplicationModule` generates one-call `AddModule` and `ImportModule` methods plus a `Module` wrapper with one typed property per declared resource. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract; defining the same module name with another version fails with both versions in the diagnostic.
+
+Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModule`/`ExportModule`, and pass the resulting definition to the generated `AddModule(builder, definition)` overload.
 
 The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings. Invalid declarations, unsupported names, and generated-member collisions are reported as build diagnostics.
 
@@ -77,6 +78,21 @@ The untyped API remains available when a generated contract is unnecessary. Gene
 var orders = builder.ImportModule("orders");
 var api = orders.GetResource<ContainerResource>("orders-api");
 ```
+
+### Resource prefixes and aliases
+
+An import can adapt contract names without changing typed lookups:
+
+```csharp
+var import = new ModuleImportOptions { ResourcePrefix = "sales-" };
+import.ResourceAliases[OrdersModule.CacheResourceName] = "shared-cache";
+
+var orders = OrdersModule.ImportModule(builder, import);
+// orders.Api resolves the Aspire resource "sales-orders-api".
+// orders.Cache resolves "shared-cache".
+```
+
+Unknown aliases, aliases that map multiple resources to the same name, installer-name collisions, and collisions with resources already in the AppHost fail before any module resource is added.
 
 ## Resource kinds
 

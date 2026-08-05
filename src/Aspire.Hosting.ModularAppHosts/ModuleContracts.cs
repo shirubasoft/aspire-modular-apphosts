@@ -10,6 +10,9 @@ public interface IDistributedApplicationModule
     /// <summary>Gets the module name.</summary>
     string Name { get; }
 
+    /// <summary>Gets the module contract version.</summary>
+    string Version { get; }
+
     /// <summary>Gets every resource exported by the module in declaration order.</summary>
     IReadOnlyList<IDistributedApplicationModuleResource> Resources { get; }
 
@@ -22,6 +25,17 @@ public interface IDistributedApplicationModule
     /// <summary>Gets a materialized module resource by name.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)
         where TResource : IResource;
+}
+
+/// <summary>Controls resource names when a module is imported into an AppHost.</summary>
+public sealed class ModuleImportOptions
+{
+    /// <summary>Gets or sets a prefix prepended to every imported Aspire resource name.</summary>
+    public string? ResourcePrefix { get; set; }
+
+    /// <summary>Gets resource-name overrides keyed by the name declared in the module contract.</summary>
+    public IDictionary<string, string> ResourceAliases { get; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>Builds an <see cref="IDistributedApplicationModule"/> definition.</summary>

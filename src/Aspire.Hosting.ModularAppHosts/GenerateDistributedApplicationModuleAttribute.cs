@@ -8,4 +8,7 @@ public sealed class GenerateDistributedApplicationModuleAttribute(string name) :
 {
     /// <summary>Gets the name passed to <c>ExportModule</c> and <c>ImportModule</c>.</summary>
     public string Name { get; } = name;
+
+    /// <summary>Gets or sets the module contract version.</summary>
+    public string Version { get; set; } = "1";
 }

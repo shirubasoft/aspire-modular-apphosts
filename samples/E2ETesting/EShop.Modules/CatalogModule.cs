@@ -11,23 +11,15 @@ public static partial class CatalogModule
     public const string ApiResourceName = "catalog-api";
     public const int ExternalHttpPort = 55101;
 
-    public static IDistributedApplicationModule Register(
-        IDistributedApplicationBuilder builder,
-        string sourceRoot)
+    public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
-
-        return builder.ExportModule(Name, module =>
-        {
-            module.WithRepository(absoluteSourceRoot);
-            module.AddResource<ProjectResource>(ApiResourceName, context =>
-                context.ApplicationBuilder
-                    .AddProject(
-                        context.ResourceName,
-                        Path.Combine(context.RepositoryPath, "EShop.Catalog.Api", "EShop.Catalog.Api.csproj"))
-                    .WithHttpEndpoint(port: ExternalHttpPort, name: "http")
-                    .WithExternalHttpEndpoints()
-                    .WithHttpHealthCheck("/health"));
-        });
+        module.AddResource<ProjectResource>(ApiResourceName, context =>
+            context.ApplicationBuilder
+                .AddProject(
+                    context.ResourceName,
+                    Path.Combine(context.RepositoryPath, "EShop.Catalog.Api", "EShop.Catalog.Api.csproj"))
+                .WithHttpEndpoint(port: ExternalHttpPort, name: "http")
+                .WithExternalHttpEndpoints()
+                .WithHttpHealthCheck("/health"));
     }
 }

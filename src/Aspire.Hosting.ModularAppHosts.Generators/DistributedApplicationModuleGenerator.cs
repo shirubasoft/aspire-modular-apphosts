@@ -72,9 +72,18 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor InvalidModuleVersion = new(
+        "SAMHSG007",
+        "Invalid generated module version",
+        "The module version supplied to GenerateDistributedApplicationModule must be a non-empty compile-time string",
+        "Shirubasoft.Aspire.ModularAppHosts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     private static readonly HashSet<string> ReservedResourcePropertyNames = new(StringComparer.Ordinal)
     {
         "Name",
+        "Version",
         "Resources",
         "Projects",
         "Containers",
@@ -126,6 +135,21 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             canGenerate = false;
         }
 
+        var moduleVersion = attribute.NamedArguments
+            .FirstOrDefault(argument => argument.Key == "Version").Value.Value as string ?? "1";
+        if (string.IsNullOrWhiteSpace(moduleVersion))
+        {
+            diagnostics.Add(new DiagnosticInfo(InvalidModuleVersion, moduleLocation));
+            canGenerate = false;
+        }
+
+        var hasConventionalDefineMethod = symbol.GetMembers("Define")
+            .OfType<IMethodSymbol>()
+            .Any(method => method.IsStatic &&
+                method.ReturnsVoid &&
+                method.Parameters.Length == 1 &&
+                method.Parameters[0].Type.ToDisplayString() == ModuleBuilderMetadataName);
+
         foreach (var reservedMemberName in new[] { "AddModule", "ImportModule", "Module" })
         {
             if (symbol.GetMembers(reservedMemberName).Length > 0)
@@ -166,6 +190,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             EscapeIdentifier(symbol.Name),
             symbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal",
             moduleName ?? string.Empty,
+            moduleVersion,
+            hasConventionalDefineMethod,
             resources,
             diagnostics.ToImmutable(),
             canGenerate);
@@ -380,6 +406,22 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .Append(module.TypeName)
             .AppendLine();
         source.AppendLine("{");
+        if (module.HasConventionalDefineMethod)
+        {
+            source.AppendLine("    /// <summary>Defines and adds the module in one call and returns its typed resources.</summary>");
+            source.AppendLine("    public static Module AddModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)");
+            source.AppendLine("    {");
+            source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
+            source.Append("        var module = global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModule(builder, ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+                .Append(", ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .AppendLine(", Define);");
+            source.AppendLine("        return AddModule(builder, module);");
+            source.AppendLine("    }");
+            source.AppendLine();
+        }
+
         source.AppendLine("    /// <summary>Adds the exported module to the AppHost and returns its typed resources.</summary>");
         source.AppendLine("    public static Module AddModule(");
         source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
@@ -395,9 +437,28 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("    public static Module ImportModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
+        source.AppendLine("        return ImportModule(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions());");
+        source.AppendLine("    }");
+        source.AppendLine();
+        source.AppendLine("    /// <summary>Imports the module with resource naming options and returns its typed resources.</summary>");
+        source.AppendLine("    public static Module ImportModule(");
+        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
+        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions options)");
+        source.AppendLine("    {");
+        source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
+        source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(options);");
+        if (module.HasConventionalDefineMethod)
+        {
+            source.Append("        global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModule(builder, ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+                .Append(", ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .AppendLine(", Define);");
+        }
+
         source.Append("        return new Module(global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ImportModule(builder, ")
             .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
-            .AppendLine("));");
+            .AppendLine(", options));");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>A materialized module with strongly typed access to every declared resource.</summary>");
@@ -412,6 +473,9 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine();
         source.AppendLine("        /// <inheritdoc />");
         source.AppendLine("        public string Name => _module.Name;");
+        source.AppendLine();
+        source.AppendLine("        /// <inheritdoc />");
+        source.AppendLine("        public string Version => _module.Version;");
         source.AppendLine();
         source.AppendLine("        /// <inheritdoc />");
         source.AppendLine("        public global::System.Collections.Generic.IReadOnlyList<global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResource> Resources => _module.Resources;");
@@ -483,6 +547,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             string typeName,
             string accessibility,
             string moduleName,
+            string moduleVersion,
+            bool hasConventionalDefineMethod,
             ImmutableArray<ResourceModel> resources,
             ImmutableArray<DiagnosticInfo> diagnostics,
             bool canGenerate)
@@ -491,6 +557,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             TypeName = typeName;
             Accessibility = accessibility;
             ModuleName = moduleName;
+            ModuleVersion = moduleVersion;
+            HasConventionalDefineMethod = hasConventionalDefineMethod;
             Resources = resources;
             Diagnostics = diagnostics;
             CanGenerate = canGenerate;
@@ -503,6 +571,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public string Accessibility { get; }
 
         public string ModuleName { get; }
+
+        public string ModuleVersion { get; }
+
+        public bool HasConventionalDefineMethod { get; }
 
         public ImmutableArray<ResourceModel> Resources { get; }
 

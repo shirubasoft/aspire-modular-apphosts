@@ -2,7 +2,7 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
-internal sealed class DistributedApplicationModule(string name) : IDistributedApplicationModule
+internal sealed class DistributedApplicationModule(string name, string version) : IDistributedApplicationModule
 {
     private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
@@ -12,6 +12,8 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
     private IDistributedApplicationBuilder? _materializedApplicationBuilder;
 
     public string Name { get; } = name;
+
+    public string Version { get; } = version;
 
     public IReadOnlyList<IDistributedApplicationModuleResource> Resources => _resources;
 
@@ -75,10 +77,13 @@ internal sealed class DistributedApplicationModule(string name) : IDistributedAp
         return _materializedApplicationBuilder.CreateResourceBuilder(typedResource);
     }
 
-    internal void TrackMaterializedResource(IDistributedApplicationBuilder builder, IResource resource)
+    internal void TrackMaterializedResource(
+        IDistributedApplicationBuilder builder,
+        string declaredName,
+        IResource resource)
     {
         _materializedApplicationBuilder = builder;
-        _materializedResources[resource.Name] = resource;
+        _materializedResources[declaredName] = resource;
     }
 
     internal void Validate()
@@ -206,7 +211,7 @@ internal sealed class DistributedApplicationModuleResource<TResource>(
         var resource = resourceFactory(context)
             ?? throw new InvalidOperationException($"The factory for module resource '{Name}' returned null.");
 
-        if (!string.Equals(resource.Resource.Name, Name, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(resource.Resource.Name, context.ResourceName, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 $"The factory for module resource '{Name}' returned a resource named '{resource.Resource.Name}'. " +

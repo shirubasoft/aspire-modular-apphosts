@@ -6,16 +6,18 @@ var sampleRoot = Path.GetFullPath("..", builder.AppHostDirectory);
 builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
 builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
     "gh-is-not-needed-for-same-repository-modules";
+builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(CatalogModule.Name)] =
+    sampleRoot;
+builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] =
+    sampleRoot;
 
 var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);
 var ordersApiKey = builder.AddParameter("orders-api-key", secret: true);
 
-var catalogDefinition = CatalogModule.Register(builder, sampleRoot);
-var catalog = CatalogModule.AddModule(builder, catalogDefinition);
+var catalog = CatalogModule.AddModule(builder);
 
-var ordersDefinition = OrdersModule.Register(builder, sampleRoot);
-var orders = OrdersModule.AddModule(builder, ordersDefinition);
+var orders = OrdersModule.AddModule(builder);
 
 orders.Api
     .WithReference(catalog.Api.GetEndpoint("http"))

@@ -17,7 +17,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
 
             namespace GeneratedSample;
 
-            [GenerateDistributedApplicationModule(Name)]
+            [GenerateDistributedApplicationModule(Name, Version = "2")]
             public static partial class OrdersModule
             {
                 public const string Name = "orders";
@@ -39,11 +39,15 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         var generated = Assert.Single(result.GeneratedSources);
         Assert.Contains("public static Module AddModule(", generated);
+        Assert.Contains("DefineModule(builder, \"orders\", \"2\", Define)", generated);
+        Assert.Contains("public static Module AddModule(global::Aspire.Hosting.IDistributedApplicationBuilder builder)", generated);
         Assert.Contains("public static Module ImportModule(", generated);
+        Assert.Contains("ModuleImportOptions options", generated);
+        Assert.Contains("public string Version => _module.Version", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Cache", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
-        Assert.Contains("ImportModule(builder, \"orders\")", generated);
+        Assert.Contains("ImportModule(builder, \"orders\", options)", generated);
     }
 
     [Fact]
@@ -120,6 +124,51 @@ public sealed class DistributedApplicationModuleGeneratorTests
 
         Assert.Contains(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "SAMHSG002");
         Assert.Empty(result.GeneratedSources);
+    }
+
+    [Fact]
+    public void Generator_rejects_an_empty_module_version()
+    {
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("invalid", Version = "  ")]
+            public static partial class InvalidModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("cache", "redis");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Contains(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "SAMHSG007");
+        Assert.Empty(result.GeneratedSources);
+    }
+
+    [Fact]
+    public void Generator_keeps_the_advanced_overload_when_no_conventional_define_method_exists()
+    {
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("advanced")]
+            public static partial class AdvancedModule
+            {
+                public static void DefineWithInput(IDistributedApplicationModuleBuilder module, string repository)
+                {
+                    module.AddContainer("cache", "redis");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.DoesNotContain("DefineModule(builder", generated, StringComparison.Ordinal);
+        Assert.Contains("IDistributedApplicationModule module)", generated, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -274,7 +323,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("> _2faService =>", generated);
         Assert.Contains("> OrderItems =>", generated);
         Assert.Contains("> Resource =>", generated);
-        Assert.Contains("ImportModule(builder, \"orders\\\"north\\\\region\\n\")", generated);
+        Assert.Contains("ImportModule(builder, \"orders\\\"north\\\\region\\n\", options)", generated);
     }
 
     [Fact]

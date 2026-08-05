@@ -46,6 +46,90 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public void DefineModule_tracks_contract_version_and_rejects_a_conflicting_definition()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+
+        var module = builder.DefineModule("orders", "2", definition =>
+            definition.AddContainer("cache", "redis"));
+        var duplicate = builder.DefineModule("orders", "2", _ =>
+            throw new InvalidOperationException("The idempotent callback must not run."));
+
+        Assert.Equal("2", module.Version);
+        Assert.Same(module, duplicate);
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.DefineModule("orders", "3", _ => { }));
+        Assert.Contains("version '2'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("version '3'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportModule_applies_prefixes_and_per_resource_aliases_without_changing_typed_lookup_names()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        builder.DefineModule("portable", "1", definition =>
+        {
+            definition.AddContainer("api", "nginx");
+            definition.AddContainer("cache", "redis");
+        });
+        var options = new ModuleImportOptions { ResourcePrefix = "shop-" };
+        options.ResourceAliases["cache"] = "shared-cache";
+
+        var module = builder.ImportModule("portable", options);
+
+        Assert.Equal(["shop-api", "shared-cache"], builder.Resources.Select(resource => resource.Name));
+        Assert.Equal("shop-api", module.GetResource<ContainerResource>("api").Resource.Name);
+        Assert.Equal("shared-cache", module.GetResource<ContainerResource>("cache").Resource.Name);
+        var annotation = Assert.Single(
+            module.GetResource<ContainerResource>("cache").Resource.Annotations
+                .OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal("cache", annotation.ResourceName);
+
+        var conflictingOptions = new ModuleImportOptions { ResourcePrefix = "other-" };
+        var conflicting = Assert.Throws<InvalidOperationException>(() =>
+            builder.ImportModule("portable", conflictingOptions));
+        Assert.Contains("already materialized", conflicting.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportModule_reports_unknown_duplicate_and_existing_alias_collisions()
+    {
+        using var repository = TestRepository.Create();
+
+        var unknownBuilder = CreateBuilder(repository.Path);
+        unknownBuilder.DefineModule("unknown", "1", definition =>
+            definition.AddContainer("cache", "redis"));
+        var unknownOptions = new ModuleImportOptions();
+        unknownOptions.ResourceAliases["typo"] = "cache";
+        var unknown = Assert.Throws<InvalidOperationException>(() =>
+            unknownBuilder.ImportModule("unknown", unknownOptions));
+        Assert.Contains("unknown resource 'typo'", unknown.Message, StringComparison.Ordinal);
+
+        var duplicateBuilder = CreateBuilder(repository.Path);
+        duplicateBuilder.DefineModule("duplicate", "1", definition =>
+        {
+            definition.AddContainer("api", "nginx");
+            definition.AddContainer("cache", "redis");
+        });
+        var duplicateOptions = new ModuleImportOptions();
+        duplicateOptions.ResourceAliases["api"] = "shared";
+        duplicateOptions.ResourceAliases["cache"] = "SHARED";
+        var duplicate = Assert.Throws<InvalidOperationException>(() =>
+            duplicateBuilder.ImportModule("duplicate", duplicateOptions));
+        Assert.Contains("both 'api' and 'cache'", duplicate.Message, StringComparison.Ordinal);
+
+        var existingBuilder = CreateBuilder(repository.Path);
+        existingBuilder.AddContainer("shop-cache", "redis");
+        existingBuilder.DefineModule("existing", "1", definition =>
+            definition.AddContainer("cache", "redis"));
+        var existing = Assert.Throws<InvalidOperationException>(() =>
+            existingBuilder.ImportModule("existing", new ModuleImportOptions { ResourcePrefix = "shop-" }));
+        Assert.Contains("resource 'shop-cache' already exists", existing.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExportModule_rejects_an_empty_module()
     {
         using var repository = TestRepository.Create();

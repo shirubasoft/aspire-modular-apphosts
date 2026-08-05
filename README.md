@@ -32,18 +32,18 @@ Declare a module in a shared contract. The generator creates typed properties fo
 using Aspire.Hosting;
 using Aspire.Hosting.ModularAppHosts;
 
-[GenerateDistributedApplicationModule(Name)]
+[GenerateDistributedApplicationModule(Name, Version = "1")]
 public static partial class CatalogModule
 {
     public const string Name = "catalog";
     public const string ApiResourceName = "catalog-api";
 
-    public static IDistributedApplicationModule Register(
-        IDistributedApplicationBuilder builder) =>
-        builder.ExportModule(Name, module =>
-            module.AddContainer(ApiResourceName, "example/catalog-api", "latest")
-                .Configure(container =>
-                    container.WithHttpEndpoint(targetPort: 8080, name: "http")));
+    public static void Define(IDistributedApplicationModuleBuilder module)
+    {
+        module.AddContainer(ApiResourceName, "example/catalog-api", "latest")
+            .Configure(container =>
+                container.WithHttpEndpoint(targetPort: 8080, name: "http"));
+    }
 }
 ```
 
@@ -52,8 +52,7 @@ Add the module and use its generated resources like ordinary Aspire resource bui
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-var definition = CatalogModule.Register(builder);
-var catalog = CatalogModule.AddModule(builder, definition);
+var catalog = CatalogModule.AddModule(builder);
 
 builder.AddContainer("storefront", "example/storefront", "latest")
     .WithReference(catalog.Api.GetEndpoint("http"))
@@ -62,7 +61,7 @@ builder.AddContainer("storefront", "example/storefront", "latest")
 builder.Build().Run();
 ```
 
-For a repository-backed module, use `WithRepository(...)` in its contract and materialize it with `CatalogModule.ImportModule(builder)`. The module guide covers repository-aware factories, projects, managed checkouts, and image publishing.
+For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `CatalogModule.ImportModule(builder)`. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
 
 The defaults are side-effect safe: local modules run as projects, imported modules run as containers, and repository updates and image build commands require an explicit opt-in. Use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent, with finer configuration available per module and resource.
 
@@ -78,7 +77,7 @@ Projects exported as containers can still run directly during local debugging. T
         "catalog": {
           "Projects": {
             "catalog-api": {
-              "RunAsContainer": false
+              "ProjectMode": "Project"
             }
           }
         }

@@ -51,7 +51,7 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module. Development configuration sets `sample-api`'s `RunAsContainer` option to `false`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the sanitized branch tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module. Development configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 

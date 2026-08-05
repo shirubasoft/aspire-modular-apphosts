@@ -22,7 +22,7 @@ internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options 
     private readonly Dictionary<string, IResource> _resources =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private readonly HashSet<string> _materializedModules =
+    private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly ConcurrentDictionary<string, Lazy<Task>> _repositorySynchronizations =
@@ -49,9 +49,11 @@ internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options 
         _modules.Add(module.Name, module);
     }
 
-    internal bool IsMaterialized(string moduleName) => _materializedModules.Contains(moduleName);
+    internal bool TryGetMaterialization(string moduleName, out string? materializationKey) =>
+        _materializedModules.TryGetValue(moduleName, out materializationKey);
 
-    internal void MarkMaterialized(string moduleName) => _materializedModules.Add(moduleName);
+    internal void MarkMaterialized(string moduleName, string materializationKey) =>
+        _materializedModules.Add(moduleName, materializationKey);
 
     internal bool TryGetResource(string name, out IResource? resource) =>
         _resources.TryGetValue(name, out resource);
