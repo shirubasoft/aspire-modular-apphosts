@@ -70,6 +70,11 @@ public interface IDistributedApplicationModuleBuilder
 
     /// <summary>Overrides the Git repository and pins its imported branch, tag, or commit.</summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository, string revision);
+
+    /// <summary>
+    /// Marks generic resource factories as dependent on repository content when the module does not declare a project.
+    /// </summary>
+    IDistributedApplicationModuleBuilder RequiresRepository();
 }
 
 /// <summary>Describes a resource exported by a distributed application module.</summary>

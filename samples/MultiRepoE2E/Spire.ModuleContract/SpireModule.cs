@@ -14,6 +14,7 @@ public static partial class SpireModule
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
         module.WithRepository(Repository);
+        module.RequiresRepository();
         module.AddResource<ProjectResource>(ApiResourceName, context =>
             context.ApplicationBuilder
                 .AddProject(

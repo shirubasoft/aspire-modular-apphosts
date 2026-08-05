@@ -277,6 +277,41 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public void ImportModule_with_generic_repository_content_adds_an_interaction_backed_parameter()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        builder.ExportModule("content", module =>
+        {
+            module.RequiresRepository();
+            module.AddResource<TestResource>("clock", context =>
+                context.ApplicationBuilder.AddResource(new TestResource(context.ResourceName)));
+        });
+
+        builder.ImportModule("content");
+
+        var parameter = Assert.Single(builder.Resources.OfType<ParameterResource>());
+        Assert.Equal(
+            DistributedApplicationModuleExtensions.GetRepositoryParameterName("content"),
+            parameter.Name);
+    }
+
+    [Fact]
+    public void Add_rejects_a_module_defined_on_another_application_builder()
+    {
+        using var repository = TestRepository.Create();
+        var definitionBuilder = CreateBuilder(repository.Path);
+        var materializationBuilder = CreateBuilder(repository.Path);
+        var module = definitionBuilder.ExportModule("portable", definition =>
+            definition.AddContainer("cache", "redis"));
+
+        var exception = Assert.Throws<ArgumentException>(() =>
+            materializationBuilder.Add(module));
+
+        Assert.Contains("different distributed application builder", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Configuration_can_run_an_exported_project_directly_for_debugging()
     {
         using var repository = TestRepository.Create();
@@ -478,6 +513,59 @@ public sealed class DistributedApplicationModuleExtensionsTests
             Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(configured.ImplementationInstance)
                 .Value
                 .PublishImages);
+    }
+
+    [Fact]
+    public void Configuration_changes_after_definition_are_applied_before_materialization()
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        var module = ExportModule(builder, repository.ProjectPath);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "false";
+
+        builder.Add(module);
+
+        Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var configured = Assert.Single(
+            builder.Services,
+            service => service.ServiceType == typeof(IOptions<ModularAppHostsOptions>));
+        Assert.False(
+            Assert.IsAssignableFrom<IOptions<ModularAppHostsOptions>>(configured.ImplementationInstance)
+                .Value
+                .PublishImages);
+    }
+
+    [Theory]
+    [InlineData("ProjectMode", "42")]
+    [InlineData("Modules:orders:ProjectMode", "42")]
+    [InlineData("Modules:orders:Projects:orders-api:ImagePullPolicy", "42")]
+    public void Configuration_rejects_unsupported_enum_values(string relativeKey, string value)
+    {
+        using var repository = TestRepository.Create();
+        var builder = CreateBuilder(repository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:{relativeKey}"] = value;
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ExportModule(builder, repository.ProjectPath));
+
+        Assert.Contains("unsupported value", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(relativeKey.Split(':')[^1], exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Repository_inspection_uses_the_configured_git_executable_and_fails_closed()
+    {
+        using var repository = TestRepository.Create(initializeGit: true);
+        var builder = CreateBuilder(repository.Path);
+        var missingGit = Path.Combine(repository.Path, "missing-git");
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitExecutablePath"] = missingGit;
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ExportModule(builder, repository.ProjectPath));
+
+        Assert.Contains(missingGit, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(ModularAppHostsOptions.GitExecutablePath), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1044,6 +1132,21 @@ public sealed class DistributedApplicationModuleExtensionsTests
             updateRepository: true);
 
         Assert.Null(command);
+    }
+
+    [Fact]
+    public void Repository_synchronizer_rejects_an_existing_non_git_remote_target()
+    {
+        using var target = TemporaryDirectory.Create();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            RepositorySynchronizer.CreateCommands(
+                target.Path,
+                "https://example.test/acme/orders.git",
+                updateRepository: true));
+
+        Assert.Contains("not a Git checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(target.Path, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

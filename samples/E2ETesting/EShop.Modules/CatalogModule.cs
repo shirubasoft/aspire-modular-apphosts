@@ -13,6 +13,7 @@ public static partial class CatalogModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
+        module.RequiresRepository();
         module.AddResource<ProjectResource>(ApiResourceName, context =>
             context.ApplicationBuilder
                 .AddProject(

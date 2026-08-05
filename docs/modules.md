@@ -116,7 +116,15 @@ module.AddContainer("orders-cache", "redis", "8-alpine")
 
 ### Projects and repository-aware factories
 
-Use `AddResource<TResource>` when a resource should run directly from the local or imported repository. Build paths from `context.RepositoryPath`, as in the module contract above.
+Use `AddResource<TResource>` when a resource should run directly from the local or imported repository. Call `RequiresRepository()` once on the module and build paths from `context.RepositoryPath`, as in the module contract above. This makes imports request, discover, or synchronize repository content even when the module has no specialized `AddProject` declaration.
+
+```csharp
+module.RequiresRepository();
+module.AddResource<ProjectResource>("orders-api", context =>
+    context.ApplicationBuilder.AddProject(
+        context.ResourceName,
+        Path.Combine(context.RepositoryPath, "src", "Orders.Api", "Orders.Api.csproj")));
+```
 
 Use the specialized `AddProject` API when the project must be represented as a portable container image. These project declarations require the exact command that produces their image:
 
@@ -146,6 +154,8 @@ module.AddProject<Projects.Orders_Api>("orders-api")
 module.AddResource<PostgresServerResource>("postgres", context =>
     context.ApplicationBuilder.AddPostgres(context.ResourceName));
 ```
+
+Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically because the command runs from repository content.
 
 Factories run in declaration order when the module is materialized. The context provides the receiving builder, required resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`.
 

@@ -72,6 +72,7 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddContainer
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddProject(string! name, string! projectPath) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddProject<TProject>(string! name) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddResource<TResource>(string! name, System.Func<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext!, Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource>!>! resourceFactory) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
+Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.RequiresRepository() -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.WithRepository(string! repository) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.WithRepository(string! repository, string! revision) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleCatalog

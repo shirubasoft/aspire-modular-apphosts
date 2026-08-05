@@ -2,7 +2,10 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
-internal sealed class DistributedApplicationModule(string name, string version) : IDistributedApplicationModule
+internal sealed class DistributedApplicationModule(
+    IDistributedApplicationBuilder definitionApplicationBuilder,
+    string name,
+    string version) : IDistributedApplicationModule
 {
     private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
@@ -30,6 +33,10 @@ internal sealed class DistributedApplicationModule(string name, string version) 
     internal string? Repository { get; set; }
 
     internal string? RepositoryRevision { get; set; }
+
+    internal IDistributedApplicationBuilder DefinitionApplicationBuilder { get; } = definitionApplicationBuilder;
+
+    internal bool RequiresRepositoryContent { get; set; }
 
     internal void AddProject(DistributedApplicationModuleProject project)
     {
@@ -86,7 +93,7 @@ internal sealed class DistributedApplicationModule(string name, string version) 
         _materializedResources[declaredName] = resource;
     }
 
-    internal void Validate()
+    internal void Validate(string gitExecutablePath, TimeSpan repositoryCommandTimeout)
     {
         if (_resources.Count == 0)
         {
@@ -113,7 +120,10 @@ internal sealed class DistributedApplicationModule(string name, string version) 
 
         if (repositoryRoots.Length == 1)
         {
-            Repository ??= RepositoryInspector.TryGetRemote(repositoryRoots[0]);
+            Repository ??= RepositoryInspector.TryGetRemote(
+                repositoryRoots[0],
+                gitExecutablePath,
+                repositoryCommandTimeout);
         }
     }
 

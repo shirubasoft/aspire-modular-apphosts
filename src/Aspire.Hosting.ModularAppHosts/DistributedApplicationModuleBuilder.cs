@@ -4,7 +4,9 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal sealed class DistributedApplicationModuleBuilder(
     IDistributedApplicationBuilder applicationBuilder,
-    DistributedApplicationModule module) : IDistributedApplicationModuleBuilder
+    DistributedApplicationModule module,
+    string gitExecutablePath,
+    TimeSpan repositoryCommandTimeout) : IDistributedApplicationModuleBuilder
 {
     public IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
@@ -30,18 +32,27 @@ internal sealed class DistributedApplicationModuleBuilder(
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
 
         var absoluteProjectPath = Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory);
-        var repositoryRoot = RepositoryInspector.FindRepositoryRoot(absoluteProjectPath);
+        var repositoryRoot = RepositoryInspector.FindRepositoryRoot(
+            absoluteProjectPath,
+            gitExecutablePath,
+            repositoryCommandTimeout);
         var appHostDirectory = Path.GetFullPath(applicationBuilder.AppHostDirectory);
         var configuredRepositoryRoot = GetConfiguredLocalRepositoryRoot(
             module.Repository,
             appHostDirectory,
-            absoluteProjectPath);
+            absoluteProjectPath,
+            gitExecutablePath,
+            repositoryCommandTimeout);
 
         if (configuredRepositoryRoot is not null)
         {
             repositoryRoot = configuredRepositoryRoot;
         }
-        else if (!RepositoryInspector.IsGitRepository(repositoryRoot) &&
+        else if (!RepositoryInspector.IsGitRepository(
+                repositoryRoot,
+                gitExecutablePath,
+                repositoryCommandTimeout,
+                requireSuccessfulInspection: true) &&
             PathSafety.IsContainedBy(appHostDirectory, absoluteProjectPath))
         {
             repositoryRoot = appHostDirectory;
@@ -63,7 +74,7 @@ internal sealed class DistributedApplicationModuleBuilder(
 
         var container = new DistributedApplicationModuleContainer(name, image, tag);
         module.AddContainer(container);
-        return new DistributedApplicationModuleContainerBuilder(container);
+        return new DistributedApplicationModuleContainerBuilder(module, container);
     }
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository)
@@ -77,6 +88,12 @@ internal sealed class DistributedApplicationModuleBuilder(
         return SetRepository(repository, revision);
     }
 
+    public IDistributedApplicationModuleBuilder RequiresRepository()
+    {
+        module.RequiresRepositoryContent = true;
+        return this;
+    }
+
     private DistributedApplicationModuleBuilder SetRepository(string repository, string? revision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
@@ -88,7 +105,9 @@ internal sealed class DistributedApplicationModuleBuilder(
     private static string? GetConfiguredLocalRepositoryRoot(
         string? repository,
         string appHostDirectory,
-        string projectPath)
+        string projectPath,
+        string gitExecutablePath,
+        TimeSpan repositoryCommandTimeout)
     {
         if (string.IsNullOrWhiteSpace(repository))
         {
@@ -98,7 +117,11 @@ internal sealed class DistributedApplicationModuleBuilder(
         string candidate;
         if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
         {
-            if (!RepositoryInspector.TryFindRepositoryRoot(appHostDirectory, out var appHostRepositoryRoot))
+            if (!RepositoryInspector.TryFindRepositoryRoot(
+                    appHostDirectory,
+                    out var appHostRepositoryRoot,
+                    gitExecutablePath,
+                    repositoryCommandTimeout))
             {
                 return null;
             }
@@ -175,6 +198,7 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
 }
 
 internal sealed class DistributedApplicationModuleContainerBuilder(
+    DistributedApplicationModule module,
     DistributedApplicationModuleContainer container) : IDistributedApplicationModuleContainerBuilder
 {
     public IDistributedApplicationModuleContainer Container => container;
@@ -202,6 +226,7 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
         }
 
         container.SetImagePublishOptions(copiedOptions);
+        module.RequiresRepositoryContent = true;
         return this;
     }
 }

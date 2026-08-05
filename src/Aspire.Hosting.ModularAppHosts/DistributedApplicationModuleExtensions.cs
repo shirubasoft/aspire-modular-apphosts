@@ -1,4 +1,5 @@
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -18,9 +19,9 @@ public static class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var options = GetOrCreateRegistry(builder).Options;
-        configure(options);
-        ValidateOptions(options);
+        var registry = GetOrCreateRegistry(builder);
+        registry.Configure(configure);
+        ValidateOptions(registry.Options);
         return builder;
     }
 
@@ -93,6 +94,8 @@ public static class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(moduleBuilder);
 
         var registry = GetOrCreateRegistry(builder);
+        registry.RefreshConfiguration();
+        ValidateOptions(registry.Options);
         if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
         {
             if (!string.Equals(existingModule.Version, version, StringComparison.Ordinal))
@@ -105,9 +108,16 @@ public static class DistributedApplicationModuleExtensions
             return existingModule;
         }
 
-        var module = new DistributedApplicationModule(name, version);
-        moduleBuilder(new DistributedApplicationModuleBuilder(builder, module));
-        module.Validate();
+        var gitExecutablePath = GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git";
+        var module = new DistributedApplicationModule(builder, name, version);
+        moduleBuilder(new DistributedApplicationModuleBuilder(
+            builder,
+            module,
+            gitExecutablePath,
+            registry.Options.RepositoryCommandTimeout));
+        module.Validate(
+            gitExecutablePath,
+            registry.Options.RepositoryCommandTimeout);
         ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
         registry.AddModule(module);
         return module;
@@ -125,6 +135,14 @@ public static class DistributedApplicationModuleExtensions
         {
             throw new ArgumentException(
                 "The module must have been created by ExportModule on this extension.", nameof(module));
+        }
+
+        if (!ReferenceEquals(typedModule.DefinitionApplicationBuilder, builder))
+        {
+            throw new ArgumentException(
+                "The module definition belongs to a different distributed application builder. " +
+                "Define and materialize the module on the same AppHost builder.",
+                nameof(module));
         }
 
         var registry = GetOrCreateRegistry(builder);
@@ -173,6 +191,8 @@ public static class DistributedApplicationModuleExtensions
         bool imported,
         ModuleImportOptions? importOptions = null)
     {
+        registry.RefreshConfiguration();
+        ValidateOptions(registry.Options);
         var materializationKey = GetMaterializationKey(imported, importOptions);
         if (registry.TryGetMaterialization(module.Name, out var existingMaterialization))
         {
@@ -191,7 +211,7 @@ public static class DistributedApplicationModuleExtensions
         var configuredRepository = GetConfiguredValue(builder.Configuration[repositoryConfigurationKey]);
         var repository = configuredRepository ?? GetConfiguredValue(moduleOptions?.Repository) ?? module.Repository;
         var repositoryRevision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ?? module.RepositoryRevision;
-        var requiresRepository = module.ProjectDefinitions.Count > 0;
+        var requiresRepository = module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent;
         ValidateModuleConfiguration(module, moduleOptions);
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
@@ -203,7 +223,8 @@ public static class DistributedApplicationModuleExtensions
                 module,
                 repository,
                 GetConfiguredValue(options.GitHubCliPath) ?? "gh",
-                options.RepositoryCommandTimeout)
+                options.RepositoryCommandTimeout,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git")
             : null;
         var repositoryParameter = imported &&
             (configuredRepository is not null ||
@@ -228,7 +249,10 @@ public static class DistributedApplicationModuleExtensions
              (builder.ExecutionContext.IsRunMode && imported)) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             !string.IsNullOrWhiteSpace(repository) &&
-            RepositoryInspector.IsGitRepository(repositoryPath);
+            RepositoryInspector.IsGitRepository(
+                repositoryPath,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout);
         if (synchronizedRepository)
         {
             registry.SynchronizeRepositoryAsync(
@@ -245,8 +269,12 @@ public static class DistributedApplicationModuleExtensions
                 .GetResult();
         }
 
-        var repositoryDirty = RepositoryInspector.IsDirty(repositoryPath);
-        var defaultImageTag = GetDefaultImageTag(builder, repositoryPath);
+        var repositoryDirty = RepositoryInspector.IsDirty(
+            repositoryPath,
+            GetConfiguredValue(options.GitExecutablePath) ?? "git",
+            options.RepositoryCommandTimeout,
+            requireSuccessfulInspection: true);
+        var defaultImageTag = GetDefaultImageTag(builder, repositoryPath, options);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
         if (repositoryResolution is not null || !imported)
@@ -377,7 +405,8 @@ public static class DistributedApplicationModuleExtensions
         var publishPlan = CreateImagePublishPlan(
             builder,
             effectiveExportOptions,
-            repositoryDirty && publishImage);
+            repositoryDirty && publishImage,
+            inspectExistingImage: publishImage);
 
         var container = builder
             .AddContainer(resourceName, publishPlan.ImageName, publishPlan.ImageTag)
@@ -437,7 +466,11 @@ public static class DistributedApplicationModuleExtensions
             (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
         var publishPlan = publishOptions is null
             ? null
-            : CreateImagePublishPlan(builder, publishOptions, repositoryDirty && publishImage);
+            : CreateImagePublishPlan(
+                builder,
+                publishOptions,
+                repositoryDirty && publishImage,
+                inspectExistingImage: publishImage);
         var container = builder
             .AddContainer(
                 resourceName,
@@ -557,12 +590,13 @@ public static class DistributedApplicationModuleExtensions
     private static ModuleImagePublishPlan CreateImagePublishPlan(
         IDistributedApplicationBuilder builder,
         ModuleContainerExportOptions options,
-        bool useDirtyImage)
+        bool useDirtyImage,
+        bool inspectExistingImage = true)
     {
         return ModuleImagePublishPlan.Create(
             options,
             useDirtyImage,
-            builder.ExecutionContext.IsRunMode
+            builder.ExecutionContext.IsRunMode && inspectExistingImage
                 ? ContainerImageInspector.Exists
                 : _ => false);
     }
@@ -720,11 +754,20 @@ public static class DistributedApplicationModuleExtensions
 
         var options = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
         ValidateOptions(options);
-        var registry = new ModuleApplicationRegistry(options);
+        var registry = new ModuleApplicationRegistry(options, builder.Configuration);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
         builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
         {
+            registry.RefreshConfiguration();
+            ValidateOptions(registry.Options);
+            registry.ValidateConfiguredModules();
+            return Task.CompletedTask;
+        });
+        builder.Eventing.Subscribe<BeforePublishEvent>((_, _) =>
+        {
+            registry.RefreshConfiguration();
+            ValidateOptions(registry.Options);
             registry.ValidateConfiguredModules();
             return Task.CompletedTask;
         });
@@ -891,15 +934,33 @@ public static class DistributedApplicationModuleExtensions
 
     private static string GetDefaultImageTag(
         IDistributedApplicationBuilder builder,
-        string repositoryPath)
+        string repositoryPath,
+        ModularAppHostsOptions options)
     {
-        var branch = RepositoryInspector.TryGetBranch(repositoryPath);
-        var commit = RepositoryInspector.TryGetCommit(repositoryPath);
+        var gitExecutablePath = GetConfiguredValue(options.GitExecutablePath) ?? "git";
+        var branch = RepositoryInspector.TryGetBranch(
+            repositoryPath,
+            gitExecutablePath,
+            options.RepositoryCommandTimeout);
+        var commit = RepositoryInspector.TryGetCommit(
+            repositoryPath,
+            gitExecutablePath,
+            options.RepositoryCommandTimeout);
         if ((branch is null || commit is null) &&
-            RepositoryInspector.TryFindRepositoryRoot(builder.AppHostDirectory, out var appHostRepositoryRoot))
+            RepositoryInspector.TryFindRepositoryRoot(
+                builder.AppHostDirectory,
+                out var appHostRepositoryRoot,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout))
         {
-            branch ??= RepositoryInspector.TryGetBranch(appHostRepositoryRoot);
-            commit ??= RepositoryInspector.TryGetCommit(appHostRepositoryRoot);
+            branch ??= RepositoryInspector.TryGetBranch(
+                appHostRepositoryRoot,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout);
+            commit ??= RepositoryInspector.TryGetCommit(
+                appHostRepositoryRoot,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout);
         }
 
         branch ??= GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF"));
@@ -979,6 +1040,54 @@ public static class DistributedApplicationModuleExtensions
         {
             throw new InvalidOperationException(
                 $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.RepositoryCommandTimeout)} must be positive.");
+        }
+
+        ValidateEnum(
+            options.ProjectMode,
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.ProjectMode)}");
+
+        foreach (var (moduleName, module) in options.Modules)
+        {
+            var moduleKey = $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.Modules)}:{moduleName}";
+            if (module.ProjectMode is { } moduleMode)
+            {
+                ValidateEnum(moduleMode, $"{moduleKey}:{nameof(module.ProjectMode)}");
+            }
+
+            foreach (var (projectName, project) in module.Projects)
+            {
+                var projectKey = $"{moduleKey}:{nameof(module.Projects)}:{projectName}";
+                if (project.ProjectMode is { } projectMode)
+                {
+                    ValidateEnum(projectMode, $"{projectKey}:{nameof(project.ProjectMode)}");
+                }
+
+                if (project.ImagePullPolicy is { } projectPullPolicy)
+                {
+                    ValidateEnum(projectPullPolicy, $"{projectKey}:{nameof(project.ImagePullPolicy)}");
+                }
+            }
+
+            foreach (var (containerName, container) in module.Containers)
+            {
+                if (container.ImagePullPolicy is { } containerPullPolicy)
+                {
+                    ValidateEnum(
+                        containerPullPolicy,
+                        $"{moduleKey}:{nameof(module.Containers)}:{containerName}:{nameof(container.ImagePullPolicy)}");
+                }
+            }
+        }
+    }
+
+    private static void ValidateEnum<TEnum>(TEnum value, string configurationKey)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+        {
+            throw new InvalidOperationException(
+                $"{configurationKey} has unsupported value '{value}'. Expected one of: " +
+                $"{string.Join(", ", Enum.GetNames<TEnum>())}.");
         }
     }
 

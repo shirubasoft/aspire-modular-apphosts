@@ -6,9 +6,12 @@ namespace Aspire.Hosting.ModularAppHosts;
 
 internal static class RepositoryInspector
 {
-    public static string FindRepositoryRoot(string projectPath)
+    public static string FindRepositoryRoot(
+        string projectPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        if (TryFindRepositoryRoot(projectPath, out var root))
+        if (TryFindRepositoryRoot(projectPath, out var root, gitExecutablePath, commandTimeout))
         {
             return root;
         }
@@ -20,10 +23,19 @@ internal static class RepositoryInspector
         return Path.GetFullPath(startDirectory);
     }
 
-    public static bool TryFindRepositoryRoot(string path, out string repositoryRoot)
+    public static bool TryFindRepositoryRoot(
+        string path,
+        out string repositoryRoot,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
         var startDirectory = GetWorkingDirectory(path);
-        if (TryRunGit(startDirectory, ["rev-parse", "--show-toplevel"], out var root) &&
+        if (TryRunGit(
+                startDirectory,
+                ["rev-parse", "--show-toplevel"],
+                gitExecutablePath,
+                commandTimeout,
+                out var root) &&
             !string.IsNullOrWhiteSpace(root))
         {
             repositoryRoot = Path.GetFullPath(root.Trim());
@@ -34,44 +46,125 @@ internal static class RepositoryInspector
         return false;
     }
 
-    public static string? TryGetRemote(string repositoryPath)
+    public static string? TryGetRemote(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        return TryRunGit(repositoryPath, ["config", "--get", "remote.origin.url"], out var remote)
+        return TryRunGit(
+            repositoryPath,
+            ["config", "--get", "remote.origin.url"],
+            gitExecutablePath,
+            commandTimeout,
+            out var remote)
             ? remote.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static bool IsGitRepository(string repositoryPath)
+    public static bool IsGitRepository(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null,
+        bool requireSuccessfulInspection = false)
     {
-        return Directory.Exists(repositoryPath) &&
-               TryRunGit(repositoryPath, ["rev-parse", "--is-inside-work-tree"], out var result) &&
-               string.Equals(result.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        if (!Directory.Exists(repositoryPath))
+        {
+            return false;
+        }
+
+        if (TryRunGit(
+                repositoryPath,
+                ["rev-parse", "--is-inside-work-tree"],
+                gitExecutablePath,
+                commandTimeout,
+                out var result))
+        {
+            return string.Equals(result.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (requireSuccessfulInspection && ContainsGitMetadata(repositoryPath))
+        {
+            throw CreateInspectionException(repositoryPath, gitExecutablePath);
+        }
+
+        return false;
     }
 
-    public static bool IsDirty(string repositoryPath)
+    public static bool IsDirty(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null,
+        bool requireSuccessfulInspection = false)
     {
-        return IsGitRepository(repositoryPath) &&
-               TryRunGit(repositoryPath, ["status", "--porcelain", "--untracked-files=normal"], out var status) &&
-               !string.IsNullOrWhiteSpace(status);
+        if (!IsGitRepository(
+                repositoryPath,
+                gitExecutablePath,
+                commandTimeout,
+                requireSuccessfulInspection))
+        {
+            return false;
+        }
+
+        if (TryRunGit(
+                repositoryPath,
+                ["status", "--porcelain", "--untracked-files=normal"],
+                gitExecutablePath,
+                commandTimeout,
+                out var status))
+        {
+            return !string.IsNullOrWhiteSpace(status);
+        }
+
+        if (requireSuccessfulInspection)
+        {
+            throw CreateInspectionException(repositoryPath, gitExecutablePath);
+        }
+
+        return false;
     }
 
-    public static string? TryGetBranch(string repositoryPath)
+    public static string? TryGetBranch(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        return TryRunGit(repositoryPath, ["branch", "--show-current"], out var branch)
+        return TryRunGit(
+            repositoryPath,
+            ["branch", "--show-current"],
+            gitExecutablePath,
+            commandTimeout,
+            out var branch)
             ? branch.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static string? TryGetCommit(string repositoryPath)
+    public static string? TryGetCommit(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        return TryRunGit(repositoryPath, ["rev-parse", "--short=12", "HEAD"], out var commit)
+        return TryRunGit(
+            repositoryPath,
+            ["rev-parse", "--short=12", "HEAD"],
+            gitExecutablePath,
+            commandTimeout,
+            out var commit)
             ? commit.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
 
-    public static string? TryResolveCommit(string repositoryPath, string revision = "HEAD")
+    public static string? TryResolveCommit(
+        string repositoryPath,
+        string revision = "HEAD",
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        return TryRunGit(repositoryPath, ["rev-parse", $"{revision}^{{commit}}"], out var commit)
+        return TryRunGit(
+            repositoryPath,
+            ["rev-parse", $"{revision}^{{commit}}"],
+            gitExecutablePath,
+            commandTimeout,
+            out var commit)
             ? commit.Trim() is { Length: > 0 } value ? value : null
             : null;
     }
@@ -93,14 +186,19 @@ internal static class RepositoryInspector
         return candidate;
     }
 
-    private static bool TryRunGit(string workingDirectory, IReadOnlyList<string> arguments, out string output)
+    private static bool TryRunGit(
+        string workingDirectory,
+        IReadOnlyList<string> arguments,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout,
+        out string output)
     {
         output = string.Empty;
 
         try
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var result = CliCommand.Wrap("git")
+            using var timeout = new CancellationTokenSource(commandTimeout ?? TimeSpan.FromSeconds(5));
+            var result = CliCommand.Wrap(gitExecutablePath)
                 .WithArguments(arguments)
                 .WithWorkingDirectory(Directory.Exists(workingDirectory)
                     ? workingDirectory
@@ -121,6 +219,33 @@ internal static class RepositoryInspector
         {
             return false;
         }
+    }
+
+    private static bool ContainsGitMetadata(string repositoryPath)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(repositoryPath));
+        while (current is not null)
+        {
+            var metadataPath = Path.Combine(current.FullName, ".git");
+            if (Directory.Exists(metadataPath) || File.Exists(metadataPath))
+            {
+                return true;
+            }
+
+            current = current.Parent;
+        }
+
+        return false;
+    }
+
+    private static InvalidOperationException CreateInspectionException(
+        string repositoryPath,
+        string gitExecutablePath)
+    {
+        return new InvalidOperationException(
+            $"Unable to inspect Git repository '{repositoryPath}' with executable '{gitExecutablePath}'. " +
+            $"Verify {nameof(ModularAppHostsOptions.GitExecutablePath)} and " +
+            $"{nameof(ModularAppHostsOptions.RepositoryCommandTimeout)} before materializing modules.");
     }
 }
 
@@ -180,7 +305,8 @@ internal static class GitHubRepositoryCloner
         string executable,
         string repository,
         string repositoryPath,
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        string gitExecutablePath = "git")
     {
         var command = CreateCommand(executable, repository, repositoryPath);
         Directory.CreateDirectory(command.WorkingDirectory);
@@ -225,7 +351,11 @@ internal static class GitHubRepositoryCloner
                 $"with exit code {result.ExitCode}: {error.Trim()}");
         }
 
-        if (!RepositoryInspector.IsGitRepository(repositoryPath))
+        if (!RepositoryInspector.IsGitRepository(
+                repositoryPath,
+                gitExecutablePath,
+                commandTimeout,
+                requireSuccessfulInspection: true))
         {
             throw new InvalidOperationException(
                 $"GitHub CLI reported success, but '{repositoryPath}' is not a Git repository.");
@@ -296,12 +426,17 @@ internal static class ModuleRepositoryDiscovery
         DistributedApplicationModule module,
         string? repository,
         string githubCliPath,
-        TimeSpan? commandTimeout = null)
+        TimeSpan? commandTimeout = null,
+        string gitExecutablePath = "git")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         ArgumentNullException.ThrowIfNull(module);
 
-        if (!RepositoryInspector.TryFindRepositoryRoot(appHostDirectory, out var appHostRepositoryRoot))
+        if (!RepositoryInspector.TryFindRepositoryRoot(
+                appHostDirectory,
+                out var appHostRepositoryRoot,
+                gitExecutablePath,
+                commandTimeout))
         {
             throw new InvalidOperationException(
                 $"Automatic module discovery requires AppHost directory '{appHostDirectory}' to be inside a Git repository.");
@@ -319,12 +454,17 @@ internal static class ModuleRepositoryDiscovery
             repository,
             appHostDirectory,
             appHostRepositoryRoot,
+            gitExecutablePath,
+            commandTimeout,
             out var sameRepositoryPath))
         {
             return new ModuleRepositoryResolution(sameRepositoryPath, UsesSiblingLayout: false);
         }
 
-        var appHostRemote = RepositoryInspector.TryGetRemote(appHostRepositoryRoot);
+        var appHostRemote = RepositoryInspector.TryGetRemote(
+            appHostRepositoryRoot,
+            gitExecutablePath,
+            commandTimeout);
         if (!string.IsNullOrWhiteSpace(repository) && !string.IsNullOrWhiteSpace(appHostRemote) &&
             GitHubRepositoryCloner.RefersToSameRepository(repository, appHostRemote, appHostDirectory))
         {
@@ -344,13 +484,23 @@ internal static class ModuleRepositoryDiscovery
 
         if (Directory.Exists(siblingPath))
         {
-            if (!RepositoryInspector.IsGitRepository(siblingPath))
+            if (!RepositoryInspector.IsGitRepository(
+                    siblingPath,
+                    gitExecutablePath,
+                    commandTimeout,
+                    requireSuccessfulInspection: true))
             {
                 throw new InvalidOperationException(
                     $"Discovered module '{module.Name}' at '{siblingPath}', but that directory is not a Git repository.");
             }
 
-            EnsureExpectedOrigin(siblingPath, repository, appHostDirectory, module.Name);
+            EnsureExpectedOrigin(
+                siblingPath,
+                repository,
+                appHostDirectory,
+                module.Name,
+                gitExecutablePath,
+                commandTimeout);
 
             return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
         }
@@ -363,8 +513,19 @@ internal static class ModuleRepositoryDiscovery
                 $"{DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(module.Name)} or WithRepository().");
         }
 
-        GitHubRepositoryCloner.Clone(githubCliPath, repository, siblingPath, commandTimeout);
-        EnsureExpectedOrigin(siblingPath, repository, appHostDirectory, module.Name);
+        GitHubRepositoryCloner.Clone(
+            githubCliPath,
+            repository,
+            siblingPath,
+            commandTimeout,
+            gitExecutablePath);
+        EnsureExpectedOrigin(
+            siblingPath,
+            repository,
+            appHostDirectory,
+            module.Name,
+            gitExecutablePath,
+            commandTimeout);
         return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
     }
 
@@ -414,6 +575,8 @@ internal static class ModuleRepositoryDiscovery
         string? repository,
         string appHostDirectory,
         string expectedRepositoryRoot,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout,
         out string localPath)
     {
         localPath = string.Empty;
@@ -423,7 +586,11 @@ internal static class ModuleRepositoryDiscovery
         }
 
         localPath = Path.GetFullPath(repository, appHostDirectory);
-        return RepositoryInspector.TryFindRepositoryRoot(localPath, out var repositoryRoot) &&
+        return RepositoryInspector.TryFindRepositoryRoot(
+                localPath,
+                out var repositoryRoot,
+                gitExecutablePath,
+                commandTimeout) &&
             PathSafety.AreEqual(repositoryRoot, expectedRepositoryRoot);
     }
 
@@ -436,7 +603,9 @@ internal static class ModuleRepositoryDiscovery
         string repositoryPath,
         string? expectedRepository,
         string baseDirectory,
-        string moduleName)
+        string moduleName,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout)
     {
         if (string.IsNullOrWhiteSpace(expectedRepository) ||
             !GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory))
@@ -444,7 +613,10 @@ internal static class ModuleRepositoryDiscovery
             return;
         }
 
-        var actualRepository = RepositoryInspector.TryGetRemote(repositoryPath);
+        var actualRepository = RepositoryInspector.TryGetRemote(
+            repositoryPath,
+            gitExecutablePath,
+            commandTimeout);
         if (string.IsNullOrWhiteSpace(actualRepository) ||
             !GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory))
         {
@@ -464,9 +636,16 @@ internal static class RepositorySynchronizer
         string? repository,
         bool updateRepository,
         string? revision = null,
-        string gitExecutablePath = "git")
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        var commands = CreateCommands(repositoryPath, repository, updateRepository, revision, gitExecutablePath);
+        var commands = CreateCommands(
+            repositoryPath,
+            repository,
+            updateRepository,
+            revision,
+            gitExecutablePath,
+            commandTimeout);
         return commands.Count == 0 ? null : commands[0];
     }
 
@@ -475,12 +654,26 @@ internal static class RepositorySynchronizer
         string? repository,
         bool updateRepository,
         string? revision = null,
-        string gitExecutablePath = "git")
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null)
     {
-        if (!RepositoryInspector.IsGitRepository(repositoryPath))
+        if (!RepositoryInspector.IsGitRepository(
+                repositoryPath,
+                gitExecutablePath,
+                commandTimeout,
+                requireSuccessfulInspection: true))
         {
             if (Directory.Exists(repositoryPath))
             {
+                var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
+                if (!string.IsNullOrWhiteSpace(repository) &&
+                    GitHubRepositoryCloner.IsRemoteRepository(repository, baseDirectory))
+                {
+                    throw new InvalidOperationException(
+                        $"Repository path '{repositoryPath}' already exists, but it is not a Git checkout of " +
+                        $"configured repository '{repository}'. Move that directory or correct the module configuration.");
+                }
+
                 return [];
             }
 
@@ -501,11 +694,19 @@ internal static class RepositorySynchronizer
             return commands;
         }
 
-        EnsureExpectedOrigin(repositoryPath, repository);
+        EnsureExpectedOrigin(repositoryPath, repository, gitExecutablePath, commandTimeout);
 
-        if (RepositoryInspector.IsDirty(repositoryPath))
+        if (RepositoryInspector.IsDirty(
+                repositoryPath,
+                gitExecutablePath,
+                commandTimeout,
+                requireSuccessfulInspection: true))
         {
-            EnsureDirtyCheckoutMatchesRevision(repositoryPath, revision);
+            EnsureDirtyCheckoutMatchesRevision(
+                repositoryPath,
+                revision,
+                gitExecutablePath,
+                commandTimeout);
             return [];
         }
 
@@ -538,7 +739,8 @@ internal static class RepositorySynchronizer
             repository,
             updateRepository,
             revision,
-            gitExecutablePath);
+            gitExecutablePath,
+            commandTimeout);
         foreach (var command in commands)
         {
             var result = await ModuleCliRunner.RunAsync(
@@ -584,14 +786,21 @@ internal static class RepositorySynchronizer
             ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"]));
     }
 
-    private static void EnsureExpectedOrigin(string repositoryPath, string? expectedRepository)
+    private static void EnsureExpectedOrigin(
+        string repositoryPath,
+        string? expectedRepository,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout)
     {
         if (string.IsNullOrWhiteSpace(expectedRepository))
         {
             return;
         }
 
-        var actualRepository = RepositoryInspector.TryGetRemote(repositoryPath);
+        var actualRepository = RepositoryInspector.TryGetRemote(
+            repositoryPath,
+            gitExecutablePath,
+            commandTimeout);
         var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
         var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
             (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
@@ -617,15 +826,26 @@ internal static class RepositorySynchronizer
             Path.GetFullPath(second, baseDirectory));
     }
 
-    private static void EnsureDirtyCheckoutMatchesRevision(string repositoryPath, string? revision)
+    private static void EnsureDirtyCheckoutMatchesRevision(
+        string repositoryPath,
+        string? revision,
+        string gitExecutablePath,
+        TimeSpan? commandTimeout)
     {
         if (string.IsNullOrWhiteSpace(revision))
         {
             return;
         }
 
-        var currentCommit = RepositoryInspector.TryResolveCommit(repositoryPath);
-        var expectedCommit = RepositoryInspector.TryResolveCommit(repositoryPath, revision);
+        var currentCommit = RepositoryInspector.TryResolveCommit(
+            repositoryPath,
+            gitExecutablePath: gitExecutablePath,
+            commandTimeout: commandTimeout);
+        var expectedCommit = RepositoryInspector.TryResolveCommit(
+            repositoryPath,
+            revision,
+            gitExecutablePath,
+            commandTimeout);
         if (currentCommit is null || expectedCommit is null ||
             !string.Equals(currentCommit, expectedCommit, StringComparison.OrdinalIgnoreCase))
         {

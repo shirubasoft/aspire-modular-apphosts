@@ -1,5 +1,6 @@
-using Aspire.Hosting.ApplicationModel;
 using System.Collections.Concurrent;
+using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
@@ -13,7 +14,9 @@ public interface IDistributedApplicationModuleCatalog
     bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule);
 }
 
-internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options = null)
+internal sealed class ModuleApplicationRegistry(
+    ModularAppHostsOptions? options = null,
+    IConfiguration? configuration = null)
     : IDistributedApplicationModuleCatalog
 {
     private readonly Dictionary<string, DistributedApplicationModule> _modules =
@@ -29,6 +32,8 @@ internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options 
         new(StringComparer.OrdinalIgnoreCase);
 
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
+
+    private bool _programmaticallyConfigured;
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 
@@ -68,6 +73,39 @@ internal sealed class ModuleApplicationRegistry(ModularAppHostsOptions? options 
         return _repositorySynchronizations.GetOrAdd(
             repositoryPath,
             _ => new Lazy<Task>(synchronize, LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+    }
+
+    internal void RefreshConfiguration()
+    {
+        if (!_programmaticallyConfigured && configuration is not null)
+        {
+            ResetOptions();
+            configuration.GetSection(ModularAppHostsOptions.ConfigurationSectionName).Bind(Options);
+        }
+    }
+
+    internal void Configure(Action<ModularAppHostsOptions> configure)
+    {
+        RefreshConfiguration();
+        configure(Options);
+        _programmaticallyConfigured = true;
+    }
+
+    private void ResetOptions()
+    {
+        var defaults = new ModularAppHostsOptions();
+        Options.RepositoryBasePath = defaults.RepositoryBasePath;
+        Options.AutoCloneRepositories = defaults.AutoCloneRepositories;
+        Options.GitHubCliPath = defaults.GitHubCliPath;
+        Options.GitExecutablePath = defaults.GitExecutablePath;
+        Options.RepositoryCommandTimeout = defaults.RepositoryCommandTimeout;
+        Options.UpdateImportedRepositories = defaults.UpdateImportedRepositories;
+        Options.ProjectMode = defaults.ProjectMode;
+#pragma warning disable CS0618
+        Options.RunProjectsAsContainers = defaults.RunProjectsAsContainers;
+#pragma warning restore CS0618
+        Options.PublishImages = defaults.PublishImages;
+        Options.Modules.Clear();
     }
 
     internal void ValidateConfiguredModules()
