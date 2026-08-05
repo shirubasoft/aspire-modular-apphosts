@@ -16,6 +16,14 @@ From the repository root, one command restores pinned tools and dependencies, ve
 ./build.ps1
 ```
 
+Release automation runs the same validation path with an explicit package version:
+
+```bash
+./build.sh --package-version 1.2.3
+# Windows:
+./build.ps1 -PackageVersion 1.2.3
+```
+
 Include the real Docker Compose deployment lifecycle when Docker or Podman is running:
 
 ```bash

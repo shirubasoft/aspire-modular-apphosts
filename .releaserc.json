@@ -20,8 +20,8 @@
       "@semantic-release/exec",
       {
         "verifyConditionsCmd": "if [ -z \"$NUGET_API_KEY\" ]; then echo \"NUGET_API_KEY is required.\"; exit 1; fi",
-        "prepareCmd": "dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj --configuration Release --no-build --no-restore --output artifacts -p:PackageVersion=${nextRelease.version} && dotnet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj --configuration Release --no-build --no-restore --output artifacts -p:PackageVersion=${nextRelease.version}",
-        "publishCmd": "dotnet nuget push \"artifacts/*.nupkg\" --source https://api.nuget.org/v3/index.json --api-key \"$NUGET_API_KEY\" --skip-duplicate"
+        "prepareCmd": "./build.sh --package-version ${nextRelease.version}",
+        "publishCmd": "dotnet nuget push \"artifacts/Shirubasoft.Aspire.ModularAppHosts.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Testing.${nextRelease.version}.nupkg\" --source https://api.nuget.org/v3/index.json --api-key \"$NUGET_API_KEY\" --skip-duplicate"
       }
     ],
     [

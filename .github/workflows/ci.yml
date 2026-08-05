@@ -12,7 +12,13 @@ permissions:
 
 jobs:
   build-test-pack:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     steps:
@@ -24,10 +30,17 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Validate, test, and pack
+      - name: Validate, test, and pack on Linux
+        if: runner.os != 'Windows'
         run: ./build.sh
 
+      - name: Validate, test, and pack on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build.ps1
+
       - name: Upload packages
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
           name: nuget-packages

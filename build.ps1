@@ -1,5 +1,6 @@
 param(
-    [switch] $Containers
+    [switch] $Containers,
+    [string] $PackageVersion
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,10 +17,14 @@ Invoke-DotNet restore Aspire.ModularAppHosts.slnx
 Invoke-DotNet format Aspire.ModularAppHosts.slnx --verify-no-changes --no-restore
 Invoke-DotNet build Aspire.ModularAppHosts.slnx --configuration Release --no-restore
 Invoke-DotNet test Aspire.ModularAppHosts.slnx --configuration Release --no-build --no-restore
+$packageVersionArguments = @()
+if (-not [string]::IsNullOrWhiteSpace($PackageVersion)) {
+    $packageVersionArguments += "-p:PackageVersion=$PackageVersion"
+}
 Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj `
-    --configuration Release --no-build --no-restore --output artifacts
+    --configuration Release --no-build --no-restore --output artifacts @packageVersionArguments
 Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj `
-    --configuration Release --no-build --no-restore --output artifacts
+    --configuration Release --no-build --no-restore --output artifacts @packageVersionArguments
 
 if ($Containers) {
     $previousMode = $env:ESHOP_E2E_MODE
