@@ -781,7 +781,7 @@ public static partial class DistributedApplicationModuleExtensions
         var configuredSha256 = GetConfiguredValue(sha256);
         if (configuredSha256 is not null)
         {
-            container.WithImageSHA256(configuredSha256);
+            container.WithImageSHA256(configuredSha256["sha256:".Length..]);
         }
     }
 

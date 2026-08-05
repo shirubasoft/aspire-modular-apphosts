@@ -304,7 +304,7 @@ public sealed class ModulePreviewManifestTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal("ghcr.io/acme/orders", image.Image);
-        Assert.Equal(ImageSha256, image.SHA256);
+        Assert.Equal(ImageSha256["sha256:".Length..], image.SHA256);
         Assert.DoesNotContain(builder.Resources, resource => resource is ParameterResource);
         Assert.DoesNotContain(builder.Resources, resource => resource is ModuleRepositoryInstallerResource);
     }
@@ -330,7 +330,7 @@ public sealed class ModulePreviewManifestTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal("ghcr.io/acme/orders", image.Image);
-        Assert.Equal(ImageSha256, image.SHA256);
+        Assert.Equal(ImageSha256["sha256:".Length..], image.SHA256);
         Assert.DoesNotContain(builder.Resources, resource => resource is ModuleRepositoryInstallerResource);
     }
 

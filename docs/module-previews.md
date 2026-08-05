@@ -241,7 +241,9 @@ await builder.Build().RunAsync();
 
 The resolution makes image overrides authoritative. Projects run in container mode, module-declared
 image publishing is disabled, and Aspire receives the repository plus native `WithImageSHA256(...)`
-pin. A module whose resources are all satisfied by immutable container images and whose factories do
+pin. The protocol keeps the canonical `sha256:<hex>` form; the adapter passes only `<hex>` to Aspire,
+which adds the algorithm prefix when it constructs the image reference. A module whose resources are
+all satisfied by immutable container images and whose factories do
 not require repository content can start without a Repo C runtime checkout.
 
 The resolution also records the canonical request hash, Repo D repository/commit, selected module
