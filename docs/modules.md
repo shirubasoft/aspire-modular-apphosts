@@ -301,11 +301,12 @@ When an imported module needs repository content, the library clones or fast-for
 
 Pin a branch, tag, or commit with `WithRepository(repository, revision)` or `Modules:<name>:RepositoryRevision`. A pinned clean checkout fetches that revision, checks out the resolved commit in detached-head mode, and updates submodules. A dirty checkout must already be at the requested commit. Existing managed and sibling checkouts must have an `origin` matching the configured repository; a mismatched or missing origin fails instead of running unrelated source.
 
-For cross-repository feature testing, prefer a versioned module preview manifest over passing a
-branch name directly. `ApplyModulePreviewManifestAsync` validates exact producer commits and applies
-their repository selections before imports are materialized. The
-[cross-repository preview guide](module-previews.md) covers the .NET tool, GitHub workflow dispatch,
-producer-owned preview contracts, dependency pins, and the runnable producer/consumer fixture.
+For cross-repository feature testing, prefer a versioned module preview request over passing a
+branch name directly. The consumer-owned policy verifies requested repositories, contract packages,
+and immutable image digests; `ApplyModulePreviewResolutionAsync` then applies the trusted result
+before imports are materialized. A complete image resolution uses Aspire-native SHA-256 pins and can
+avoid a producer runtime checkout. The [cross-repository preview guide](module-previews.md) covers the
+.NET tool, GitHub workflow dispatch, source fallbacks, dependency pins, and the runnable fixture.
 
 Managed repositories default to:
 

@@ -123,8 +123,8 @@ public static partial class DistributedApplicationModuleExtensions
                 gitExecutablePath,
                 registry.Options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false);
-            ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
             registry.ValidatePreviewSelection(module, builder.AppHostDirectory);
+            ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
             registry.AddModule(module);
             return module;
         }, cancellationToken).ConfigureAwait(false);
@@ -255,14 +255,17 @@ public static partial class DistributedApplicationModuleExtensions
         var repositoryRevision = GetConfiguredValue(previewSelection?.Commit) ??
             GetConfiguredValue(moduleOptions?.RepositoryRevision) ??
             module.RepositoryRevision;
-        var requiresRepository = module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent;
         var factoryRequiresRepository = module.RequiresRepositoryContent &&
             module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
+        var materializeWithoutRepository = registry.CanMaterializePreviewWithoutRepository(module);
+        var requiresRepository = !materializeWithoutRepository &&
+            (module.ProjectDefinitions.Count > 0 || module.RequiresRepositoryContent);
         ValidateModuleConfiguration(module, moduleOptions);
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
-        var repositoryResolution = autoCloneRepository &&
+        var repositoryResolution = !materializeWithoutRepository &&
+            autoCloneRepository &&
             (requiresRepository || !string.IsNullOrWhiteSpace(repository))
             ? await ModuleRepositoryDiscovery.ResolveAsync(
                 builder.AppHostDirectory,
@@ -282,7 +285,7 @@ public static partial class DistributedApplicationModuleExtensions
                 $"'{repositoryConfigurationKey}' or call WithRepository() in the module definition.");
         }
 
-        var existingSameWorktreeRepository = imported
+        var existingSameWorktreeRepository = imported && !materializeWithoutRepository
             ? await TryGetExistingSameWorktreeRepositoryAsync(
                 builder.AppHostDirectory,
                 repository,
@@ -300,20 +303,24 @@ public static partial class DistributedApplicationModuleExtensions
                 repository,
                 repositoryConfigurationKey)
             : null;
-        var repositoryPath = repositoryResolution?.RepositoryPath ??
-            existingSameWorktreeRepository ??
-            (imported &&
-                (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
-                ? GetImportedRepositoryPath(builder, options, repository, module.Name)
-                : GetLocalRepositoryPath(builder, module, repository));
-        var repositorySynchronizationKey =
-            await RepositoryInspector.TryFindRepositoryRootAsync(
-                repositoryPath,
-                GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                options.RepositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false) ??
-            Path.GetFullPath(repositoryPath);
+        var repositoryPath = materializeWithoutRepository
+            ? builder.AppHostDirectory
+            : repositoryResolution?.RepositoryPath ??
+                existingSameWorktreeRepository ??
+                (imported &&
+                    (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
+                    ? GetImportedRepositoryPath(builder, options, repository, module.Name)
+                    : GetLocalRepositoryPath(builder, module, repository));
+        var repositorySynchronizationKey = materializeWithoutRepository
+            ? Path.GetFullPath(repositoryPath)
+            : await RepositoryInspector.TryFindRepositoryRootAsync(
+                    repositoryPath,
+                    GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                    options.RepositoryCommandTimeout,
+                    cancellationToken).ConfigureAwait(false) ??
+                Path.GetFullPath(repositoryPath);
         var updateRepository =
+            !materializeWithoutRepository &&
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             existingSameWorktreeRepository is null;
@@ -322,6 +329,7 @@ public static partial class DistributedApplicationModuleExtensions
             repositoryRevision);
 
         var synchronizationRequired =
+            !materializeWithoutRepository &&
             ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
              (builder.ExecutionContext.IsRunMode && imported) ||
              (imported && factoryRequiresRepository)) &&
@@ -358,38 +366,45 @@ public static partial class DistributedApplicationModuleExtensions
                     progress)).ConfigureAwait(false);
         }
 
-        var repositoryDirty = await RepositoryInspector.IsDirtyAsync(
-            repositoryPath,
-            GetConfiguredValue(options.GitExecutablePath) ?? "git",
-            options.RepositoryCommandTimeout,
-            requireSuccessfulInspection: true,
-            cancellationToken).ConfigureAwait(false);
-        var defaultImageTag = await GetDefaultImageTagAsync(
-            builder,
-            repositoryPath,
-            options,
-            cancellationToken).ConfigureAwait(false);
+        var repositoryDirty = !materializeWithoutRepository &&
+            await RepositoryInspector.IsDirtyAsync(
+                repositoryPath,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout,
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false);
+        var defaultImageTag = materializeWithoutRepository
+            ? "latest"
+            : await GetDefaultImageTagAsync(
+                builder,
+                repositoryPath,
+                options,
+                cancellationToken).ConfigureAwait(false);
 
         ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
-        if (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported)
+        if (!materializeWithoutRepository &&
+            (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported))
         {
             ValidateProjectFiles(module, repositoryPath);
         }
 
-        ConfigureRepositorySynchronization(
-            builder,
-            registry,
-            module,
-            repositoryPath,
-            repositorySynchronizationKey,
-            repositorySynchronizationPolicy,
-            repositoryParameter is null ? repository : null,
-            repositoryParameter,
-            imported,
-            updateRepository,
-            repositoryRevision,
-            GetConfiguredValue(options.GitExecutablePath) ?? "git",
-            options.RepositoryCommandTimeout);
+        if (!materializeWithoutRepository)
+        {
+            ConfigureRepositorySynchronization(
+                builder,
+                registry,
+                module,
+                repositoryPath,
+                repositorySynchronizationKey,
+                repositorySynchronizationPolicy,
+                repositoryParameter is null ? repository : null,
+                repositoryParameter,
+                imported,
+                updateRepository,
+                repositoryRevision,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout);
+        }
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -517,6 +532,7 @@ public static partial class DistributedApplicationModuleExtensions
 
         export.ConfigureContainer?.Invoke(container);
 
+        ApplyImageSHA256(container, projectOptions?.ImageSHA256);
         ApplyImagePullPolicy(
             container,
             projectOptions?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
@@ -585,6 +601,7 @@ public static partial class DistributedApplicationModuleExtensions
 
         definition.ConfigureContainer?.Invoke(container);
 
+        ApplyImageSHA256(container, containerOptions?.ImageSHA256);
         ApplyImagePullPolicy(
             container,
             containerOptions?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
@@ -754,6 +771,17 @@ public static partial class DistributedApplicationModuleExtensions
         if (policy is { } configuredPolicy)
         {
             container.WithImagePullPolicy(configuredPolicy);
+        }
+    }
+
+    private static void ApplyImageSHA256(
+        IResourceBuilder<ContainerResource> container,
+        string? sha256)
+    {
+        var configuredSha256 = GetConfiguredValue(sha256);
+        if (configuredSha256 is not null)
+        {
+            container.WithImageSHA256(configuredSha256);
         }
     }
 
@@ -1237,6 +1265,7 @@ public static partial class DistributedApplicationModuleExtensions
             foreach (var (projectName, project) in module.Projects)
             {
                 var projectKey = $"{moduleKey}:{nameof(module.Projects)}:{projectName}";
+                ValidateImageSHA256(project.ImageSHA256, $"{projectKey}:{nameof(project.ImageSHA256)}");
                 if (project.ProjectMode is { } projectMode)
                 {
                     ValidateEnum(projectMode, $"{projectKey}:{nameof(project.ProjectMode)}");
@@ -1250,13 +1279,32 @@ public static partial class DistributedApplicationModuleExtensions
 
             foreach (var (containerName, container) in module.Containers)
             {
+                var containerKey = $"{moduleKey}:{nameof(module.Containers)}:{containerName}";
+                ValidateImageSHA256(container.ImageSHA256, $"{containerKey}:{nameof(container.ImageSHA256)}");
                 if (container.ImagePullPolicy is { } containerPullPolicy)
                 {
                     ValidateEnum(
                         containerPullPolicy,
-                        $"{moduleKey}:{nameof(module.Containers)}:{containerName}:{nameof(container.ImagePullPolicy)}");
+                        $"{containerKey}:{nameof(container.ImagePullPolicy)}");
                 }
             }
+        }
+    }
+
+    private static void ValidateImageSHA256(string? sha256, string configurationKey)
+    {
+        if (string.IsNullOrWhiteSpace(sha256))
+        {
+            return;
+        }
+
+        try
+        {
+            ModulePreviewValidation.ValidateImageSha256(sha256, configurationKey);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidOperationException(exception.Message, exception);
         }
     }
 

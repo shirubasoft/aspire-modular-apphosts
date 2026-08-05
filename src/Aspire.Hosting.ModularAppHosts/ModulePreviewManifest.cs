@@ -21,6 +21,14 @@ public sealed class ModulePreviewManifest
     [JsonPropertyOrder(2)]
     public IList<ModulePreviewSelection> Modules { get; } = [];
 
+    /// <summary>Gets the immutable contract packages offered by the producer.</summary>
+    [JsonPropertyOrder(3)]
+    public IList<ModulePreviewContractRequest> Contracts { get; } = [];
+
+    /// <summary>Gets the immutable container images offered by the producer.</summary>
+    [JsonPropertyOrder(4)]
+    public IList<ModulePreviewImageArtifact> Images { get; } = [];
+
     /// <summary>Reads and validates a preview manifest from a file.</summary>
     public static async Task<ModulePreviewManifest> LoadAsync(
         string path,
@@ -143,6 +151,39 @@ public sealed class ModulePreviewManifest
                     $"The module preview manifest contains duplicate module name '{module.Name}'.");
             }
         }
+
+        var contractModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var contract in Contracts)
+        {
+            if (contract is null)
+            {
+                throw new InvalidDataException("The module preview manifest cannot contain a null contract artifact.");
+            }
+
+            contract.Validate(names);
+            if (!contractModules.Add(contract.Module))
+            {
+                throw new InvalidDataException(
+                    $"The module preview manifest contains duplicate contract artifacts for module '{contract.Module}'.");
+            }
+        }
+
+        var imageResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var image in Images)
+        {
+            if (image is null)
+            {
+                throw new InvalidDataException("The module preview manifest cannot contain a null image artifact.");
+            }
+
+            image.Validate(names);
+            if (!imageResources.Add($"{image.Module}\0{image.Resource}"))
+            {
+                throw new InvalidDataException(
+                    $"The module preview manifest contains duplicate image artifacts for resource " +
+                    $"'{image.Resource}' in module '{image.Module}'.");
+            }
+        }
     }
 }
 
@@ -240,6 +281,81 @@ public sealed class ModulePreviewSelection
     }
 }
 
+/// <summary>Requests an exact module contract package without selecting its trusted source.</summary>
+public sealed class ModulePreviewContractRequest
+{
+    /// <summary>Gets or sets the selected module that owns the contract.</summary>
+    [JsonPropertyOrder(0)]
+    public string Module { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the NuGet package identifier.</summary>
+    [JsonPropertyOrder(1)]
+    public string PackageId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the exact NuGet package version.</summary>
+    [JsonPropertyOrder(2)]
+    public string Version { get; set; } = string.Empty;
+
+    internal void Validate(IReadOnlySet<string> selectedModules)
+    {
+        ModulePreviewValidation.ValidateSelectedModule(Module, selectedModules, "Contract request");
+        ModulePreviewValidation.ValidatePackageId(PackageId, $"Contract for module '{Module}'.{nameof(PackageId)}");
+        ModulePreviewValidation.ValidatePackageVersion(Version, $"Contract for module '{Module}'.{nameof(Version)}");
+    }
+}
+
+/// <summary>Identifies the kind of exported module resource replaced by a preview image.</summary>
+public enum ModulePreviewResourceKind
+{
+    /// <summary>An exported project represented by its container image.</summary>
+    Project,
+
+    /// <summary>An exported container resource.</summary>
+    Container
+}
+
+/// <summary>Identifies an immutable OCI image offered by a preview producer or verified by a consumer.</summary>
+public sealed class ModulePreviewImageArtifact
+{
+    /// <summary>Gets or sets the selected module that owns the resource.</summary>
+    [JsonPropertyOrder(0)]
+    public string Module { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the exported resource name before consumer aliases are applied.</summary>
+    [JsonPropertyOrder(1)]
+    public string Resource { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the exported resource kind.</summary>
+    [JsonPropertyOrder(2)]
+    public ModulePreviewResourceKind ResourceKind { get; set; }
+
+    /// <summary>Gets or sets the OCI image repository without a tag or digest.</summary>
+    [JsonPropertyOrder(3)]
+    public string Repository { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the immutable OCI digest in <c>sha256:&lt;64 lowercase hex&gt;</c> form.</summary>
+    [JsonPropertyOrder(4)]
+    public string Sha256 { get; set; } = string.Empty;
+
+    internal void Validate(IReadOnlySet<string> selectedModules)
+    {
+        ModulePreviewValidation.ValidateSelectedModule(Module, selectedModules, "Image artifact");
+        ModulePreviewValidation.ValidateName(Resource, $"Image for module '{Module}'.{nameof(Resource)}");
+        if (!Enum.IsDefined(ResourceKind))
+        {
+            throw new InvalidDataException(
+                $"Image for resource '{Resource}' in module '{Module}' has unsupported resource kind '{ResourceKind}'.");
+        }
+
+        ModulePreviewValidation.ValidateImageRepository(
+            Repository,
+            $"Image for resource '{Resource}' in module '{Module}'.{nameof(Repository)}");
+        ModulePreviewValidation.ValidateImageSha256(
+            Sha256,
+            $"Image for resource '{Resource}' in module '{Module}'.{nameof(Sha256)}");
+    }
+}
+
 internal static class ModulePreviewJson
 {
     public static JsonSerializerOptions SerializerOptions { get; } = new(JsonSerializerDefaults.Web)
@@ -248,7 +364,8 @@ internal static class ModulePreviewJson
         PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate,
         ReadCommentHandling = JsonCommentHandling.Disallow,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        WriteIndented = true
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter<ModulePreviewResourceKind>(JsonNamingPolicy.CamelCase, false) }
     };
 }
 
@@ -298,6 +415,115 @@ internal static class ModulePreviewValidation
             (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl)))
         {
             throw new InvalidDataException($"{location} cannot be empty or contain control characters.");
+        }
+    }
+
+    public static void ValidateName(string value, string location)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > 200 ||
+            value.Any(char.IsControl))
+        {
+            throw new InvalidDataException(
+                $"{location} must be a non-empty value of at most 200 characters without control characters.");
+        }
+    }
+
+    public static void ValidateSelectedModule(
+        string module,
+        IReadOnlySet<string> selectedModules,
+        string artifactKind)
+    {
+        ValidateName(module, $"{artifactKind}.{nameof(ModulePreviewImageArtifact.Module)}");
+        if (!selectedModules.Contains(module))
+        {
+            throw new InvalidDataException(
+                $"{artifactKind} references module '{module}', which is not selected by the preview manifest.");
+        }
+    }
+
+    public static void ValidatePackageId(string packageId, string location)
+    {
+        if (string.IsNullOrWhiteSpace(packageId) ||
+            packageId.Length > 100 ||
+            packageId.Any(character =>
+                !(char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_')))
+        {
+            throw new InvalidDataException(
+                $"{location} must contain only ASCII letters, digits, '.', '-', or '_' and be at most 100 characters.");
+        }
+    }
+
+    public static void ValidatePackageVersion(string version, string location)
+    {
+        if (string.IsNullOrWhiteSpace(version) ||
+            version.Length > 256 ||
+            version.Any(character =>
+                !(char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '+')))
+        {
+            throw new InvalidDataException(
+                $"{location} must be an exact package version containing only ASCII letters, digits, '.', '-', or '+'.");
+        }
+    }
+
+    public static void ValidatePackageSource(string source, string location)
+    {
+        if (string.IsNullOrWhiteSpace(source) ||
+            !Uri.TryCreate(source, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new InvalidDataException(
+                $"{location} must be a credential-free HTTPS package source without a query or fragment.");
+        }
+    }
+
+    public static void ValidateHexSha256(string sha256, string location)
+    {
+        if (sha256.Length != 64 ||
+            sha256.Any(character =>
+                !(character is >= '0' and <= '9' or >= 'a' and <= 'f')))
+        {
+            throw new InvalidDataException($"{location} must be exactly 64 lowercase hexadecimal characters.");
+        }
+    }
+
+    public static void ValidateImageSha256(string sha256, string location)
+    {
+        const string prefix = "sha256:";
+        if (!sha256.StartsWith(prefix, StringComparison.Ordinal) || sha256.Length != prefix.Length + 64)
+        {
+            throw new InvalidDataException(
+                $"{location} must use the form 'sha256:<64 lowercase hexadecimal characters>'.");
+        }
+
+        ValidateHexSha256(sha256[prefix.Length..], location);
+    }
+
+    public static void ValidateImageRepository(string repository, string location)
+    {
+        if (string.IsNullOrWhiteSpace(repository) ||
+            repository.Length > 255 ||
+            repository.Contains("://", StringComparison.Ordinal) ||
+            repository.Contains('@', StringComparison.Ordinal) ||
+            repository[0] == '/' ||
+            repository[^1] == '/' ||
+            repository.Contains("//", StringComparison.Ordinal) ||
+            !repository.Contains('/', StringComparison.Ordinal) ||
+            repository.Any(character =>
+                !(character is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '-' or '_' or '/' or ':')))
+        {
+            throw new InvalidDataException(
+                $"{location} must be a lowercase explicit OCI registry/repository without a tag or digest.");
+        }
+
+        var firstSlash = repository.IndexOf('/', StringComparison.Ordinal);
+        if (repository[(firstSlash + 1)..].Contains(':', StringComparison.Ordinal))
+        {
+            throw new InvalidDataException($"{location} cannot contain an image tag.");
         }
     }
 

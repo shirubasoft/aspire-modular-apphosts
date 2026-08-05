@@ -84,12 +84,15 @@ Module image build commands can follow Aspire's Docker or Podman selection by aw
 For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered without a clone; a missing direct sibling is cloned with GitHub CLI. Published module images default to a branch-and-commit tag and add `-dirty` when their source worktree has changes. Repositories can be pinned to a branch, tag, or commit, and existing checkouts are verified against the configured origin. The module guide documents the layout, configuration, and validation behavior.
 
 For an ongoing feature branch that must be exercised by another repository's CI, install the local
-.NET tool, export a clean pushed commit as a versioned manifest, and dispatch the consumer's trusted
-workflow:
+.NET tool, produce a request containing the clean pushed commit and any already-built image digests,
+then dispatch the consumer's trusted workflow:
 
 ```bash
 dotnet tool install --global Shirubasoft.Aspire.ModularAppHosts.Tool
-dotnet modular-apphosts preview export --module catalog --output module-preview.json
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --image catalog-api=ghcr.io/example/catalog/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output module-preview.json
 dotnet modular-apphosts preview trigger \
   --manifest module-preview.json \
   --repo example/end-to-end-tests \
@@ -97,10 +100,10 @@ dotnet modular-apphosts preview trigger \
   --ref main
 ```
 
-The manifest carries the full commit rather than using its mutable branch name as the runnable
-identity. Consumers apply it before `ImportModuleAsync`; workflows that change the resource graph
-also pack the producer-owned contract from that exact commit. See the cross-repository preview guide
-for the complete security model and runnable two-repository example.
+The request carries full commits and OCI digests rather than mutable branch names and image tags.
+The consumer tool checks its own policy, materializes contract packages, and writes a trusted
+resolution for `ApplyModulePreviewResolutionAsync`. See the cross-repository preview guide for the
+complete security model, source-fallback boundary, and runnable two-repository example.
 
 Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
 

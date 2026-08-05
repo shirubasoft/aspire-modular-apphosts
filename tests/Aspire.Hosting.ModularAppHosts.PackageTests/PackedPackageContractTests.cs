@@ -104,7 +104,10 @@ public sealed class PackedPackageContractTests
             .ExecuteBufferedAsync(TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess, result.StandardError);
+        Assert.Contains("dotnet modular-apphosts preview produce", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("dotnet modular-apphosts preview export", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("dotnet modular-apphosts preview verify", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("dotnet modular-apphosts preview materialize", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("dotnet modular-apphosts preview trigger", result.StandardOutput, StringComparison.Ordinal);
     }
 

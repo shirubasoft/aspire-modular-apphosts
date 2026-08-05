@@ -7,7 +7,7 @@ using CliCommand = global::CliWrap.Cli;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
-internal static class PreviewTool
+internal static partial class PreviewTool
 {
     private static readonly JsonSerializerOptions CompactJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -18,13 +18,22 @@ internal static class PreviewTool
         Aspire Modular AppHosts preview tool
 
         Usage:
+          dotnet modular-apphosts preview produce --descriptor <path> --output <path>
+              [--image <resource>=<repository>@<sha256-digest>]...
+              [--pin <name>=<repository-url>@<full-commit>]...
           dotnet modular-apphosts preview export --module <name> --output <path>
               [--pin <name>=<repository-url>@<full-commit>]...
+          dotnet modular-apphosts preview verify --manifest <path> --policy <path>
+              [--output <path>]
+          dotnet modular-apphosts preview materialize --manifest <path> --policy <path>
+              --work-directory <path> --package-feed <path> --resolution <path>
+              --consumer-repository <url> --consumer-commit <full-commit>
+              [--github-env <path>] [--property <name>=<value>]...
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]...
 
-        Export requires a clean Git worktree on an attached branch whose HEAD is pushed to origin.
+        Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         --dependency is accepted as an alias for --pin.
         """;
 
@@ -42,14 +51,21 @@ internal static class PreviewTool
 
             if (arguments.Count < 2 || !string.Equals(arguments[0], "preview", StringComparison.Ordinal))
             {
-                throw new PreviewToolException("Expected the 'preview export' or 'preview trigger' command.");
+                throw new PreviewToolException(
+                    "Expected the 'preview produce', 'preview export', 'preview verify', " +
+                    "'preview materialize', or 'preview trigger' command.");
             }
 
             return arguments[1] switch
             {
+                "produce" => await ProduceAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "export" => await ExportAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "verify" => await VerifyAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "materialize" => await MaterializeAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "trigger" => await TriggerAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
-                _ => throw new PreviewToolException("Expected the 'preview export' or 'preview trigger' command.")
+                _ => throw new PreviewToolException(
+                    "Expected the 'preview produce', 'preview export', 'preview verify', " +
+                    "'preview materialize', or 'preview trigger' command.")
             };
         }
         catch (Exception exception) when (

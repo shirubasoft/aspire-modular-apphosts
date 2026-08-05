@@ -1,7 +1,37 @@
 #nullable enable
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.set -> void
 Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Commit.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Commit.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.ModulePreviewConsumerIdentity() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Module.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Module.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.ModulePreviewContractRequest() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.PackageId.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.PackageId.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Version.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Version.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Module.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Module.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.ModulePreviewImageArtifact() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Resource.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Resource.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.ResourceKind.get -> Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.ResourceKind.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Sha256.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Sha256.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewManifest
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Contracts.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest!>!
+Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Images.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact!>!
 Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.ModulePreviewManifest() -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Modules.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewSelection!>!
 Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.Producer.get -> Aspire.Hosting.ModularAppHosts.ModulePreviewProducer!
@@ -24,6 +54,36 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Dirty.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.ModulePreviewProducer() -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Repository.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewProducer.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Consumer.get -> Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Consumer.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Contracts.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract!>!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Images.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact!>!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.ModulePreviewResolution() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Modules.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewSelection!>!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.RequestSha256.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.RequestSha256.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.SchemaVersion.get -> int
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.SchemaVersion.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Validate() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Module.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Module.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.ModulePreviewResolvedContract() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.PackageId.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.PackageId.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.PackagePath.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.PackagePath.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Sha256.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Sha256.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Source.get -> string?
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Source.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Version.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Version.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind
+Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind.Container = 1 -> Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind
+Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind.Project = 0 -> Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseCommit.get -> string?
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.BaseCommit.set -> void
@@ -39,8 +99,13 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Name.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewSelection.Repository.set -> void
 const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 1 -> int
+const Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.CurrentSchemaVersion = 1 -> int
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifest(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.ModulePreviewManifest! manifest) -> Aspire.Hosting.IDistributedApplicationBuilder!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifestAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! manifestPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewResolution(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.ModulePreviewResolution! resolution) -> Aspire.Hosting.IDistributedApplicationBuilder!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewResolutionAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! resolutionPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewManifest!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewManifest!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewResolution!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewResolution!>!

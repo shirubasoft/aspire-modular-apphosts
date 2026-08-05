@@ -23,6 +23,8 @@
     <!-- Share the wire contract without pulling the complete Aspire hosting runtime into the tool package. -->
     <Compile Include="../Aspire.Hosting.ModularAppHosts/ModulePreviewManifest.cs"
              Link="ModulePreviewManifest.cs" />
+    <Compile Include="../Aspire.Hosting.ModularAppHosts/ModulePreviewResolution.cs"
+             Link="ModulePreviewResolution.cs" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

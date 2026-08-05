@@ -38,6 +38,8 @@ internal sealed class DistributedApplicationModule(
 
     internal bool RequiresRepositoryContent { get; set; }
 
+    internal bool ExplicitlyRequiresRepositoryContent { get; set; }
+
     internal void AddProject(DistributedApplicationModuleProject project)
     {
         ThrowIfNameIsAlreadyUsed(project.Name);

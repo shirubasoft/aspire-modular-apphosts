@@ -66,6 +66,7 @@ internal sealed class DistributedApplicationModuleBuilder(
     public IDistributedApplicationModuleBuilder RequiresRepository()
     {
         module.RequiresRepositoryContent = true;
+        module.ExplicitlyRequiresRepositoryContent = true;
         return this;
     }
 
