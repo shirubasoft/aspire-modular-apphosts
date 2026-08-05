@@ -14,6 +14,12 @@ public sealed class PackedPackageContractTests
     private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
     private static PackageArtifacts? _packageArtifacts;
+    private readonly PackageTestWorkspace _workspace;
+
+    public PackedPackageContractTests(PackageTestWorkspace workspace)
+    {
+        _workspace = workspace;
+    }
 
     [Fact]
     public async Task Core_package_excludes_testing_and_Docker_dependencies()
@@ -153,12 +159,10 @@ public sealed class PackedPackageContractTests
     public async Task Module_item_template_scaffolds_a_named_versioned_contract()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
-        var workingDirectory = Path.Combine(
-            Path.GetTempPath(),
-            $"aspire-module-template-tests-{Guid.NewGuid():N}");
+        var workingDirectory = _workspace.CreateDirectory("template");
         var outputPath = Path.Combine(workingDirectory, "output");
+        var defaultNamespaceOutputPath = Path.Combine(workingDirectory, "default-output");
         var hivePath = Path.Combine(workingDirectory, "hive");
-        Directory.CreateDirectory(workingDirectory);
 
         await RunDotNetAsync(
             packages.RepositoryRoot,
@@ -177,23 +181,44 @@ public sealed class PackedPackageContractTests
             "InventoryModule",
             "--moduleName",
             "inventory",
+            "--namespace",
+            "Inventory.Modules",
             "--output",
             outputPath,
+            "--debug:custom-hive",
+            hivePath);
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "new",
+            "aspire-module",
+            "--name",
+            "DefaultModule",
+            "--moduleName",
+            "defaults",
+            "--output",
+            defaultNamespaceOutputPath,
             "--debug:custom-hive",
             hivePath);
 
         var sourcePath = Path.Combine(outputPath, "InventoryModule.cs");
         Assert.True(File.Exists(sourcePath));
         var source = await File.ReadAllTextAsync(sourcePath, TestContext.Current.CancellationToken);
+        Assert.Contains("namespace Inventory.Modules;", source, StringComparison.Ordinal);
         Assert.Contains("partial class InventoryModule", source, StringComparison.Ordinal);
         Assert.Contains("public const string Name = \"inventory\";", source, StringComparison.Ordinal);
         Assert.Contains("Version = \"1\"", source, StringComparison.Ordinal);
         Assert.Contains("module.AddContainer(ApiResourceName, \"nginx\", \"alpine\")", source, StringComparison.Ordinal);
         Assert.Contains("targetPort: 80", source, StringComparison.Ordinal);
         Assert.DoesNotContain("catalog-module-name", source, StringComparison.Ordinal);
+
+        var defaultNamespaceSource = await File.ReadAllTextAsync(
+            Path.Combine(defaultNamespaceOutputPath, "DefaultModule.cs"),
+            TestContext.Current.CancellationToken);
+        Assert.Contains("namespace Aspire.Modules;", defaultNamespaceSource, StringComparison.Ordinal);
     }
 
-    private static async Task<PackageArtifacts> GetPackagesAsync(CancellationToken cancellationToken)
+    private async Task<PackageArtifacts> GetPackagesAsync(CancellationToken cancellationToken)
     {
         if (_packageArtifacts is not null)
         {
@@ -209,10 +234,7 @@ public sealed class PackedPackageContractTests
             }
 
             var repositoryRoot = FindRepositoryRoot();
-            var outputPath = Path.Combine(
-                Path.GetTempPath(),
-                $"aspire-modular-package-tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(outputPath);
+            var outputPath = _workspace.CreateDirectory("packages");
             var version = $"0.0.0-package-tests-{Guid.NewGuid():N}";
 
             await RunDotNetAsync(

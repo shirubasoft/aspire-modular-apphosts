@@ -8,7 +8,7 @@ To scaffold the first contract into an existing project that references the core
 
 ```bash
 dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
-dotnet new aspire-module --name OrdersModule --moduleName orders
+dotnet new aspire-module --name OrdersModule --moduleName orders --namespace Orders.Modules
 ```
 
 The generated contract starts at version `1` with one container-backed API. Replace that example resource graph with the resources owned by the module.
@@ -24,6 +24,8 @@ Keep the definition in a project referenced by every participating AppHost:
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
+
+namespace Orders.Modules;
 
 [GenerateDistributedApplicationModule(Name, Version = "1")]
 public static partial class OrdersModule

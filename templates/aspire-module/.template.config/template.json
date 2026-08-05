@@ -11,6 +11,13 @@
   "sourceName": "CatalogModule",
   "preferNameDirectory": false,
   "symbols": {
+    "namespace": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "Aspire.Modules",
+      "description": "Namespace for the generated module contract.",
+      "replaces": "AspireModuleNamespace"
+    },
     "moduleName": {
       "type": "parameter",
       "datatype": "text",

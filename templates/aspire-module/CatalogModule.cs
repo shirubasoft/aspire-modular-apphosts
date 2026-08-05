@@ -1,6 +1,8 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ModularAppHosts;
 
+namespace AspireModuleNamespace;
+
 [GenerateDistributedApplicationModule(Name, Version = "1")]
 public static partial class CatalogModule
 {

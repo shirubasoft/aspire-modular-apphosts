@@ -31,7 +31,7 @@ Install the item-template package and scaffold a contract into an existing proje
 
 ```bash
 dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
-dotnet new aspire-module --name CatalogModule --moduleName catalog
+dotnet new aspire-module --name CatalogModule --moduleName catalog --namespace Catalog.Modules
 ```
 
 Declare a module in a shared contract. The generator creates typed properties for its resources:
@@ -39,6 +39,8 @@ Declare a module in a shared contract. The generator creates typed properties fo
 ```csharp
 using Aspire.Hosting;
 using Aspire.Hosting.ModularAppHosts;
+
+namespace Catalog.Modules;
 
 [GenerateDistributedApplicationModule(Name, Version = "1")]
 public static partial class CatalogModule
