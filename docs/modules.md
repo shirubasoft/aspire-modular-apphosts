@@ -320,6 +320,39 @@ In run mode, a one-shot installer invokes the configured executable before the c
 
 `ImageRegistry` explicitly separates a registry host such as `ghcr.io` from an `ImageName` repository path such as `example/orders-api`. Leave it unset for local or otherwise unqualified images. Publish arguments can use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
 
+### Push module images
+
+In publish mode, every project, declared container, or factory-created container that has an image publisher and a registry contributes a `push-<resource>` step to Aspire's `push` pipeline. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
+
+Project exports retain the `ImageRegistry` from `ModuleContainerExportOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
+
+```csharp
+#pragma warning disable ASPIRECOMPUTE003, ASPIREPIPELINES003
+var registry = builder.AddContainerRegistry("ghcr", "ghcr.io", "example/orders");
+
+module.AddProject("orders-api", projectPath)
+    .ExportAsContainer(
+        new ModuleContainerExportOptions(
+            "orders-api",
+            "dotnet",
+            "publish",
+            "-t:PublishContainer"),
+        container => container
+            .WithContainerRegistry(registry)
+            .WithRemoteImageName("api")
+            .WithRemoteImageTag("preview"));
+#pragma warning restore ASPIRECOMPUTE003, ASPIREPIPELINES003
+```
+
+Push every eligible image or scope the operation to effective Aspire resource names by adding positional arguments:
+
+```bash
+aspire do push
+aspire do push orders-api orders-worker
+```
+
+When resource arguments are present, non-selected image push steps are detached from the `push` aggregate, including ordinary Aspire project and Dockerfile steps. An unknown name fails with the available image resources instead of silently doing no work. Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
+
 Legacy commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. No shell wrapper is required:
 
 ```csharp
