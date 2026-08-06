@@ -116,6 +116,103 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Explicit_pull_mapping_resolves_a_remote_image_from_a_different_registry()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var container = builder
+            .AddContainer("orders-api", "ghcr.io/api", "1-0")
+            .WithImagePullMapping("mycustomregistry.io/images:api-1-0")
+            .Resource;
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("mycustomregistry.io/images:api-1-0", references.RemoteImage);
+        Assert.Equal("ghcr.io/api:1-0", references.LocalImage);
+    }
+
+    [Fact]
+    public async Task Explicit_pull_mapping_takes_precedence_over_an_Aspire_registry_mapping()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var registry = builder.AddContainerRegistry("registry", "ignored.example.test", "ignored");
+        var container = builder
+            .AddContainer("orders-api", "ghcr.io/api", "1-0")
+            .WithContainerRegistry(registry)
+            .WithRemoteImageName("ignored-api")
+            .WithRemoteImageTag("ignored-tag")
+            .WithImagePullMapping("source.example.test/images:api-1-0")
+            .Resource;
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("source.example.test/images:api-1-0", references.RemoteImage);
+        Assert.Equal("ghcr.io/api:1-0", references.LocalImage);
+    }
+
+    [Fact]
+    public async Task Mapping_only_declared_container_contributes_a_pull_step_but_no_push_step()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("orders-api", "orders-api", "1-0")
+                .WithImagePullMapping("source.example.test/images:api-1-0");
+        });
+
+        await builder.AddAsync(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Single(await CreatePullStepsAsync(container));
+        Assert.DoesNotContain(
+            await CreatePipelineStepsAsync(container),
+            step => step.Tags.Contains(WellKnownPipelineTags.PushContainerImage));
+    }
+
+    [Fact]
+    public void A_later_explicit_pull_mapping_replaces_the_previous_mapping()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var container = builder
+            .AddContainer("orders-api", "orders-api", "1-0")
+            .WithImagePullMapping("first.example.test/images:api-1-0")
+            .WithImagePullMapping("second.example.test/images:api-1-0")
+            .Resource;
+
+        var mapping = Assert.Single(container.Annotations.OfType<ModuleImagePullMappingAnnotation>());
+        Assert.Equal("second.example.test/images:api-1-0", mapping.RemoteImageReference);
+    }
+
+    [Fact]
+    public async Task Explicit_pull_mapping_rejects_a_digest_pinned_local_image()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var container = builder
+            .AddContainer("orders-api", "orders-api", "1-0")
+            .WithImageRegistry("ghcr.io")
+            .WithImageSHA256(new string('a', 64))
+            .WithImagePullMapping("source.example.test/images:api-1-0");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleImagePullPipeline.ResolveImageReferencesAsync(
+                container.Resource,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("digest-pinned", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("WithImagePullMapping", exception.Message, StringComparison.Ordinal);
+
+        ModuleImagePullPipeline.AddPullStep(container);
+        var pipelineException = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreatePullStepsAsync(container.Resource));
+        Assert.Contains("digest-pinned", pipelineException.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Explicit_image_registry_uses_the_resource_image_as_remote_and_local_reference()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -196,6 +293,11 @@ public sealed class ModuleImagePullPipelineTests
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("container image reference", exception.Message, StringComparison.Ordinal);
+
+        var builder = DistributedApplication.CreateBuilder();
+        var container = builder.AddResource(resource);
+        ModuleImagePullPipeline.AddPullStep(container);
+        Assert.Empty(await CreatePullStepsAsync(resource));
     }
 
     [Fact]
@@ -338,6 +440,13 @@ public sealed class ModuleImagePullPipelineTests
 
     private static async Task<IReadOnlyList<PipelineStep>> CreatePullStepsAsync(IResource resource)
     {
+        return (await CreatePipelineStepsAsync(resource))
+            .Where(step => step.Tags.Contains(ModuleImagePullPipeline.PullContainerImageTag))
+            .ToArray();
+    }
+
+    private static async Task<IReadOnlyList<PipelineStep>> CreatePipelineStepsAsync(IResource resource)
+    {
         var steps = new List<PipelineStep>();
         foreach (var annotation in resource.Annotations.OfType<PipelineStepAnnotation>())
         {
@@ -348,9 +457,7 @@ public sealed class ModuleImagePullPipelineTests
             }));
         }
 
-        return steps
-            .Where(step => step.Tags.Contains(ModuleImagePullPipeline.PullContainerImageTag))
-            .ToArray();
+        return steps;
     }
 
     private static IDistributedApplicationBuilder CreatePublishBuilder(string projectDirectory)

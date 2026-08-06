@@ -85,9 +85,10 @@ The dashboard graph shows `Reference` and `WaitFor` relationships from `dependen
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. Each test first scopes the operation to the exported
+and a factory-created container publisher. The pull fixture also maps an image from one temporary
+registry to a local reference in a second registry. Each test first scopes the operation to the exported
 project and verifies the other images are untouched, then operates on every image and verifies all
-three results. Run `bash samples/ImagePushE2E/test-image-push.sh` or
+results. Run `bash samples/ImagePushE2E/test-image-push.sh` or
 `bash samples/ImagePushE2E/test-image-pull.sh`; set `ASPIRE_CONTAINER_RUNTIME=podman` when Podman
 should be used instead of Docker.
 

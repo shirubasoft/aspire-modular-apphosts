@@ -355,7 +355,16 @@ When resource arguments are present, non-selected image push steps are detached 
 
 ### Pull module images
 
-The same registry-backed modular project exports, declared container publishers, and factory-created container publishers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource.
+The same registry-backed modular project exports, declared containers, and factory-created containers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource.
+
+Use `WithImagePullMapping` when the pull source must be declared independently of the resource image. The pipeline pulls the supplied complete remote reference and tags it as the resource's effective local image, even when the two references use different registries:
+
+```csharp
+module.AddContainer("api", "ghcr.io/api", "1-0")
+    .WithImagePullMapping("mycustomregistry.io/images:api-1-0");
+```
+
+In this example, `aspire do pull api` executes `pull mycustomregistry.io/images:api-1-0` followed by `tag mycustomregistry.io/images:api-1-0 ghcr.io/api:1-0`. The explicit mapping takes precedence over `WithContainerRegistry`, remote push-name callbacks, and default registry targets for pull resolution. It is pull-only and does not change the resource's push target or otherwise affect `aspire do push`. Because a digest reference cannot be a tag target, the resource's local image must be tag-based.
 
 Pull every eligible module image or scope the operation to effective Aspire resource names:
 
@@ -364,7 +373,7 @@ aspire do pull
 aspire do pull orders-api orders-worker
 ```
 
-When resource arguments are present, only the selected pull steps run. An unknown name fails with the available image resources. A resource step can also be invoked directly, for example `aspire do pull-orders-api`. Registry authentication is supplied by the selected Docker or Podman runtime in the same way as push authentication.
+When resource arguments are present, only the selected pull steps run. An unknown name fails with the available image resources. A resource step can also be invoked directly, for example `aspire do pull-orders-api`. Registry authentication for every referenced registry is supplied by the selected Docker or Podman runtime in the same way as push authentication.
 
 Legacy commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. No shell wrapper is required:
 

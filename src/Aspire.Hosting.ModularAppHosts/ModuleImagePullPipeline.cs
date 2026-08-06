@@ -147,6 +147,19 @@ internal static class ModuleImagePullPipeline
         }
 
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
+        var mapping = GetPullMapping(resource);
+        if (mapping is not null)
+        {
+            if (image is { SHA256.Length: > 0 })
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{resource.Name}' cannot map a pulled image to its digest-pinned local reference. " +
+                    "Configure a tagged local image when using WithImagePullMapping.");
+            }
+
+            return (mapping.RemoteImageReference, localImage);
+        }
+
         var registry = GetExplicitRegistry(resource);
         if (registry is null && image is { Registry.Length: > 0 })
         {
@@ -192,6 +205,19 @@ internal static class ModuleImagePullPipeline
             return false;
         }
 
+        var mapping = GetPullMapping(resource);
+        if (mapping is not null)
+        {
+            if (image.SHA256 is { Length: > 0 })
+            {
+                throw new InvalidOperationException(
+                    $"Resource '{resource.Name}' cannot map a pulled image to its digest-pinned local reference. " +
+                    "Configure a tagged local image when using WithImagePullMapping.");
+            }
+
+            return true;
+        }
+
         var explicitRegistry = GetExplicitRegistry(resource);
         if (image.SHA256 is { Length: > 0 })
         {
@@ -205,6 +231,9 @@ internal static class ModuleImagePullPipeline
 
         return explicitRegistry is not null || GetDefaultRegistry(resource) is not null;
     }
+
+    private static ModuleImagePullMappingAnnotation? GetPullMapping(IResource resource) =>
+        resource.Annotations.OfType<ModuleImagePullMappingAnnotation>().LastOrDefault();
 
     private static IContainerRegistry? GetExplicitRegistry(IResource resource) =>
         resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().LastOrDefault()?.Registry ??

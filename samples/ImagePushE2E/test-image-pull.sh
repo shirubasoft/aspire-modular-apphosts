@@ -11,11 +11,17 @@ fixture_image="image-pull-fixture:$image_tag"
 project_image="image-push-project:$image_tag"
 registry_container_id=""
 registry_endpoint=""
+retag_registry_container_id=""
+retag_registry_endpoint=""
 container_registries_configuration=""
 
 cleanup() {
     if [[ -n "$registry_container_id" ]]; then
         "$container_runtime" rm --force "$registry_container_id" >/dev/null 2>&1 || true
+    fi
+
+    if [[ -n "$retag_registry_container_id" ]]; then
+        "$container_runtime" rm --force "$retag_registry_container_id" >/dev/null 2>&1 || true
     fi
 
     "$container_runtime" image rm --force \
@@ -24,6 +30,8 @@ cleanup() {
         "${registry_endpoint:+$registry_endpoint/image-push/project:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-pull/source:$image_tag}" \
+        "${retag_registry_endpoint:+$retag_registry_endpoint/image-pull/local:$image_tag}" \
         >/dev/null 2>&1 || true
 
     if [[ -n "$container_registries_configuration" ]]; then
@@ -42,9 +50,21 @@ registry_binding="$("$container_runtime" port "$registry_container_id" 5000/tcp 
 registry_port="${registry_binding##*:}"
 registry_endpoint="localhost:$registry_port"
 
+retag_registry_container_id="$(
+    "$container_runtime" run \
+        --detach \
+        --publish 127.0.0.1::5000 \
+        registry:2
+)"
+retag_registry_binding="$("$container_runtime" port "$retag_registry_container_id" 5000/tcp | tail -n 1)"
+retag_registry_port="${retag_registry_binding##*:}"
+retag_registry_endpoint="localhost:$retag_registry_port"
+
 if [[ "$container_runtime" == *podman* ]]; then
     container_registries_configuration="$(mktemp)"
-    printf '[[registry]]\nlocation="%s"\ninsecure=true\n' "$registry_endpoint" \
+    printf '[[registry]]\nlocation="%s"\ninsecure=true\n\n[[registry]]\nlocation="%s"\ninsecure=true\n' \
+        "$registry_endpoint" \
+        "$retag_registry_endpoint" \
         > "$container_registries_configuration"
     export CONTAINERS_REGISTRIES_CONF="$container_registries_configuration"
 fi
@@ -57,21 +77,34 @@ for _ in {1..40}; do
 done
 curl --fail --silent --output /dev/null "http://$registry_endpoint/v2/"
 
+for _ in {1..40}; do
+    if curl --fail --silent --output /dev/null "http://$retag_registry_endpoint/v2/"; then
+        break
+    fi
+    sleep 0.25
+done
+curl --fail --silent --output /dev/null "http://$retag_registry_endpoint/v2/"
+
 remote_project_image="$registry_endpoint/image-push/project:$image_tag"
 remote_declared_image="$registry_endpoint/image-push/declared:$image_tag"
 remote_factory_image="$registry_endpoint/image-push/factory:$image_tag"
+mapped_remote_image="$registry_endpoint/image-pull/source:$image_tag"
+mapped_local_image="$retag_registry_endpoint/image-pull/local:$image_tag"
 
 "$container_runtime" build --tag "$fixture_image" "$fixture_directory"
 "$container_runtime" tag "$fixture_image" "$remote_project_image"
 "$container_runtime" tag "$fixture_image" "$remote_declared_image"
 "$container_runtime" tag "$fixture_image" "$remote_factory_image"
+"$container_runtime" tag "$fixture_image" "$mapped_remote_image"
 "$container_runtime" push "$remote_project_image"
 "$container_runtime" push "$remote_declared_image"
 "$container_runtime" push "$remote_factory_image"
+"$container_runtime" push "$mapped_remote_image"
 "$container_runtime" image rm --force \
     "$remote_project_image" \
     "$remote_declared_image" \
-    "$remote_factory_image"
+    "$remote_factory_image" \
+    "$mapped_remote_image"
 
 assert_image_present() {
     local image="$1"
@@ -90,6 +123,7 @@ assert_image_absent() {
 }
 
 export ImagePush__RegistryEndpoint="$registry_endpoint"
+export ImagePush__RetagRegistryEndpoint="$retag_registry_endpoint"
 export ASPIRE_CONTAINER_RUNTIME="$container_runtime"
 
 cd "$repository_root"
@@ -100,6 +134,7 @@ dotnet tool run aspire -- do pull image-push-project \
 assert_image_present "$project_image"
 assert_image_absent "$remote_declared_image"
 assert_image_absent "$remote_factory_image"
+assert_image_absent "$mapped_local_image"
 
 dotnet tool run aspire -- do pull \
     --apphost "$apphost_project" \
@@ -108,5 +143,6 @@ dotnet tool run aspire -- do pull \
 assert_image_present "$project_image"
 assert_image_present "$remote_declared_image"
 assert_image_present "$remote_factory_image"
+assert_image_present "$mapped_local_image"
 
-echo "Verified scoped and complete Aspire image pulls from $registry_endpoint."
+echo "Verified scoped and complete Aspire image pulls, including $mapped_remote_image -> $mapped_local_image."

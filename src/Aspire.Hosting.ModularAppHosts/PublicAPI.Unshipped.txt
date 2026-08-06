@@ -1,4 +1,7 @@
 #nullable enable
+Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation
+Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.ModuleImagePullMappingAnnotation(string! remoteImageReference) -> void
+Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.RemoteImageReference.get -> string!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.Configuration.get -> Microsoft.Extensions.Configuration.IConfiguration!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.ConfigurationSection.get -> Microsoft.Extensions.Configuration.IConfigurationSection!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.GetOptions<TOptions>() -> Microsoft.Extensions.Options.IOptions<TOptions!>!
@@ -145,6 +148,8 @@ const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistryP
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRepositoryPlaceholder = "{image-repository}" -> string!
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.GetModuleConfigurationKey(string! moduleName) -> string!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.WithImagePullMapping(this Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainerBuilder! resource, string! remoteImageReference) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainerBuilder!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.WithImagePullMapping<TResource>(this Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource!>! resource, string! remoteImageReference) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifest(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.ModulePreviewManifest! manifest) -> Aspire.Hosting.IDistributedApplicationBuilder!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewManifestAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! manifestPath, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyModulePreviewResolution(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.ModulePreviewResolution! resolution) -> Aspire.Hosting.IDistributedApplicationBuilder!
