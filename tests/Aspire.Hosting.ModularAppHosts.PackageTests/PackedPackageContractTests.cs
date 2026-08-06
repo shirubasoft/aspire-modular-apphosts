@@ -202,7 +202,11 @@ public sealed class PackedPackageContractTests
                     module.AddResource<ContainerResource>(
                         "orders-database",
                         context => context.ApplicationBuilder.AddContainer(context.ResourceName, "database"),
-                        new ModuleContainerExportOptions("orders-database", "dotnet", "publish"));
+                        new ModuleContainerExportOptions("orders-database", "dotnet", "publish")
+                        {
+                            ProducedImageReference = "orders-database:legacy",
+                            PullBeforeBuild = true
+                        });
                 }
             }
 

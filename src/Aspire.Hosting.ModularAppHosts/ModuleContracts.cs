@@ -239,6 +239,15 @@ public sealed class ModuleContainerExportOptions(
     /// </summary>
     public string? ImageRegistry { get; set; }
 
+    /// <summary>
+    /// Gets or sets the image reference produced by a legacy publish command. When it differs from the effective
+    /// image reference, the installer tags it after the command succeeds.
+    /// </summary>
+    public string? ProducedImageReference { get; set; }
+
+    /// <summary>Gets or sets whether a missing clean image is pulled before the publish command is run.</summary>
+    public bool PullBeforeBuild { get; set; }
+
     /// <summary>Gets the executable invoked by the service installer.</summary>
     public string PublishCommand { get; } = publishCommand;
 

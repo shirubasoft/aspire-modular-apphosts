@@ -588,7 +588,7 @@ public static partial class DistributedApplicationModuleExtensions
 
         if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan.ShouldPublish)
         {
-            AddImagePublishInstaller(
+            await AddImagePublishInstallerAsync(
                 builder,
                 resourceName,
                 effectiveExportOptions,
@@ -598,7 +598,8 @@ public static partial class DistributedApplicationModuleExtensions
                 buildRepository.Repository,
                 buildRepository.UpdateRepository,
                 container,
-                registry);
+                registry,
+                cancellationToken).ConfigureAwait(false);
         }
 
         registry.TrackResource(container.Resource);
@@ -677,7 +678,7 @@ public static partial class DistributedApplicationModuleExtensions
                 buildRepository.RepositoryPath,
                 publishOptions!.WorkingDirectory ?? ".",
                 nameof(ModuleContainerExportOptions.WorkingDirectory));
-            AddImagePublishInstaller(
+            await AddImagePublishInstallerAsync(
                 builder,
                 resourceName,
                 publishOptions,
@@ -687,7 +688,8 @@ public static partial class DistributedApplicationModuleExtensions
                 buildRepository.Repository,
                 buildRepository.UpdateRepository,
                 container,
-                registry);
+                registry,
+                cancellationToken).ConfigureAwait(false);
         }
 
         registry.TrackResource(container.Resource);
@@ -830,7 +832,7 @@ public static partial class DistributedApplicationModuleExtensions
                     buildRepository.RepositoryPath,
                     publishOptions!.WorkingDirectory ?? ".",
                     nameof(ModuleContainerExportOptions.WorkingDirectory));
-                AddImagePublishInstaller(
+                await AddImagePublishInstallerAsync(
                     builder,
                     resourceName,
                     publishOptions,
@@ -840,7 +842,8 @@ public static partial class DistributedApplicationModuleExtensions
                     buildRepository.Repository,
                     buildRepository.UpdateRepository,
                     container,
-                    registry);
+                    registry,
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -860,6 +863,9 @@ public static partial class DistributedApplicationModuleExtensions
             useDirtyImage,
             builder.ExecutionContext.IsRunMode && inspectExistingImage
                 ? ContainerImageInspector.ExistsAsync
+                : (_, _) => Task.FromResult(false),
+            builder.ExecutionContext.IsRunMode && inspectExistingImage
+                ? ContainerImageInspector.PullAsync
                 : (_, _) => Task.FromResult(false),
             cancellationToken);
     }
@@ -886,6 +892,8 @@ public static partial class DistributedApplicationModuleExtensions
         return new ModuleContainerExportOptions(imageName, publishCommand, publishArguments)
         {
             ImageRegistry = imageRegistry,
+            ProducedImageReference = configured?.ProducedImageReference ?? declared.ProducedImageReference,
+            PullBeforeBuild = configured?.PullBeforeBuild ?? declared.PullBeforeBuild,
             ImageTag = imageTag,
             WorkingDirectory = configured?.PublishWorkingDirectory ?? declared.WorkingDirectory,
             BuildRepository = GetConfiguredValue(configured?.BuildRepository) ??
@@ -1082,6 +1090,8 @@ public static partial class DistributedApplicationModuleExtensions
         if (!string.IsNullOrWhiteSpace(configured.PublishCommand) ||
             configured.PublishArguments is not null ||
             configured.PublishWorkingDirectory is not null ||
+            configured.ProducedImageReference is not null ||
+            configured.PullBeforeBuild is not null ||
             configured.BuildRepository is not null ||
             configured.BuildRepositoryRevision is not null ||
             configured.AutoCloneBuildRepository is not null ||
@@ -1182,7 +1192,7 @@ public static partial class DistributedApplicationModuleExtensions
         }
     }
 
-    private static void AddImagePublishInstaller(
+    private static async Task AddImagePublishInstallerAsync(
         IDistributedApplicationBuilder builder,
         string resourceName,
         ModuleContainerExportOptions options,
@@ -1192,7 +1202,8 @@ public static partial class DistributedApplicationModuleExtensions
         string? repository,
         bool updateRepository,
         IResourceBuilder<ContainerResource> container,
-        ModuleApplicationRegistry registry)
+        ModuleApplicationRegistry registry,
+        CancellationToken cancellationToken)
     {
         var installerResource = new ModuleRepositoryInstallerResource(
             GetInstallerName(resourceName),
@@ -1215,9 +1226,35 @@ public static partial class DistributedApplicationModuleExtensions
             .WithCertificateTrustScope(CertificateTrustScope.None)
             .WithIconName("ArrowDownload");
 
-        container
-            .WaitForCompletion(installer)
-            .WithAnnotation(new ModuleRepositoryInstallerAnnotation(installerResource));
+        container.WithAnnotation(new ModuleRepositoryInstallerAnnotation(installerResource));
+
+        if (publishPlan.RequiresRetag)
+        {
+            var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+            var retagResource = new ModuleImageRetagResource(
+                GetRetagName(resourceName),
+                containerRuntime,
+                publishWorkingDirectory,
+                publishPlan.ProducedImageReference!,
+                publishPlan.ImageReference);
+            var retagger = builder.AddResource(retagResource)
+                .WithArgs(
+                    "tag",
+                    publishPlan.ProducedImageReference!,
+                    publishPlan.ImageReference)
+                .WaitForCompletion(installer)
+                .WithParentRelationship(container.Resource)
+                .ExcludeFromManifest()
+                .WithCertificateTrustScope(CertificateTrustScope.None)
+                .WithIconName("Tag");
+
+            container.WaitForCompletion(retagger);
+            registry.TrackResource(retagger.Resource);
+        }
+        else
+        {
+            container.WaitForCompletion(installer);
+        }
 
         registry.TrackResource(installer.Resource);
     }
@@ -1450,10 +1487,13 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleResourceNameMap resourceNames)
     {
         var plannedResourceNames = module.ResourceDefinitions.SelectMany(definition =>
-            RequiresImagePublishInstaller(definition, options, moduleOptions, imported) &&
-                builder.ExecutionContext.IsRunMode
-                ? new[] { resourceNames[definition.Name], GetInstallerName(resourceNames[definition.Name]) }
-                : new[] { resourceNames[definition.Name] })
+            GetPlannedResourceNames(
+                definition,
+                resourceNames[definition.Name],
+                options,
+                moduleOptions,
+                imported,
+                builder.ExecutionContext.IsRunMode))
             .ToArray();
 
         var duplicateResourceName = plannedResourceNames
@@ -1618,6 +1658,44 @@ public static partial class DistributedApplicationModuleExtensions
             moduleOptions?.FindProject(project.Name);
     }
 
+    private static IReadOnlyList<string> GetPlannedResourceNames(
+        IDistributedApplicationModuleResource definition,
+        string resourceName,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        bool imported,
+        bool runMode)
+    {
+        if (!runMode || !RequiresImagePublishInstaller(definition, options, moduleOptions, imported))
+        {
+            return [resourceName];
+        }
+
+        return RequiresImageRetagInstaller(definition, moduleOptions)
+            ? [resourceName, GetInstallerName(resourceName), GetRetagName(resourceName)]
+            : [resourceName, GetInstallerName(resourceName)];
+    }
+
+    private static bool RequiresImageRetagInstaller(
+        IDistributedApplicationModuleResource definition,
+        DistributedApplicationModuleOptions? moduleOptions)
+    {
+        var producedImageReference = definition switch
+        {
+            DistributedApplicationModuleProject project =>
+                moduleOptions?.FindProject(project.Name)?.ProducedImageReference ??
+                    project.Export.Options.ProducedImageReference,
+            DistributedApplicationModuleContainer container when container.ImagePublishOptions is not null =>
+                moduleOptions?.FindContainer(container.Name)?.ProducedImageReference ??
+                    container.ImagePublishOptions.ProducedImageReference,
+            IDistributedApplicationModuleFactoryResource resource when resource.ImagePublishOptions is not null =>
+                moduleOptions?.FindContainer(resource.Name)?.ProducedImageReference ??
+                    resource.ImagePublishOptions.ProducedImageReference,
+            _ => null
+        };
+        return !string.IsNullOrWhiteSpace(producedImageReference);
+    }
+
     private static bool RequiresRepositoryImageTag(
         DistributedApplicationModule module,
         ModularAppHostsOptions options,
@@ -1774,6 +1852,8 @@ public static partial class DistributedApplicationModuleExtensions
     }
 
     private static string GetInstallerName(string projectName) => $"{projectName}-installer";
+
+    private static string GetRetagName(string resourceName) => $"{resourceName}-image-tagger";
 
     private sealed record MaterializedModuleRepository(
         string RepositoryPath,

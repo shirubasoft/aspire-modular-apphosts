@@ -8,6 +8,7 @@ internal sealed record ModuleImagePublishPlan(
     string ImageName,
     string ImageTag,
     string ImageReference,
+    string? ProducedImageReference,
     IReadOnlyList<string> PublishArguments,
     bool RepositoryDirty,
     bool ShouldPublish)
@@ -16,10 +17,12 @@ internal sealed record ModuleImagePublishPlan(
         ModuleContainerExportOptions options,
         bool repositoryDirty,
         Func<string, CancellationToken, Task<bool>> imageExists,
+        Func<string, CancellationToken, Task<bool>> pullImage,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(imageExists);
+        ArgumentNullException.ThrowIfNull(pullImage);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageTag);
 
         var imageRepository = ModuleImageReference.GetRepository(options);
@@ -40,18 +43,55 @@ internal sealed record ModuleImagePublishPlan(
                 effectiveImageReference,
                 repositoryDirty))
             .ToArray();
+        var producedImageReference = string.IsNullOrWhiteSpace(options.ProducedImageReference)
+            ? null
+            : ResolveArgument(
+                options.ProducedImageReference,
+                options.ImageRegistry,
+                options.ImageName,
+                imageRepository,
+                effectiveTag,
+                cleanImageReference,
+                effectiveImageReference,
+                repositoryDirty: false);
 
-        var shouldPublish = repositoryDirty ||
-            !await imageExists(cleanImageReference, cancellationToken).ConfigureAwait(false);
+        var shouldPublish = repositoryDirty;
+        if (!shouldPublish)
+        {
+            var exists = await imageExists(cleanImageReference, cancellationToken).ConfigureAwait(false);
+            var pulled = !exists && options.PullBeforeBuild &&
+                await pullImage(cleanImageReference, cancellationToken).ConfigureAwait(false);
+            shouldPublish = !exists && !pulled;
+        }
+
         return new ModuleImagePublishPlan(
             options.ImageRegistry,
             options.ImageName,
             effectiveTag,
             effectiveImageReference,
+            producedImageReference,
             publishArguments,
             repositoryDirty,
             shouldPublish);
     }
+
+    public static Task<ModuleImagePublishPlan> CreateAsync(
+        ModuleContainerExportOptions options,
+        bool repositoryDirty,
+        Func<string, CancellationToken, Task<bool>> imageExists,
+        CancellationToken cancellationToken = default)
+    {
+        return CreateAsync(
+            options,
+            repositoryDirty,
+            imageExists,
+            (_, _) => Task.FromResult(false),
+            cancellationToken);
+    }
+
+    public bool RequiresRetag =>
+        ProducedImageReference is not null &&
+        !string.Equals(ProducedImageReference, ImageReference, StringComparison.Ordinal);
 
     private static string ResolveArgument(
         string argument,
@@ -213,6 +253,33 @@ internal static class ContainerImageInspector
             runtime,
             ["image", "inspect", imageReference],
             cancellationToken).ConfigureAwait(false) == 0;
+    }
+
+    public static async Task<bool> PullAsync(
+        string imageReference,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
+
+        try
+        {
+            var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
+            var result = await CliCommand.Wrap(runtime)
+                .WithArguments(["pull", imageReference])
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
+                .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
+                .ExecuteAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return result.ExitCode == 0;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or IOException)
+        {
+            return false;
+        }
     }
 
     private static async Task<int?> RunAsync(

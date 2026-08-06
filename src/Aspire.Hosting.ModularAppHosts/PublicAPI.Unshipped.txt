@@ -14,6 +14,10 @@ Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRep
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepositoryRevision.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageRegistry.get -> string?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageRegistry.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ProducedImageReference.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ProducedImageReference.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.PullBeforeBuild.get -> bool?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.PullBeforeBuild.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.get -> string?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.ImageSHA256.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.UpdateBuildRepository.get -> bool?
@@ -121,6 +125,10 @@ Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevis
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevision.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistry.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistry.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ProducedImageReference.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ProducedImageReference.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.PullBeforeBuild.get -> bool
+Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.PullBeforeBuild.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Digest.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Name.get -> string!

@@ -313,11 +313,25 @@ In run mode, a one-shot installer invokes the configured executable before the c
 
 - When `ImageTag` is omitted, the module repository branch is lowercased and sanitized and its 12-character commit is appended (`feature/orders` becomes `feature-orders-a1b2c3d4e5f6`). Detached checkouts use `sha-a1b2c3d4e5f6`. A known managed repository is synchronized before this tag is selected. For repository-independent or still-unresolved definitions, the AppHost branch and commit are used, then CI branch variables, then `latest`.
 - A clean repository uses `[ImageRegistry/]ImageName:ImageTag` and reuses that image when it already exists locally.
+- With `PullBeforeBuild = true`, a missing clean image is pulled from its registry before the build command is considered. A successful pull skips the build; a missing or failed pull falls back to the declared command. Dirty repositories always build and never use this pull shortcut.
 - A dirty repository uses `[ImageRegistry/]ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
 - The container waits for its installer to complete successfully.
 - Installers are run-only resources and are excluded from deployment manifests.
 
 `ImageRegistry` explicitly separates a registry host such as `ghcr.io` from an `ImageName` repository path such as `example/orders-api`. Leave it unset for local or otherwise unqualified images. Publish arguments can use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
+
+Legacy commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. No shell wrapper is required:
+
+```csharp
+new ModuleContainerExportOptions("example/orders-database", "pwsh", "./build-image.ps1")
+{
+    ImageRegistry = "ghcr.io",
+    ProducedImageReference = "orders-database:production",
+    PullBeforeBuild = true
+};
+```
+
+Both settings participate only when image publishing is enabled. With `PublishImage: false`, the run-only build/retag chain is omitted and Aspire's configured `ImagePullPolicy` remains responsible for acquiring the target image.
 
 `WorkingDirectory` is relative to the effective build repository root. It defaults to the project directory for `ExportAsContainer` when the module repository also builds the image. A separate build repository and `WithImagePublishCommand` both default to the build repository root. The command and arguments are executed directly without a shell.
 
@@ -396,6 +410,8 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
               "ImageRegistry": "ghcr.io",
               "ImageName": "example/orders-api",
               "ImageTag": "debug",
+              "ProducedImageReference": "orders-api:legacy",
+              "PullBeforeBuild": true,
               "PublishImage": true,
               "PublishCommand": "dotnet",
               "PublishArguments": [

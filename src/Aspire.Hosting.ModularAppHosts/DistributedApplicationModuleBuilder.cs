@@ -215,6 +215,8 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
             options.PublishArguments.ToArray())
         {
             ImageRegistry = options.ImageRegistry,
+            ProducedImageReference = options.ProducedImageReference,
+            PullBeforeBuild = options.PullBeforeBuild,
             ImageTag = options.ImageTag,
             WorkingDirectory = options.WorkingDirectory,
             BuildRepository = options.BuildRepository,
