@@ -43,17 +43,12 @@ internal sealed record ModuleImagePublishPlan(
                 effectiveImageReference,
                 repositoryDirty))
             .ToArray();
-        var producedImageReference = string.IsNullOrWhiteSpace(options.ProducedImageReference)
-            ? null
-            : ResolveArgument(
-                options.ProducedImageReference,
-                options.ImageRegistry,
-                options.ImageName,
-                imageRepository,
-                effectiveTag,
-                cleanImageReference,
-                effectiveImageReference,
-                repositoryDirty: false);
+        var producedImageReference = ResolveProducedImageReference(
+            options,
+            imageRepository,
+            effectiveTag,
+            cleanImageReference,
+            effectiveImageReference);
 
         var shouldPublish = repositoryDirty;
         if (!shouldPublish)
@@ -92,6 +87,47 @@ internal sealed record ModuleImagePublishPlan(
     public bool RequiresRetag =>
         ProducedImageReference is not null &&
         !string.Equals(ProducedImageReference, ImageReference, StringComparison.Ordinal);
+
+    public static bool WouldRequireRetag(ModuleContainerExportOptions options, bool repositoryDirty)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageTag);
+
+        var imageRepository = ModuleImageReference.GetRepository(options);
+        var cleanImageReference = $"{imageRepository}:{options.ImageTag}";
+        var effectiveTag = repositoryDirty
+            ? ModuleImageTag.AppendDirtySuffix(options.ImageTag)
+            : options.ImageTag;
+        var effectiveImageReference = $"{imageRepository}:{effectiveTag}";
+        var producedImageReference = ResolveProducedImageReference(
+            options,
+            imageRepository,
+            effectiveTag,
+            cleanImageReference,
+            effectiveImageReference);
+        return producedImageReference is not null &&
+            !string.Equals(producedImageReference, effectiveImageReference, StringComparison.Ordinal);
+    }
+
+    private static string? ResolveProducedImageReference(
+        ModuleContainerExportOptions options,
+        string imageRepository,
+        string effectiveTag,
+        string cleanImageReference,
+        string effectiveImageReference)
+    {
+        return string.IsNullOrWhiteSpace(options.ProducedImageReference)
+            ? null
+            : ResolveArgument(
+                options.ProducedImageReference,
+                options.ImageRegistry,
+                options.ImageName,
+                imageRepository,
+                effectiveTag,
+                cleanImageReference,
+                effectiveImageReference,
+                repositoryDirty: false);
+    }
 
     private static string ResolveArgument(
         string argument,

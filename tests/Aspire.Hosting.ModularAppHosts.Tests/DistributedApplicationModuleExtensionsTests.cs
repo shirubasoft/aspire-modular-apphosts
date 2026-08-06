@@ -1680,6 +1680,60 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Effective_publish_output_does_not_reserve_an_unused_retag_resource_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = ModuleContainerExportOptions.ImageReferencePlaceholder
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Equal(2, builder.Resources.OfType<ContainerResource>().Count());
+        Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleImageRetagResource>());
+    }
+
+    [Fact]
+    public async Task Dirty_publish_output_reserves_its_retag_resource_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = "modular-static:dev"
+                });
+        });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
+
+        Assert.Contains("static-image-tagger", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Module_exports_any_custom_resource_type_through_a_lazy_factory()
     {
         using var repository = await TestRepository.CreateAsync();
