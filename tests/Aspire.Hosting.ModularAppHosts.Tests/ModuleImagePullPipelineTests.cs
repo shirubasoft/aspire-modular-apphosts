@@ -5,6 +5,8 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -130,6 +132,75 @@ public sealed class ModuleImagePullPipelineTests
 
         Assert.Equal("mycustomregistry.io/images:api-1-0", references.RemoteImage);
         Assert.Equal("ghcr.io/api:1-0", references.LocalImage);
+    }
+
+    [Fact]
+    public async Task Pull_mapping_records_the_remote_to_local_lifecycle_in_the_resource_log()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var container = builder
+            .AddContainer("orders-api", "ghcr.io/api", "1-0")
+            .WithImagePullMapping("mycustomregistry.io/images:api-1-0")
+            .Resource;
+        await using var application = builder.Build();
+        var resourceLoggerService = application.Services.GetRequiredService<ResourceLoggerService>();
+        var pipelineContext = new PipelineContext(
+            application.Services.GetRequiredService<DistributedApplicationModel>(),
+            application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
+            application.Services,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+        await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
+            "pull-orders-api",
+            TestContext.Current.CancellationToken);
+        var stepContext = new PipelineStepContext
+        {
+            PipelineContext = pipelineContext,
+            ReportingStep = reportingStep
+        };
+        var commands = new List<(string Runtime, string[] Arguments)>();
+
+        await ModuleImagePullPipeline.PullAsync(
+            container,
+            stepContext,
+            _ => Task.FromResult("test-runtime"),
+            (runtime, arguments, _) =>
+            {
+                commands.Add((runtime, arguments.ToArray()));
+                return Task.CompletedTask;
+            });
+
+        Assert.Collection(
+            commands,
+            command =>
+            {
+                Assert.Equal("test-runtime", command.Runtime);
+                Assert.Equal(["pull", "mycustomregistry.io/images:api-1-0"], command.Arguments);
+            },
+            command =>
+            {
+                Assert.Equal("test-runtime", command.Runtime);
+                Assert.Equal(
+                    ["tag", "mycustomregistry.io/images:api-1-0", "ghcr.io/api:1-0"],
+                    command.Arguments);
+            });
+
+        resourceLoggerService.Complete(container);
+        var logs = new List<LogLine>();
+        await foreach (var lines in resourceLoggerService.WatchAsync(container))
+        {
+            logs.AddRange(lines);
+        }
+
+        Assert.Contains(logs, line => line.Content.Contains(
+            "Pulling remote image mycustomregistry.io/images:api-1-0 for resource orders-api.",
+            StringComparison.Ordinal));
+        Assert.Contains(logs, line => line.Content.Contains(
+            "Re-tagging remote image mycustomregistry.io/images:api-1-0 as local image ghcr.io/api:1-0 for resource orders-api.",
+            StringComparison.Ordinal));
+        Assert.Contains(logs, line => line.Content.Contains(
+            "Re-tagged remote image mycustomregistry.io/images:api-1-0 as local image ghcr.io/api:1-0 for resource orders-api.",
+            StringComparison.Ordinal));
     }
 
     [Fact]

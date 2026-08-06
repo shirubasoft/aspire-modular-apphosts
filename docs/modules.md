@@ -366,6 +366,8 @@ module.AddContainer("api", "ghcr.io/api", "1-0")
 
 In this example, `aspire do pull api` executes `pull mycustomregistry.io/images:api-1-0` followed by `tag mycustomregistry.io/images:api-1-0 ghcr.io/api:1-0`. The explicit mapping takes precedence over `WithContainerRegistry`, remote push-name callbacks, and default registry targets for pull resolution. It is pull-only and does not change the resource's push target or otherwise affect `aspire do push`. Because a digest reference cannot be a tag target, the resource's local image must be tag-based.
 
+Pull and re-tag lifecycle messages are written both to the Aspire pipeline-step logger and to the pulled resource's `ResourceLoggerService` stream. The pipeline output therefore records the exact remote and local references in CI, while the same structured messages remain associated with the resource for dashboard and programmatic log consumers.
+
 Pull every eligible module image or scope the operation to effective Aspire resource names:
 
 ```bash

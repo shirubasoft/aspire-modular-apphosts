@@ -14,6 +14,8 @@ registry_endpoint=""
 retag_registry_container_id=""
 retag_registry_endpoint=""
 container_registries_configuration=""
+scoped_pull_output=""
+complete_pull_output=""
 
 cleanup() {
     if [[ -n "$registry_container_id" ]]; then
@@ -36,6 +38,14 @@ cleanup() {
 
     if [[ -n "$container_registries_configuration" ]]; then
         rm --force "$container_registries_configuration"
+    fi
+
+    if [[ -n "$scoped_pull_output" ]]; then
+        rm --force "$scoped_pull_output"
+    fi
+
+    if [[ -n "$complete_pull_output" ]]; then
+        rm --force "$complete_pull_output"
     fi
 }
 trap cleanup EXIT
@@ -122,27 +132,56 @@ assert_image_absent() {
     fi
 }
 
+assert_output_contains() {
+    local output_file="$1"
+    local expected="$2"
+    if ! grep --fixed-strings --quiet -- "$expected" "$output_file"; then
+        echo "Expected Aspire output to contain: $expected" >&2
+        return 1
+    fi
+}
+
+assert_output_absent() {
+    local output_file="$1"
+    local unexpected="$2"
+    if grep --fixed-strings --quiet -- "$unexpected" "$output_file"; then
+        echo "Expected Aspire output not to contain: $unexpected" >&2
+        return 1
+    fi
+}
+
 export ImagePush__RegistryEndpoint="$registry_endpoint"
 export ImagePush__RetagRegistryEndpoint="$retag_registry_endpoint"
 export ASPIRE_CONTAINER_RUNTIME="$container_runtime"
+scoped_pull_output="$(mktemp)"
+complete_pull_output="$(mktemp)"
+retag_started_message="Re-tagging remote image $mapped_remote_image as local image"
+retag_completed_message="Re-tagged remote image $mapped_remote_image as local image"
+retag_target_message="$mapped_local_image for resource image-pull-mapped."
 
 cd "$repository_root"
 dotnet tool run aspire -- do pull image-push-project \
     --apphost "$apphost_project" \
-    --non-interactive
+    --non-interactive \
+    2>&1 | tee "$scoped_pull_output"
 
 assert_image_present "$project_image"
 assert_image_absent "$remote_declared_image"
 assert_image_absent "$remote_factory_image"
 assert_image_absent "$mapped_local_image"
+assert_output_absent "$scoped_pull_output" "$retag_started_message"
 
 dotnet tool run aspire -- do pull \
     --apphost "$apphost_project" \
-    --non-interactive
+    --non-interactive \
+    2>&1 | tee "$complete_pull_output"
 
 assert_image_present "$project_image"
 assert_image_present "$remote_declared_image"
 assert_image_present "$remote_factory_image"
 assert_image_present "$mapped_local_image"
+assert_output_contains "$complete_pull_output" "$retag_started_message"
+assert_output_contains "$complete_pull_output" "$retag_completed_message"
+assert_output_contains "$complete_pull_output" "$retag_target_message"
 
 echo "Verified scoped and complete Aspire image pulls, including $mapped_remote_image -> $mapped_local_image."

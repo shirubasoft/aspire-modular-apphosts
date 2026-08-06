@@ -5,6 +5,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
 using CliWrap;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using CliCommand = global::CliWrap.Cli;
 
@@ -27,6 +28,24 @@ internal static class ModuleImagePullPipeline
             LogLevel.Warning,
             new EventId(4, nameof(LogContainerRuntimeError)),
             "{ContainerRuntime}: {Output}");
+
+    private static readonly Action<ILogger, string, string, Exception?> LogImagePullStarted =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Information,
+            new EventId(5, nameof(LogImagePullStarted)),
+            "Pulling remote image {RemoteImage} for resource {ResourceName}.");
+
+    private static readonly Action<ILogger, string, string, string, Exception?> LogImageRetagStarted =
+        LoggerMessage.Define<string, string, string>(
+            LogLevel.Information,
+            new EventId(6, nameof(LogImageRetagStarted)),
+            "Re-tagging remote image {RemoteImage} as local image {LocalImage} for resource {ResourceName}.");
+
+    private static readonly Action<ILogger, string, string, string, Exception?> LogImageRetagCompleted =
+        LoggerMessage.Define<string, string, string>(
+            LogLevel.Information,
+            new EventId(7, nameof(LogImageRetagCompleted)),
+            "Re-tagged remote image {RemoteImage} as local image {LocalImage} for resource {ResourceName}.");
 
     public static void Configure(IDistributedApplicationBuilder builder)
     {
@@ -257,25 +276,50 @@ internal static class ModuleImagePullPipeline
         };
     }
 
-    private static async Task PullAsync(IResource resource, PipelineStepContext context)
+    private static Task PullAsync(IResource resource, PipelineStepContext context) =>
+        PullAsync(
+            resource,
+            context,
+            ContainerRuntimeResolver.ResolveAsync,
+            ExecuteRuntimeAsync);
+
+    internal static async Task PullAsync(
+        IResource resource,
+        PipelineStepContext context,
+        Func<CancellationToken, Task<string>> resolveRuntimeAsync,
+        Func<string, IReadOnlyList<string>, PipelineStepContext, Task> executeRuntimeAsync)
     {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(resolveRuntimeAsync);
+        ArgumentNullException.ThrowIfNull(executeRuntimeAsync);
+
         var (remoteImage, localImage) = await ResolveImageReferencesAsync(
             resource,
             context.CancellationToken).ConfigureAwait(false);
-        var runtime = await ContainerRuntimeResolver
-            .ResolveAsync(context.CancellationToken)
+        var runtime = await resolveRuntimeAsync(context.CancellationToken)
             .ConfigureAwait(false);
+        var resourceLogger = context.Services
+            .GetRequiredService<ResourceLoggerService>()
+            .GetLogger(resource);
 
-        await ExecuteRuntimeAsync(
+        LogImagePullStarted(context.Logger, remoteImage, resource.Name, null);
+        LogImagePullStarted(resourceLogger, remoteImage, resource.Name, null);
+
+        await executeRuntimeAsync(
             runtime,
             ["pull", remoteImage],
             context).ConfigureAwait(false);
         if (!string.Equals(remoteImage, localImage, StringComparison.Ordinal))
         {
-            await ExecuteRuntimeAsync(
+            LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
+            LogImageRetagStarted(resourceLogger, remoteImage, localImage, resource.Name, null);
+            await executeRuntimeAsync(
                 runtime,
                 ["tag", remoteImage, localImage],
                 context).ConfigureAwait(false);
+            LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
+            LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }
     }
 
