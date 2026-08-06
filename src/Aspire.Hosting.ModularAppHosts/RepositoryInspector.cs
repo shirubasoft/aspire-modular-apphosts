@@ -155,6 +155,25 @@ internal static class RepositoryInspector
             : null;
     }
 
+    /// <summary>
+    /// Gets whether the checked out branch tracks a remote branch. A branch that does not, such as a local feature
+    /// branch that has never been pushed, has nothing to fast-forward from.
+    /// </summary>
+    public static async Task<bool> HasUpstreamAsync(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await TryRunGitAsync(
+            repositoryPath,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return result.Success && result.Output.Trim().Length > 0;
+    }
+
     public static async Task<string?> TryGetCommitAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
@@ -936,11 +955,22 @@ internal static class RepositorySynchronizer
             return commands;
         }
 
-        return updateRepository
-            ? [new RepositorySyncCommand(
+        // A branch with no upstream — a local feature branch that has never been pushed, which is the normal state of
+        // a checkout a developer is working in — has nothing to fast-forward from, and `git pull` fails outright.
+        // Leave it alone for the same reason a dirty checkout is left alone.
+        if (!updateRepository ||
+            !await RepositoryInspector.HasUpstreamAsync(
+                repositoryPath,
                 gitExecutablePath,
-                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])]
-            : [];
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        return [new RepositorySyncCommand(
+            gitExecutablePath,
+            ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])];
     }
 
     public static async Task SynchronizeAsync(
