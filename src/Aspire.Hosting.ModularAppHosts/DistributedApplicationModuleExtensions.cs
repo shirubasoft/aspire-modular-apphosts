@@ -540,12 +540,14 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         var normalizedWorkingDirectoryRelativePath = buildRepository.UsesModuleRepository
-            ? Path.GetRelativePath(
-                project.SourceRepositoryRoot,
-                PathSafety.GetContainedPath(
-                    project.SourceRepositoryRoot,
-                    workingDirectoryRelativePath,
-                    nameof(ModuleContainerExportOptions.WorkingDirectory)))
+            ? project.PathBase == ModuleProjectPathBase.Repository
+                ? workingDirectoryRelativePath
+                : Path.GetRelativePath(
+                    project.SourceRepositoryRoot!,
+                    PathSafety.GetContainedPath(
+                        project.SourceRepositoryRoot!,
+                        workingDirectoryRelativePath,
+                        nameof(ModuleContainerExportOptions.WorkingDirectory)))
             : workingDirectoryRelativePath;
         var publishWorkingDirectory = PathSafety.GetContainedPath(
             buildRepository.RepositoryPath,
@@ -1240,9 +1242,12 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         string? repository)
     {
-        if (module.ProjectDefinitions.Count > 0)
+        var projectRepositoryRoot = module.ProjectDefinitions
+            .Select(project => project.SourceRepositoryRoot)
+            .FirstOrDefault(repositoryRoot => repositoryRoot is not null);
+        if (projectRepositoryRoot is not null)
         {
-            return module.ProjectDefinitions[0].SourceRepositoryRoot;
+            return projectRepositoryRoot;
         }
 
         if (!string.IsNullOrWhiteSpace(repository) &&

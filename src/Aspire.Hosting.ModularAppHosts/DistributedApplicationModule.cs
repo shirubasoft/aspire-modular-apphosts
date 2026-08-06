@@ -117,12 +117,9 @@ internal sealed class DistributedApplicationModule(
         {
             if (project.PathBase == ModuleProjectPathBase.Repository)
             {
-                project.SourceRepositoryRoot = await GetDefinitionRepositoryRootAsync(
+                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
                     Repository,
-                    appHostDirectory,
-                    gitExecutablePath,
-                    repositoryCommandTimeout,
-                    cancellationToken).ConfigureAwait(false);
+                    appHostDirectory);
                 continue;
             }
 
@@ -159,6 +156,8 @@ internal sealed class DistributedApplicationModule(
 
         var repositoryRoots = _projects
             .Select(project => project.SourceRepositoryRoot)
+            .Where(repositoryRoot => repositoryRoot is not null)
+            .Select(repositoryRoot => repositoryRoot!)
             .Distinct(PathSafety.Comparer)
             .ToArray();
 
@@ -178,12 +177,9 @@ internal sealed class DistributedApplicationModule(
         }
     }
 
-    private static async Task<string> GetDefinitionRepositoryRootAsync(
+    private static string? GetDefinitionRepositoryRoot(
         string? repository,
-        string appHostDirectory,
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        CancellationToken cancellationToken)
+        string appHostDirectory)
     {
         if (!string.IsNullOrWhiteSpace(repository) &&
             !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
@@ -191,12 +187,7 @@ internal sealed class DistributedApplicationModule(
             return Path.GetFullPath(repository, appHostDirectory);
         }
 
-        return await RepositoryInspector.TryFindRepositoryRootAsync(
-                appHostDirectory,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false) ??
-            appHostDirectory;
+        return null;
     }
 
     private static async Task<string?> TryGetConfiguredLocalRepositoryRootAsync(
@@ -258,7 +249,7 @@ internal sealed class DistributedApplicationModuleProject(
     string name,
     string projectPath,
     ModuleProjectPathBase pathBase,
-    string sourceRepositoryRoot) : IDistributedApplicationModuleProject
+    string? sourceRepositoryRoot) : IDistributedApplicationModuleProject
 {
     public string Name { get; } = name;
 
@@ -270,7 +261,7 @@ internal sealed class DistributedApplicationModuleProject(
 
     public bool IsExportedAsContainer => Export is not null;
 
-    internal string SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
+    internal string? SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
 
     internal Action<IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
 
@@ -278,7 +269,7 @@ internal sealed class DistributedApplicationModuleProject(
     {
         return PathBase == ModuleProjectPathBase.Repository
             ? ProjectPath
-            : Path.GetRelativePath(SourceRepositoryRoot, ProjectPath);
+            : Path.GetRelativePath(SourceRepositoryRoot!, ProjectPath);
     }
 
     internal ModuleContainerExport Export => _export

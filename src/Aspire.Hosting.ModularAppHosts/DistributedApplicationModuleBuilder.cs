@@ -93,7 +93,7 @@ internal sealed class DistributedApplicationModuleBuilder(
             ? Path.GetDirectoryName(declaredProjectPath)
                 ?? throw new InvalidOperationException(
                     $"Unable to determine the directory for '{declaredProjectPath}'.")
-            : applicationBuilder.AppHostDirectory;
+            : null;
 
         var project = new DistributedApplicationModuleProject(
             name,

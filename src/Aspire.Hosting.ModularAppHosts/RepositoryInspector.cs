@@ -621,9 +621,9 @@ internal static class ModuleRepositoryDiscovery
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         ArgumentNullException.ThrowIfNull(module);
 
-        var projectRepositoryRoot = module.ProjectDefinitions.Count == 0
-            ? null
-            : module.ProjectDefinitions[0].SourceRepositoryRoot;
+        var projectRepositoryRoot = module.ProjectDefinitions
+            .Select(project => project.SourceRepositoryRoot)
+            .FirstOrDefault(repositoryRoot => repositoryRoot is not null);
         return await ResolveAsync(
             appHostDirectory,
             module.Name,

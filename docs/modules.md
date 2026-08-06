@@ -224,10 +224,16 @@ module.AddProject(
         "src/Orders.Api/Orders.Api.csproj",
         ModuleProjectPathBase.Repository)
     .ExportAsContainer(new ModuleContainerExportOptions(
-        "orders-api",
-        "dotnet",
-        "publish",
-        ModuleContainerExportOptions.ImageReferencePlaceholder));
+        imageName: "orders-api",
+        publishCommand: "dotnet",
+        publishArguments:
+        [
+            "publish",
+            "src/Orders.Api/Orders.Api.csproj",
+            "-t:PublishContainer",
+            $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
+            $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"
+        ]));
 ```
 
 Repository-relative paths are resolved only after the local source tree or imported checkout is selected. The two-argument `AddProject(name, projectPath)` overload remains relative to the defining AppHost, and generated `AddProject<TProject>` metadata follows that existing behavior.

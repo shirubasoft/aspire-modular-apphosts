@@ -75,7 +75,13 @@ public interface IDistributedApplicationModuleBuilder
     IDistributedApplicationModuleProjectBuilder AddProject(
         string name,
         string projectPath,
-        ModuleProjectPathBase pathBase);
+        ModuleProjectPathBase pathBase) => pathBase switch
+        {
+            ModuleProjectPathBase.AppHost => AddProject(name, projectPath),
+            ModuleProjectPathBase.Repository => throw new NotSupportedException(
+                "This module builder does not support repository-relative project paths."),
+            _ => throw new ArgumentOutOfRangeException(nameof(pathBase))
+        };
 
     /// <summary>Adds an existing container image to the module.</summary>
     IDistributedApplicationModuleContainerBuilder AddContainer(
