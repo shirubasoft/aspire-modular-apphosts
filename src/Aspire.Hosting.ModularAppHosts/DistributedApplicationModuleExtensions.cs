@@ -1887,14 +1887,15 @@ public static partial class DistributedApplicationModuleExtensions
         var buildRevision = GetConfiguredValue(imagePublisher.Configured?.BuildRepositoryRevision) ??
             GetConfiguredValue(imagePublisher.Declared.BuildRepositoryRevision);
         var usesSeparateBuildCheckout =
-            (buildRepository is not null && !RepositoryIdentitiesMatch(
-                buildRepository,
-                definitionRepository.Repository ?? definitionRepository.RepositoryPath,
-                appHostDirectory)) ||
-            !string.Equals(
-                buildRevision,
-                definitionRepository.RepositoryRevision,
-                StringComparison.Ordinal);
+            (buildRepository is not null || buildRevision is not null) &&
+            ((buildRepository is not null && !RepositoryIdentitiesMatch(
+                    buildRepository,
+                    definitionRepository.Repository ?? definitionRepository.RepositoryPath,
+                    appHostDirectory)) ||
+                !string.Equals(
+                    buildRevision,
+                    definitionRepository.RepositoryRevision,
+                    StringComparison.Ordinal));
         return usesSeparateBuildCheckout
             ? ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: false) ||
                 ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: true)

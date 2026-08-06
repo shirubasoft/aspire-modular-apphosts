@@ -1741,7 +1741,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         builder.AddContainer("static-image-tagger", "busybox");
         var module = await builder.ExportModuleAsync("static", definition =>
         {
-            definition.WithRepository(repository.Path);
+            definition.WithRepository(repository.Path, "HEAD");
             definition.AddContainer("static", "modular-static", "dev")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "modular-static",
