@@ -81,6 +81,15 @@ The dashboard graph shows `Reference` and `WaitFor` relationships from `dependen
 
 [`E2ETesting`](E2ETesting/README.md) contains a separate eShop example with `catalog` and `orders` modules. Its E2E AppHost supports both Aspire's in-process testing builder and an Aspire-deployed Docker Compose environment. The same test scenario runs against both modes in CI.
 
+## Image-push E2E sample
+
+[`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
+`push` pipeline for a declared container publisher, a project exported as a container, and a
+factory-created container publisher. Its test first scopes the push to the exported project and
+verifies the other repositories are absent, then pushes every image and verifies all three tags
+through the registry API. Run it with `bash samples/ImagePushE2E/test-image-push.sh`; set
+`ASPIRE_CONTAINER_RUNTIME=podman` when Podman should be used instead of Docker.
+
 ## Multi-repository E2E sample
 
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
