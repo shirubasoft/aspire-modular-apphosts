@@ -58,6 +58,8 @@ When squash-merging, ensure the resulting commit message still follows this conv
 
 ## Releases
 
-After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes the core, testing, and template NuGet packages plus library symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually. The .NET SDK, AppHost SDK, NuGet dependencies, and local Aspire CLI are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
+After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes the core, testing, tool, and template NuGet packages plus symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually. The .NET SDK, AppHost SDK, NuGet dependencies, and local Aspire CLI are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
+
+For publish-enabled pushes to `main`, CI calculates that version before its Linux build and stores the resulting NuGet packages as a workflow artifact. The release workflow promotes the packages from that exact successful CI run rather than rebuilding or rerunning tests.
 
 Publishing remains disarmed until the repository variable `NUGET_PUBLISH_ENABLED` is explicitly set to `true`. When no release tag exists, the workflow creates a local `v0.0.0` baseline so the first feature release stays in the `0.x` range. A breaking conventional commit advances the package to `1.0.0` when the public API is ready for that stability promise.
