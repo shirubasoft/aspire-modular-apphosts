@@ -267,6 +267,29 @@ jobs:
             --timeout 180 \
             --non-interactive
 
+  e2e-image-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore the pinned Aspire CLI and image-push AppHost
+        run: |
+          dotnet tool restore
+          dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
+
+      - name: Push scoped and complete image sets to a local registry
+        run: bash samples/ImagePushE2E/test-image-push.sh
+
   e2e-multi-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15

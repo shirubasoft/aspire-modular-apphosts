@@ -605,6 +605,7 @@ public static partial class DistributedApplicationModuleExtensions
         ApplyImageRegistry(container, publishPlan.ImageRegistry);
 
         export.ConfigureContainer?.Invoke(container);
+        ModuleImagePushPipeline.AddPushStep(container);
 
         ApplyImageSHA256(container, projectOptions?.ImageSHA256);
         ApplyImagePullPolicy(
@@ -708,6 +709,11 @@ public static partial class DistributedApplicationModuleExtensions
             publishPlan?.ImageRegistry ?? GetConfiguredValue(containerOptions?.ImageRegistry));
 
         definition.ConfigureContainer?.Invoke(container);
+
+        if (publishPlan is not null)
+        {
+            ModuleImagePushPipeline.AddPushStep(container);
+        }
 
         ApplyImageSHA256(container, containerOptions?.ImageSHA256);
         ApplyImagePullPolicy(
@@ -884,6 +890,7 @@ public static partial class DistributedApplicationModuleExtensions
             ApplyImagePullPolicy(
                 container,
                 configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
+            ModuleImagePushPipeline.AddPushStep(container);
 
             if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan.ShouldPublish)
             {
@@ -1500,6 +1507,7 @@ public static partial class DistributedApplicationModuleExtensions
         var options = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
         ValidateOptions(options);
         var registry = new ModuleApplicationRegistry(options, builder.Configuration);
+        ModuleImagePushPipeline.ConfigureResourceSelection(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
         builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
