@@ -415,7 +415,15 @@ public static partial class DistributedApplicationModuleExtensions
             defaultImageTag,
             UsesModuleRepository: true);
 
-        ValidateResourceNames(builder, module, registry, options, moduleOptions, imported, resourceNames);
+        ValidateResourceNames(
+            builder,
+            module,
+            registry,
+            options,
+            moduleOptions,
+            imported,
+            resourceNames,
+            definitionRepository);
         if (!materializeWithoutRepository &&
             (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported))
         {
@@ -1645,7 +1653,8 @@ public static partial class DistributedApplicationModuleExtensions
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         bool imported,
-        ModuleResourceNameMap resourceNames)
+        ModuleResourceNameMap resourceNames,
+        MaterializedModuleRepository definitionRepository)
     {
         var plannedResourceNames = module.ResourceDefinitions.SelectMany(definition =>
             GetPlannedResourceNames(
@@ -1654,7 +1663,9 @@ public static partial class DistributedApplicationModuleExtensions
                 options,
                 moduleOptions,
                 imported,
-                builder.ExecutionContext.IsRunMode))
+                builder.ExecutionContext.IsRunMode,
+                builder.AppHostDirectory,
+                definitionRepository))
             .ToArray();
 
         var duplicateResourceName = plannedResourceNames
@@ -1825,21 +1836,29 @@ public static partial class DistributedApplicationModuleExtensions
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         bool imported,
-        bool runMode)
+        bool runMode,
+        string appHostDirectory,
+        MaterializedModuleRepository definitionRepository)
     {
         if (!runMode || !RequiresImagePublishInstaller(definition, options, moduleOptions, imported))
         {
             return [resourceName];
         }
 
-        return RequiresImageRetagInstaller(definition, moduleOptions)
+        return RequiresImageRetagInstaller(
+            definition,
+            moduleOptions,
+            appHostDirectory,
+            definitionRepository)
             ? [resourceName, GetInstallerName(resourceName), GetRetagName(resourceName)]
             : [resourceName, GetInstallerName(resourceName)];
     }
 
     private static bool RequiresImageRetagInstaller(
         IDistributedApplicationModuleResource definition,
-        DistributedApplicationModuleOptions? moduleOptions)
+        DistributedApplicationModuleOptions? moduleOptions,
+        string appHostDirectory,
+        MaterializedModuleRepository definitionRepository)
     {
         var imagePublisher = definition switch
         {
@@ -1863,8 +1882,25 @@ public static partial class DistributedApplicationModuleExtensions
             imagePublisher.Declared,
             imagePublisher.Configured,
             "module-image-tag");
-        return ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: false) ||
-            ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: true);
+        var buildRepository = GetConfiguredValue(imagePublisher.Configured?.BuildRepository) ??
+            GetConfiguredValue(imagePublisher.Declared.BuildRepository);
+        var buildRevision = GetConfiguredValue(imagePublisher.Configured?.BuildRepositoryRevision) ??
+            GetConfiguredValue(imagePublisher.Declared.BuildRepositoryRevision);
+        var usesSeparateBuildCheckout =
+            (buildRepository is not null && !RepositoryIdentitiesMatch(
+                buildRepository,
+                definitionRepository.Repository ?? definitionRepository.RepositoryPath,
+                appHostDirectory)) ||
+            !string.Equals(
+                buildRevision,
+                definitionRepository.RepositoryRevision,
+                StringComparison.Ordinal);
+        return usesSeparateBuildCheckout
+            ? ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: false) ||
+                ModuleImagePublishPlan.WouldRequireRetag(effectiveOptions, repositoryDirty: true)
+            : ModuleImagePublishPlan.WouldRequireRetag(
+                effectiveOptions,
+                definitionRepository.RepositoryDirty);
     }
 
     private static bool RequiresRepositoryImageTag(

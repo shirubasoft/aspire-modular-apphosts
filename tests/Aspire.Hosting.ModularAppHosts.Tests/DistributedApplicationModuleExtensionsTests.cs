@@ -1734,6 +1734,32 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Clean_publish_output_does_not_reserve_an_unused_literal_retag_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = "modular-static:dev"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Equal(2, builder.Resources.OfType<ContainerResource>().Count());
+        Assert.Empty(builder.Resources.OfType<ModuleImageRetagResource>());
+    }
+
+    [Fact]
     public async Task Module_exports_any_custom_resource_type_through_a_lazy_factory()
     {
         using var repository = await TestRepository.CreateAsync();
