@@ -229,7 +229,7 @@ module.AddProject(
         publishArguments:
         [
             "publish",
-            "src/Orders.Api/Orders.Api.csproj",
+            "Orders.Api.csproj",
             "-t:PublishContainer",
             $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
             $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"

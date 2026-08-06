@@ -1785,6 +1785,29 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Local_repository_relative_project_uses_the_git_root_of_a_nested_apphost()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        var appHostDirectory = Path.Combine(repository.Path, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        var builder = CreateBuilder(appHostDirectory);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
+        var relativeProjectPath = Path.GetRelativePath(repository.Path, repository.ProjectPath);
+        var module = await builder.ExportModuleAsync("catalog", definition =>
+            definition.AddProject(
+                    "api",
+                    relativeProjectPath,
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("catalog-api", "dotnet", ["publish"]));
+
+        await builder.AddAsync(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Equal(repository.ProjectPath, project.GetProjectMetadata().ProjectPath);
+    }
+
+    [Fact]
     public async Task Imported_repository_relative_project_preserves_its_publish_directory()
     {
         using var workspace = TemporaryDirectory.Create();

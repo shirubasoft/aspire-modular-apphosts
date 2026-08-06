@@ -265,13 +265,14 @@ public static partial class DistributedApplicationModuleExtensions
             module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
         var materializeWithoutRepository = registry.CanMaterializePreviewWithoutRepository(module);
         var containerPublishersRequireModuleRepository = !materializeWithoutRepository &&
-            ContainerPublishersRequireModuleRepository(
+            await ContainerPublishersRequireModuleRepositoryAsync(
                 builder,
                 module,
                 options,
                 moduleOptions,
                 repository,
-                repositoryRevision);
+                repositoryRevision,
+                cancellationToken).ConfigureAwait(false);
         var requiresRepository = !materializeWithoutRepository &&
             (module.ProjectDefinitions.Count > 0 ||
                 module.ExplicitlyRequiresRepositoryContent ||
@@ -326,7 +327,12 @@ public static partial class DistributedApplicationModuleExtensions
                 (imported &&
                     (requiresRepository || repositoryParameter is not null || !string.IsNullOrWhiteSpace(repository))
                     ? GetImportedRepositoryPath(builder, options, repository, module.Name)
-                    : GetLocalRepositoryPath(builder, module, repository));
+                    : await GetLocalRepositoryPathAsync(
+                        builder,
+                        module,
+                        repository,
+                        options,
+                        cancellationToken).ConfigureAwait(false));
         var repositorySynchronizationKey = materializeWithoutRepository
             ? Path.GetFullPath(repositoryPath)
             : await RepositoryInspector.TryFindRepositoryRootAsync(
@@ -983,16 +989,22 @@ public static partial class DistributedApplicationModuleExtensions
         }
     }
 
-    private static bool ContainerPublishersRequireModuleRepository(
+    private static async Task<bool> ContainerPublishersRequireModuleRepositoryAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         string? definitionRepository,
-        string? definitionRevision)
+        string? definitionRevision,
+        CancellationToken cancellationToken)
     {
         var definitionRepositoryIdentity = definitionRepository ??
-            GetLocalRepositoryPath(builder, module, repository: null);
+            await GetLocalRepositoryPathAsync(
+                builder,
+                module,
+                repository: null,
+                options,
+                cancellationToken).ConfigureAwait(false);
         foreach (var container in module.ContainerDefinitions)
         {
             var declared = container.ImagePublishOptions;
@@ -1237,10 +1249,12 @@ public static partial class DistributedApplicationModuleExtensions
         return parameter;
     }
 
-    private static string GetLocalRepositoryPath(
+    private static async Task<string> GetLocalRepositoryPathAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
-        string? repository)
+        string? repository,
+        ModularAppHostsOptions options,
+        CancellationToken cancellationToken)
     {
         var projectRepositoryRoot = module.ProjectDefinitions
             .Select(project => project.SourceRepositoryRoot)
@@ -1260,7 +1274,17 @@ public static partial class DistributedApplicationModuleExtensions
             }
         }
 
-        return builder.AppHostDirectory;
+        if (!module.ProjectDefinitions.Any(project => project.PathBase == ModuleProjectPathBase.Repository))
+        {
+            return builder.AppHostDirectory;
+        }
+
+        return await RepositoryInspector.TryFindRepositoryRootAsync(
+                builder.AppHostDirectory,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false) ??
+            builder.AppHostDirectory;
     }
 
     private static async Task<string?> TryGetExistingSameWorktreeRepositoryAsync(
