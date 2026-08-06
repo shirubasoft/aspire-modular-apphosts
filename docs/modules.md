@@ -270,7 +270,9 @@ module.AddResource<PostgresServerResource>(
     });
 ```
 
-The overload is constrained to `ContainerResource`; integration server resources derived from it retain their typed APIs. Before the factory runs, `context.Image` contains the resolved registry, name, tag, repository, and full reference. After the factory returns, the library replaces any integration-default image and registry, applies configured `ImageSHA256` and `ImagePullPolicy` values from the module's `Containers` section, and attaches the same one-shot installer used by declared containers.
+The overload is constrained to `ContainerResource`; integration server resources derived from it retain their typed APIs. Before the factory runs, `context.Image` contains the resolved registry, name, tag, optional digest, repository, and full effective reference. When a digest is configured, the reference uses the immutable `repository@sha256:...` form. After the factory returns, the library replaces any integration-default image and registry, applies configured `ImageSHA256` and `ImagePullPolicy` values from the module's `Containers` section, and attaches the same one-shot installer used by declared containers.
+
+Factory-created containers remain in the module's complete `Resources` collection, where `ResourceType` identifies the declared `ContainerResource` subtype. The narrower `Containers` collection contains only resources declared through `AddContainer` because a lazy integration factory does not have an image identity until materialization.
 
 Factories run in declaration order when the module is materialized. The context provides the receiving builder, effective resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`. That name already includes the import prefix or alias, so runtime container names can follow it when a fixed name is unavoidable:
 

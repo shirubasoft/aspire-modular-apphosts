@@ -1729,6 +1729,47 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Factory_resource_context_exposes_the_configured_immutable_image_reference()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var digest = $"sha256:{new string('a', 64)}";
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:data:Containers:database";
+        builder.Configuration[$"{section}:ImageSHA256"] = digest;
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+        ModuleResourceImage? resolvedImage = null;
+        var module = await builder.ExportModuleAsync("data", definition =>
+            definition.AddResource<ContainerResource>(
+                "database",
+                context =>
+                {
+                    resolvedImage = context.Image;
+                    return context.ApplicationBuilder.AddContainer(context.ResourceName, "database");
+                },
+                new ModuleContainerExportOptions("example/database", "dotnet", "publish")
+                {
+                    ImageRegistry = "registry.example.test",
+                    ImageTag = "development"
+                }));
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(resolvedImage);
+        Assert.Equal(digest, resolvedImage.Digest);
+        Assert.Equal($"registry.example.test/example/database@{digest}", resolvedImage.Reference);
+        Assert.Contains(
+            module.Resources,
+            resource => resource.Name == "database" &&
+                typeof(ContainerResource).IsAssignableFrom(resource.ResourceType));
+        Assert.Empty(module.Containers);
+        var container = module.GetResource<ContainerResource>("database").Resource;
+        Assert.Equal(
+            digest["sha256:".Length..],
+            Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>()).SHA256);
+    }
+
+    [Fact]
     public async Task Generic_resource_factory_must_return_the_declared_name()
     {
         using var repository = await TestRepository.CreateAsync();

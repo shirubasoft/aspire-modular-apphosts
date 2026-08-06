@@ -15,13 +15,20 @@ public interface IDistributedApplicationModule
     /// <summary>Gets the module contract version.</summary>
     string Version { get; }
 
-    /// <summary>Gets every resource exported by the module in declaration order.</summary>
+    /// <summary>
+    /// Gets every resource exported by the module in declaration order, including container resources created by
+    /// <see cref="IDistributedApplicationModuleBuilder.AddResource{TResource}(string, Func{IDistributedApplicationModuleResourceContext, IResourceBuilder{TResource}}, ModuleContainerExportOptions)"/>.
+    /// </summary>
     IReadOnlyList<IDistributedApplicationModuleResource> Resources { get; }
 
     /// <summary>Gets the projects exported by the module.</summary>
     IReadOnlyList<IDistributedApplicationModuleProject> Projects { get; }
 
-    /// <summary>Gets the containers exported by the module.</summary>
+    /// <summary>
+    /// Gets containers declared with <see cref="IDistributedApplicationModuleBuilder.AddContainer"/>. Factory-created
+    /// container resources are exposed through <see cref="Resources"/> with a <see cref="IDistributedApplicationModuleResource.ResourceType"/>
+    /// assignable to <see cref="ContainerResource"/>.
+    /// </summary>
     IReadOnlyList<IDistributedApplicationModuleContainer> Containers { get; }
 
     /// <summary>Gets a materialized module resource by name.</summary>
@@ -267,13 +274,14 @@ public sealed class ModuleContainerExportOptions(
 /// <summary>Describes the effective image assigned to a factory-created container resource.</summary>
 public sealed class ModuleResourceImage
 {
-    internal ModuleResourceImage(string? registry, string name, string tag)
+    internal ModuleResourceImage(string? registry, string name, string tag, string? digest = null)
     {
         Registry = registry;
         Name = name;
         Tag = tag;
+        Digest = digest;
         Repository = string.IsNullOrWhiteSpace(registry) ? name : $"{registry}/{name}";
-        Reference = $"{Repository}:{tag}";
+        Reference = digest is null ? $"{Repository}:{tag}" : $"{Repository}@{digest}";
     }
 
     /// <summary>Gets the explicit registry host, or <see langword="null"/> for an unqualified image.</summary>
@@ -285,10 +293,13 @@ public sealed class ModuleResourceImage
     /// <summary>Gets the effective image tag, including the dirty suffix when applicable.</summary>
     public string Tag { get; }
 
+    /// <summary>Gets the configured immutable image digest, including its algorithm prefix, when present.</summary>
+    public string? Digest { get; }
+
     /// <summary>Gets the image repository, including the registry when configured.</summary>
     public string Repository { get; }
 
-    /// <summary>Gets the complete image reference.</summary>
+    /// <summary>Gets the complete effective image reference, preferring <see cref="Digest"/> when present.</summary>
     public string Reference { get; }
 }
 

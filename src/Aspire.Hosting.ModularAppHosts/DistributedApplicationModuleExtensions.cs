@@ -795,7 +795,8 @@ public static partial class DistributedApplicationModuleExtensions
             : new ModuleResourceImage(
                 publishPlan.ImageRegistry,
                 publishPlan.ImageName,
-                publishPlan.ImageTag);
+                publishPlan.ImageTag,
+                GetConfiguredValue(configured?.ImageSHA256));
         var context = new DistributedApplicationModuleResourceContext(
             builder,
             module,

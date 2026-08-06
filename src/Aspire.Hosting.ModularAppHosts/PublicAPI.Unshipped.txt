@@ -122,6 +122,7 @@ Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevis
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistry.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistry.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Digest.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Name.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Reference.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Registry.get -> string?
