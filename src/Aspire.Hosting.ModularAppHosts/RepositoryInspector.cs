@@ -155,6 +155,21 @@ internal static class RepositoryInspector
             : null;
     }
 
+    public static async Task<bool> HasUpstreamAsync(
+        string repositoryPath,
+        string gitExecutablePath = "git",
+        TimeSpan? commandTimeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await TryRunGitAsync(
+            repositoryPath,
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return result.Success && !string.IsNullOrWhiteSpace(result.Output);
+    }
+
     public static async Task<string?> TryGetCommitAsync(
         string repositoryPath,
         string gitExecutablePath = "git",
@@ -936,11 +951,19 @@ internal static class RepositorySynchronizer
             return commands;
         }
 
-        return updateRepository
-            ? [new RepositorySyncCommand(
+        if (!updateRepository ||
+            !await RepositoryInspector.HasUpstreamAsync(
+                repositoryPath,
                 gitExecutablePath,
-                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])]
-            : [];
+                commandTimeout,
+                cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        return [new RepositorySyncCommand(
+            gitExecutablePath,
+            ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])];
     }
 
     public static async Task SynchronizeAsync(

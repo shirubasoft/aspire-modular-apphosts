@@ -79,7 +79,7 @@ For a repository-backed module, supply its repository through configuration or `
 
 Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
 
-By default, local modules run as projects, imported modules run as containers, and existing clean imported repositories are fast-forwarded before startup. Image build commands remain opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
+By default, local modules run as projects, imported modules run as containers, and existing clean imported repositories with a configured upstream are fast-forwarded before startup. Clean local branches without an upstream and dirty checkouts are left unchanged. Image build commands remain opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
 
 Module image build commands can follow Aspire's Docker or Podman selection by awaiting `ContainerRuntimeResolver.ResolveAsync()`. It honors `ASPIRE_CONTAINER_RUNTIME` and the legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable, otherwise probes both runtimes in parallel and prefers one that is running.
 

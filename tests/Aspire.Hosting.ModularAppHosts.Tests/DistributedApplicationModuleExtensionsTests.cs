@@ -1792,12 +1792,15 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public async Task Repository_synchronizer_pulls_a_clean_worktree_and_requires_a_remote_for_a_missing_clone()
+    public async Task Repository_synchronizer_pulls_a_clean_worktree_with_an_upstream()
     {
-        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        using var source = await TestRepository.CreateAsync(initializeGit: true);
+        using var parent = TemporaryDirectory.Create();
+        var checkout = Path.Combine(parent.Path, "checkout");
+        await TestRepository.RunGitAsync(parent.Path, "clone", "--", source.Path, checkout);
 
         var pull = await RepositorySynchronizer.CreateCommandAsync(
-            repository.Path,
+            checkout,
             repository: null,
             updateRepository: true,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -1805,13 +1808,36 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.NotNull(pull);
         Assert.Equal("git", pull.Executable);
         Assert.Equal(
-            ["-C", repository.Path, "pull", "--ff-only", "--recurse-submodules"],
+            ["-C", checkout, "pull", "--ff-only", "--recurse-submodules"],
             pull.Arguments);
         Assert.Null(await RepositorySynchronizer.CreateCommandAsync(
-            repository.Path,
+            checkout,
             repository: null,
             updateRepository: false,
             cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Repository_synchronizer_leaves_a_clean_worktree_without_an_upstream_unchanged()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        await TestRepository.RunGitAsync(repository.Path, "switch", "-c", "local-work");
+
+        var command = await RepositorySynchronizer.CreateCommandAsync(
+            repository.Path,
+            repository: null,
+            updateRepository: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Null(command);
+        Assert.False(await RepositoryInspector.HasUpstreamAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Repository_synchronizer_requires_a_remote_for_a_missing_clone()
+    {
 
         using var imports = TemporaryDirectory.Create();
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
