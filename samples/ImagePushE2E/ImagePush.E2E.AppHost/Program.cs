@@ -17,6 +17,8 @@ if (string.IsNullOrWhiteSpace(registryEndpoint))
         "ImagePush:RegistryEndpoint must identify the local registry used by the image-push E2E test.");
 }
 
+var retagRegistryEndpoint = builder.Configuration["ImagePush:RetagRegistryEndpoint"] ?? registryEndpoint;
+
 var registry = builder.AddContainerRegistry(
     "image-push-registry",
     registryEndpoint,
@@ -37,6 +39,12 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             ImageRegistry = registryEndpoint,
             ImageTag = ImageTag
         });
+
+    definition.AddContainer(
+            "image-pull-mapped",
+            $"{retagRegistryEndpoint}/image-pull/local",
+            ImageTag)
+        .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}");
 
     definition.AddProject(
             ProjectResourceName,

@@ -606,6 +606,7 @@ public static partial class DistributedApplicationModuleExtensions
 
         export.ConfigureContainer?.Invoke(container);
         ModuleImagePushPipeline.AddPushStep(container);
+        ModuleImagePullPipeline.AddPullStep(container);
 
         ApplyImageSHA256(container, projectOptions?.ImageSHA256);
         ApplyImagePullPolicy(
@@ -714,6 +715,8 @@ public static partial class DistributedApplicationModuleExtensions
         {
             ModuleImagePushPipeline.AddPushStep(container);
         }
+
+        ModuleImagePullPipeline.AddPullStep(container);
 
         ApplyImageSHA256(container, containerOptions?.ImageSHA256);
         ApplyImagePullPolicy(
@@ -879,20 +882,22 @@ public static partial class DistributedApplicationModuleExtensions
                 definitionRepository.RepositoryPath,
                 imported));
 
-        if (publishPlan is not null)
+        if (resource is ContainerResource containerResource)
         {
-            var containerResource = resource as ContainerResource ??
-                throw new InvalidOperationException(
-                    $"Image-published module resource '{definition.Name}' did not create a container resource.");
             var container = builder.CreateResourceBuilder(containerResource);
-            ApplyImageIdentity(container, publishPlan);
-            ApplyImageSHA256(container, configured?.ImageSHA256);
-            ApplyImagePullPolicy(
-                container,
-                configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
-            ModuleImagePushPipeline.AddPushStep(container);
+            if (publishPlan is not null)
+            {
+                ApplyImageIdentity(container, publishPlan);
+                ApplyImageSHA256(container, configured?.ImageSHA256);
+                ApplyImagePullPolicy(
+                    container,
+                    configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
+                ModuleImagePushPipeline.AddPushStep(container);
+            }
 
-            if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan.ShouldPublish)
+            ModuleImagePullPipeline.AddPullStep(container);
+
+            if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan is { ShouldPublish: true })
             {
                 var publishWorkingDirectory = PathSafety.GetContainedPath(
                     buildRepository.RepositoryPath,
@@ -911,6 +916,11 @@ public static partial class DistributedApplicationModuleExtensions
                     registry,
                     cancellationToken).ConfigureAwait(false);
             }
+        }
+        else if (publishPlan is not null)
+        {
+            throw new InvalidOperationException(
+                $"Image-published module resource '{definition.Name}' did not create a container resource.");
         }
 
         registry.TrackResource(resource);
@@ -1508,6 +1518,7 @@ public static partial class DistributedApplicationModuleExtensions
         ValidateOptions(options);
         var registry = new ModuleApplicationRegistry(options, builder.Configuration);
         ModuleImagePushPipeline.ConfigureResourceSelection(builder);
+        ModuleImagePullPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
         builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
