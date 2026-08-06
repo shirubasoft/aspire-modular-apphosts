@@ -105,6 +105,9 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the effective container image name.</summary>
     public string? ImageName { get; set; }
 
+    /// <summary>Gets or sets the explicit container registry host.</summary>
+    public string? ImageRegistry { get; set; }
+
     /// <summary>Gets or sets the effective container image tag.</summary>
     public string? ImageTag { get; set; }
 

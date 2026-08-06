@@ -249,6 +249,29 @@ module.AddResource<PostgresServerResource>("postgres", context =>
 
 Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically when the command uses the module repository. A publisher with an explicit `BuildRepository` can keep the module definition repository-independent.
 
+Container-backed integrations can use the three-argument overload to publish a custom image while keeping their specialized resource type:
+
+```csharp
+module.AddResource<PostgresServerResource>(
+    "postgres",
+    context => context.ApplicationBuilder.AddPostgres(context.ResourceName),
+    new ModuleContainerExportOptions(
+        imageName: "example/orders-postgres",
+        publishCommand: "docker",
+        publishArguments:
+        [
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            "."
+        ])
+    {
+        ImageRegistry = "ghcr.io"
+    });
+```
+
+The overload is constrained to `ContainerResource`; integration server resources derived from it retain their typed APIs. Before the factory runs, `context.Image` contains the resolved registry, name, tag, repository, and full reference. After the factory returns, the library replaces any integration-default image and registry, applies configured `ImageSHA256` and `ImagePullPolicy` values from the module's `Containers` section, and attaches the same one-shot installer used by declared containers.
+
 Factories run in declaration order when the module is materialized. The context provides the receiving builder, effective resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`. That name already includes the import prefix or alias, so runtime container names can follow it when a fixed name is unavoidable:
 
 ```csharp
@@ -264,7 +287,7 @@ Modules containing only repository-independent resources, such as existing image
 
 ## Publishing module images
 
-The library does not infer how an image is built. `ExportAsContainer` publishes a project image, while `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
+The library does not infer how an image is built. `ExportAsContainer` publishes a project image, `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource, and the image-publishing `AddResource` overload does the same for a factory-created container resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
 
 ```csharp
 var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken);
@@ -287,12 +310,12 @@ module.AddContainer("orders-static", "orders-static")
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 
 - When `ImageTag` is omitted, the module repository branch is lowercased and sanitized and its 12-character commit is appended (`feature/orders` becomes `feature-orders-a1b2c3d4e5f6`). Detached checkouts use `sha-a1b2c3d4e5f6`. A known managed repository is synchronized before this tag is selected. For repository-independent or still-unresolved definitions, the AppHost branch and commit are used, then CI branch variables, then `latest`.
-- A clean repository uses `ImageName:ImageTag` and reuses that image when it already exists locally.
-- A dirty repository uses `ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
+- A clean repository uses `[ImageRegistry/]ImageName:ImageTag` and reuses that image when it already exists locally.
+- A dirty repository uses `[ImageRegistry/]ImageName:ImageTag-dirty` and rebuilds it for every AppHost session. The tag remains within the 128-character distribution limit.
 - The container waits for its installer to complete successfully.
 - Installers are run-only resources and are excluded from deployment manifests.
 
-Publish arguments can use the `{image}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
+`ImageRegistry` explicitly separates a registry host such as `ghcr.io` from an `ImageName` repository path such as `example/orders-api`. Leave it unset for local or otherwise unqualified images. Publish arguments can use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
 
 `WorkingDirectory` is relative to the effective build repository root. It defaults to the project directory for `ExportAsContainer` when the module repository also builds the image. A separate build repository and `WithImagePublishCommand` both default to the build repository root. The command and arguments are executed directly without a shell.
 
@@ -368,6 +391,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
               "LaunchProfileName": "https",
               "ExcludeLaunchProfile": false,
               "ExcludeKestrelEndpoints": false,
+              "ImageRegistry": "ghcr.io",
               "ImageName": "example/orders-api",
               "ImageTag": "debug",
               "PublishImage": true,
@@ -389,6 +413,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
           },
           "Containers": {
             "orders-cache": {
+              "ImageRegistry": "docker.io",
               "ImageName": "redis",
               "ImageTag": "8-alpine",
               "PublishImage": false,

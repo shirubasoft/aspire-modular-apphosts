@@ -4,6 +4,7 @@ using CliCommand = global::CliWrap.Cli;
 namespace Aspire.Hosting.ModularAppHosts;
 
 internal sealed record ModuleImagePublishPlan(
+    string? ImageRegistry,
     string ImageName,
     string ImageTag,
     string ImageReference,
@@ -21,16 +22,19 @@ internal sealed record ModuleImagePublishPlan(
         ArgumentNullException.ThrowIfNull(imageExists);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageTag);
 
-        var cleanImageReference = $"{options.ImageName}:{options.ImageTag}";
+        var imageRepository = ModuleImageReference.GetRepository(options);
+        var cleanImageReference = $"{imageRepository}:{options.ImageTag}";
         var effectiveTag = repositoryDirty &&
             !options.ImageTag.EndsWith("-dirty", StringComparison.OrdinalIgnoreCase)
                 ? ModuleImageTag.AppendDirtySuffix(options.ImageTag)
                 : options.ImageTag;
-        var effectiveImageReference = $"{options.ImageName}:{effectiveTag}";
+        var effectiveImageReference = $"{imageRepository}:{effectiveTag}";
         var publishArguments = options.PublishArguments
             .Select(argument => ResolveArgument(
                 argument,
+                options.ImageRegistry,
                 options.ImageName,
+                imageRepository,
                 effectiveTag,
                 cleanImageReference,
                 effectiveImageReference,
@@ -40,6 +44,7 @@ internal sealed record ModuleImagePublishPlan(
         var shouldPublish = repositoryDirty ||
             !await imageExists(cleanImageReference, cancellationToken).ConfigureAwait(false);
         return new ModuleImagePublishPlan(
+            options.ImageRegistry,
             options.ImageName,
             effectiveTag,
             effectiveImageReference,
@@ -50,7 +55,9 @@ internal sealed record ModuleImagePublishPlan(
 
     private static string ResolveArgument(
         string argument,
+        string? imageRegistry,
         string imageName,
+        string imageRepository,
         string imageTag,
         string cleanImageReference,
         string effectiveImageReference,
@@ -65,8 +72,39 @@ internal sealed record ModuleImagePublishPlan(
 
         return argument
             .Replace(ModuleContainerExportOptions.ImageReferencePlaceholder, effectiveImageReference, StringComparison.Ordinal)
+            .Replace(ModuleContainerExportOptions.ImageRepositoryPlaceholder, imageRepository, StringComparison.Ordinal)
+            .Replace(ModuleContainerExportOptions.ImageRegistryPlaceholder, imageRegistry ?? string.Empty, StringComparison.Ordinal)
             .Replace(ModuleContainerExportOptions.ImageNamePlaceholder, imageName, StringComparison.Ordinal)
             .Replace(ModuleContainerExportOptions.ImageTagPlaceholder, imageTag, StringComparison.Ordinal);
+    }
+}
+
+internal static class ModuleImageReference
+{
+    public static (string? Registry, string Name) ParseRepository(string repository)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        var separator = repository.IndexOf('/', StringComparison.Ordinal);
+        if (separator <= 0)
+        {
+            return (null, repository);
+        }
+
+        var firstSegment = repository[..separator];
+        var hasExplicitRegistry = firstSegment.Contains('.', StringComparison.Ordinal) ||
+            firstSegment.Contains(':', StringComparison.Ordinal) ||
+            string.Equals(firstSegment, "localhost", StringComparison.OrdinalIgnoreCase);
+        return hasExplicitRegistry
+            ? (firstSegment, repository[(separator + 1)..])
+            : (null, repository);
+    }
+
+    public static string GetRepository(ModuleContainerExportOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return string.IsNullOrWhiteSpace(options.ImageRegistry)
+            ? options.ImageName
+            : $"{options.ImageRegistry}/{options.ImageName}";
     }
 }
 

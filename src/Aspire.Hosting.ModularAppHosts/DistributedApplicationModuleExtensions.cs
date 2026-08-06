@@ -471,14 +471,17 @@ public static partial class DistributedApplicationModuleExtensions
                         cancellationToken).ConfigureAwait(false);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
-                    MaterializeResource(
+                    await MaterializeResourceAsync(
                         builder,
                         module,
                         resource,
                         resourceNames[resource.Name],
-                        definitionRepository.RepositoryPath,
+                        definitionRepository,
                         imported,
-                        registry);
+                        registry,
+                        options,
+                        moduleOptions,
+                        cancellationToken).ConfigureAwait(false);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -574,6 +577,8 @@ public static partial class DistributedApplicationModuleExtensions
                 definitionRepository.RepositoryPath,
                 imported));
 
+        ApplyImageRegistry(container, publishPlan.ImageRegistry);
+
         export.ConfigureContainer?.Invoke(container);
 
         ApplyImageSHA256(container, projectOptions?.ImageSHA256);
@@ -655,6 +660,10 @@ public static partial class DistributedApplicationModuleExtensions
                 definitionRepository.RepositoryPath,
                 imported));
 
+        ApplyImageRegistry(
+            container,
+            publishPlan?.ImageRegistry ?? GetConfiguredValue(containerOptions?.ImageRegistry));
+
         definition.ConfigureContainer?.Invoke(container);
 
         ApplyImageSHA256(container, containerOptions?.ImageSHA256);
@@ -733,28 +742,106 @@ public static partial class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
 
-    private static void MaterializeResource(
+    private static async Task MaterializeResourceAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         IDistributedApplicationModuleFactoryResource definition,
         string resourceName,
-        string repositoryPath,
+        MaterializedModuleRepository definitionRepository,
         bool imported,
-        ModuleApplicationRegistry registry)
+        ModuleApplicationRegistry registry,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        CancellationToken cancellationToken)
     {
+        var configured = moduleOptions?.FindContainer(definition.Name);
+        ValidatePublishOverrides(
+            definition.Name,
+            definition.ImagePublishOptions is not null,
+            configured,
+            nameof(IDistributedApplicationModuleBuilder.AddResource));
+        var publishImage = definition.ImagePublishOptions is not null &&
+            (configured?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
+        var buildRepository = definition.ImagePublishOptions is null
+            ? definitionRepository
+            : await ResolveBuildRepositoryAsync(
+                builder,
+                module,
+                definition.Name,
+                definition.ImagePublishOptions,
+                configured,
+                definitionRepository,
+                publishImage,
+                registry,
+                options,
+                moduleOptions,
+                cancellationToken).ConfigureAwait(false);
+        var publishOptions = definition.ImagePublishOptions is null
+            ? null
+            : ApplyImageOptions(
+                definition.ImagePublishOptions,
+                configured,
+                buildRepository.DefaultImageTag);
+        var publishPlan = publishOptions is null
+            ? null
+            : await CreateImagePublishPlanAsync(
+                builder,
+                publishOptions,
+                buildRepository.RepositoryDirty && publishImage,
+                inspectExistingImage: publishImage,
+                cancellationToken).ConfigureAwait(false);
+        var image = publishPlan is null
+            ? null
+            : new ModuleResourceImage(
+                publishPlan.ImageRegistry,
+                publishPlan.ImageName,
+                publishPlan.ImageTag);
         var context = new DistributedApplicationModuleResourceContext(
             builder,
             module,
             resourceName,
-            repositoryPath,
-            imported);
+            definitionRepository.RepositoryPath,
+            imported,
+            image);
         var resource = definition.Materialize(
             context,
             new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
                 definition.Name,
-                repositoryPath,
+                definitionRepository.RepositoryPath,
                 imported));
+
+        if (publishPlan is not null)
+        {
+            var containerResource = resource as ContainerResource ??
+                throw new InvalidOperationException(
+                    $"Image-published module resource '{definition.Name}' did not create a container resource.");
+            var container = builder.CreateResourceBuilder(containerResource);
+            ApplyImageIdentity(container, publishPlan);
+            ApplyImageSHA256(container, configured?.ImageSHA256);
+            ApplyImagePullPolicy(
+                container,
+                configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
+
+            if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan.ShouldPublish)
+            {
+                var publishWorkingDirectory = PathSafety.GetContainedPath(
+                    buildRepository.RepositoryPath,
+                    publishOptions!.WorkingDirectory ?? ".",
+                    nameof(ModuleContainerExportOptions.WorkingDirectory));
+                AddImagePublishInstaller(
+                    builder,
+                    resourceName,
+                    publishOptions,
+                    publishPlan,
+                    buildRepository.RepositoryPath,
+                    publishWorkingDirectory,
+                    buildRepository.Repository,
+                    buildRepository.UpdateRepository,
+                    container,
+                    registry);
+            }
+        }
 
         registry.TrackResource(resource);
         module.TrackMaterializedResource(builder, definition.Name, resource);
@@ -782,6 +869,9 @@ public static partial class DistributedApplicationModuleExtensions
         string defaultImageTag)
     {
         var imageName = GetConfiguredValue(configured?.ImageName) ?? declared.ImageName;
+        var imageRegistry = configured?.ImageRegistry is null
+            ? GetConfiguredValue(declared.ImageRegistry)
+            : GetConfiguredValue(configured.ImageRegistry);
         var imageTag = GetConfiguredValue(configured?.ImageTag) ??
             GetConfiguredValue(declared.ImageTag) ??
             defaultImageTag;
@@ -794,6 +884,7 @@ public static partial class DistributedApplicationModuleExtensions
 
         return new ModuleContainerExportOptions(imageName, publishCommand, publishArguments)
         {
+            ImageRegistry = imageRegistry,
             ImageTag = imageTag,
             WorkingDirectory = configured?.PublishWorkingDirectory ?? declared.WorkingDirectory,
             BuildRepository = GetConfiguredValue(configured?.BuildRepository) ??
@@ -969,7 +1060,20 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModuleContainer definition,
         DistributedApplicationModuleContainerOptions? configured)
     {
-        if (definition.ImagePublishOptions is not null || configured is null)
+        ValidatePublishOverrides(
+            definition.Name,
+            definition.ImagePublishOptions is not null,
+            configured,
+            nameof(IDistributedApplicationModuleContainerBuilder.WithImagePublishCommand));
+    }
+
+    private static void ValidatePublishOverrides(
+        string resourceName,
+        bool hasDeclaredPublisher,
+        DistributedApplicationModuleContainerOptions? configured,
+        string declarationMethod)
+    {
+        if (hasDeclaredPublisher || configured is null)
         {
             return;
         }
@@ -984,8 +1088,8 @@ public static partial class DistributedApplicationModuleExtensions
             configured.PublishImage is true)
         {
             throw new InvalidOperationException(
-                $"Container '{definition.Name}' configures image publishing, but its module definition does not call " +
-                $"{nameof(IDistributedApplicationModuleContainerBuilder.WithImagePublishCommand)}().");
+                $"Container resource '{resourceName}' configures image publishing, but its module definition does not " +
+                $"call {declarationMethod}() with image publish options.");
         }
     }
 
@@ -1005,15 +1109,9 @@ public static partial class DistributedApplicationModuleExtensions
                 repository: null,
                 options,
                 cancellationToken).ConfigureAwait(false);
-        foreach (var container in module.ContainerDefinitions)
+        foreach (var (resourceName, declared) in GetContainerPublishers(module))
         {
-            var declared = container.ImagePublishOptions;
-            if (declared is null)
-            {
-                continue;
-            }
-
-            var configured = moduleOptions?.FindContainer(container.Name);
+            var configured = moduleOptions?.FindContainer(resourceName);
             var buildRepository = GetConfiguredValue(configured?.BuildRepository) ??
                 GetConfiguredValue(declared.BuildRepository);
             var buildRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
@@ -1050,6 +1148,25 @@ public static partial class DistributedApplicationModuleExtensions
         if (policy is { } configuredPolicy)
         {
             container.WithImagePullPolicy(configuredPolicy);
+        }
+    }
+
+    private static void ApplyImageIdentity(
+        IResourceBuilder<ContainerResource> container,
+        ModuleImagePublishPlan publishPlan)
+    {
+        container.WithImageRegistry(publishPlan.ImageRegistry);
+        container.WithImage(publishPlan.ImageName);
+        container.WithImageTag(publishPlan.ImageTag);
+    }
+
+    private static void ApplyImageRegistry(
+        IResourceBuilder<ContainerResource> container,
+        string? registry)
+    {
+        if (registry is not null)
+        {
+            container.WithImageRegistry(registry);
         }
     }
 
@@ -1378,6 +1495,10 @@ public static partial class DistributedApplicationModuleExtensions
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var containerNames = module.ContainerDefinitions
             .Select(container => container.Name)
+            .Concat(module.ResourceDefinitions
+                .OfType<IDistributedApplicationModuleFactoryResource>()
+                .Where(resource => resource.ImagePublishOptions is not null)
+                .Select(resource => resource.Name))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var missingProject = configured.Projects.Keys.FirstOrDefault(name => !projectNames.Contains(name));
@@ -1485,6 +1606,10 @@ public static partial class DistributedApplicationModuleExtensions
                 moduleOptions?.FindContainer(container.Name)?.PublishImage ??
                     moduleOptions?.PublishImages ??
                     options.PublishImages,
+            IDistributedApplicationModuleFactoryResource resource when resource.ImagePublishOptions is not null =>
+                moduleOptions?.FindContainer(resource.Name)?.PublishImage ??
+                    moduleOptions?.PublishImages ??
+                    options.PublishImages,
             _ => false
         };
 
@@ -1511,8 +1636,34 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(container.ImagePublishOptions.ImageTag) is null &&
                 GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.BuildRepository) is null &&
                 GetConfiguredValue(container.ImagePublishOptions.BuildRepository) is null,
+            IDistributedApplicationModuleFactoryResource resource when resource.ImagePublishOptions is not null =>
+                GetConfiguredValue(moduleOptions?.FindContainer(resource.Name)?.ImageSHA256) is null &&
+                GetConfiguredValue(moduleOptions?.FindContainer(resource.Name)?.ImageTag) is null &&
+                GetConfiguredValue(resource.ImagePublishOptions.ImageTag) is null &&
+                GetConfiguredValue(moduleOptions?.FindContainer(resource.Name)?.BuildRepository) is null &&
+                GetConfiguredValue(resource.ImagePublishOptions.BuildRepository) is null,
             _ => false
         });
+    }
+
+    private static IEnumerable<(string ResourceName, ModuleContainerExportOptions Options)> GetContainerPublishers(
+        DistributedApplicationModule module)
+    {
+        foreach (var container in module.ContainerDefinitions)
+        {
+            if (container.ImagePublishOptions is not null)
+            {
+                yield return (container.Name, container.ImagePublishOptions);
+            }
+        }
+
+        foreach (var resource in module.ResourceDefinitions.OfType<IDistributedApplicationModuleFactoryResource>())
+        {
+            if (resource.ImagePublishOptions is not null)
+            {
+                yield return (resource.Name, resource.ImagePublishOptions);
+            }
+        }
     }
 
     private static ModuleProjectMode ResolveProjectMode(

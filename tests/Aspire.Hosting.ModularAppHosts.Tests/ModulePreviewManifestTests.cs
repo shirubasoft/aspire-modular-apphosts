@@ -209,7 +209,8 @@ public sealed class ModulePreviewManifestTests
         var options = Assert.IsType<OptionsWrapper<ModularAppHostsOptions>>(
             descriptor.ImplementationInstance).Value;
         var image = options.Modules["orders"].Containers["api"];
-        Assert.Equal("ghcr.io/acme/orders", image.ImageName);
+        Assert.Equal("ghcr.io", image.ImageRegistry);
+        Assert.Equal("acme/orders", image.ImageName);
         Assert.Equal(ImageSha256, image.ImageSHA256);
         Assert.False(image.PublishImage);
         Assert.True(options.Modules["orders"].Containers["worker"].PublishImage);
@@ -303,7 +304,52 @@ public sealed class ModulePreviewManifestTests
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal("ghcr.io/acme/orders", image.Image);
+        Assert.Equal("ghcr.io", image.Registry);
+        Assert.Equal("acme/orders", image.Image);
+        Assert.Equal(ImageSha256["sha256:".Length..], image.SHA256);
+        Assert.DoesNotContain(builder.Resources, resource => resource is ParameterResource);
+        Assert.DoesNotContain(builder.Resources, resource => resource is ModuleRepositoryInstallerResource);
+    }
+
+    [Fact]
+    public async Task Resolution_materializes_factory_created_container_without_repository_checkout()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var builder = CreateBuilder(directory.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitExecutablePath"] =
+            Path.Combine(directory.Path, "missing-git");
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
+            Path.Combine(directory.Path, "missing-gh");
+        builder.ApplyModulePreviewResolution(CreateResolution());
+        ModuleResourceImage? resolvedImage = null;
+
+        await builder.DefineModuleAsync("orders", "1", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/orders.git");
+            definition.AddResource<ContainerResource>(
+                "api",
+                context =>
+                {
+                    resolvedImage = context.Image;
+                    return context.ApplicationBuilder
+                        .AddContainer(context.ResourceName, "library/declared")
+                        .WithImageRegistry("docker.io");
+                },
+                new ModuleContainerExportOptions("orders", "dotnet", "publish")
+                {
+                    ImageRegistry = "declared.example"
+                });
+        }, TestContext.Current.CancellationToken);
+        await builder.ImportModuleAsync("orders", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(resolvedImage);
+        Assert.Equal("ghcr.io", resolvedImage.Registry);
+        Assert.Equal("acme/orders", resolvedImage.Name);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("ghcr.io", image.Registry);
+        Assert.Equal("acme/orders", image.Image);
         Assert.Equal(ImageSha256["sha256:".Length..], image.SHA256);
         Assert.DoesNotContain(builder.Resources, resource => resource is ParameterResource);
         Assert.DoesNotContain(builder.Resources, resource => resource is ModuleRepositoryInstallerResource);
@@ -329,7 +375,8 @@ public sealed class ModulePreviewManifestTests
         Assert.Empty(builder.Resources.OfType<ProjectResource>());
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal("ghcr.io/acme/orders", image.Image);
+        Assert.Equal("ghcr.io", image.Registry);
+        Assert.Equal("acme/orders", image.Image);
         Assert.Equal(ImageSha256["sha256:".Length..], image.SHA256);
         Assert.DoesNotContain(builder.Resources, resource => resource is ModuleRepositoryInstallerResource);
     }

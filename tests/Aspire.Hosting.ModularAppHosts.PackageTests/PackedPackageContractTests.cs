@@ -186,6 +186,7 @@ public sealed class PackedPackageContractTests
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
         const string source = """
+            using Aspire.Hosting;
             using Aspire.Hosting.ApplicationModel;
             using Aspire.Hosting.ModularAppHosts;
 
@@ -198,6 +199,10 @@ public sealed class PackedPackageContractTests
                 {
                     module.AddProject("orders-api", "Orders.Api.csproj", ModuleProjectPathBase.Repository)
                         .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+                    module.AddResource<ContainerResource>(
+                        "orders-database",
+                        context => context.ApplicationBuilder.AddContainer(context.ResourceName, "database"),
+                        new ModuleContainerExportOptions("orders-database", "dotnet", "publish"));
                 }
             }
 

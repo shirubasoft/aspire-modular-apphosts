@@ -1364,17 +1364,19 @@ public sealed class DistributedApplicationModuleExtensionsTests
         };
         var options = new ModuleContainerExportOptions("modular-static", "podman", publishArguments)
         {
+            ImageRegistry = "registry.example.test",
             ImageTag = "dev",
             BuildRepository = repository.Path
         };
         var module = await builder.ExportModuleAsync("static", definition =>
         {
             definition.WithRepository(repository.Path);
-            definition.AddContainer("static", "modular-static", "dev")
+            definition.AddContainer("static", "registry.example.test/modular-static", "dev")
                 .WithImagePublishCommand(options);
         });
 
         publishArguments[0] = "mutated";
+        options.ImageRegistry = "mutated.example.test";
         options.ImageTag = "changed";
         options.WorkingDirectory = "missing";
         options.BuildRepository = Path.Combine(repository.Path, "missing");
@@ -1385,9 +1387,10 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal("registry.example.test", image.Registry);
         Assert.Equal("dev-dirty", image.Tag);
         Assert.Equal(
-            ["build", "--tag", "modular-static:dev-dirty", "."],
+            ["build", "--tag", "registry.example.test/modular-static:dev-dirty", "."],
             installer.PublishArguments);
         Assert.Equal(repository.Path, installer.WorkingDirectory);
     }
@@ -1478,6 +1481,22 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(["build", "--tag", "modular-static:dev"], plan.PublishArguments);
     }
 
+    [Theory]
+    [InlineData("ghcr.io/example/nested/image", "ghcr.io", "example/nested/image")]
+    [InlineData("localhost:5000/example/image", "localhost:5000", "example/image")]
+    [InlineData("example/nested/image", null, "example/nested/image")]
+    [InlineData("local-image", null, "local-image")]
+    public void Image_repository_parser_follows_OCI_registry_rules(
+        string repository,
+        string? expectedRegistry,
+        string expectedName)
+    {
+        var (registry, name) = ModuleImageReference.ParseRepository(repository);
+
+        Assert.Equal(expectedRegistry, registry);
+        Assert.Equal(expectedName, name);
+    }
+
     [Fact]
     public async Task Dirty_image_publish_plan_always_publishes_and_resolves_image_placeholders()
     {
@@ -1490,8 +1509,13 @@ public sealed class DistributedApplicationModuleExtensionsTests
             "--label",
             $"name={ModuleContainerExportOptions.ImageNamePlaceholder}",
             "--label",
+            $"registry={ModuleContainerExportOptions.ImageRegistryPlaceholder}",
+            "--label",
+            $"repository={ModuleContainerExportOptions.ImageRepositoryPlaceholder}",
+            "--label",
             $"tag={ModuleContainerExportOptions.ImageTagPlaceholder}")
         {
+            ImageRegistry = "registry.example.test",
             ImageTag = "dev"
         };
 
@@ -1504,14 +1528,18 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.True(plan.ShouldPublish);
         Assert.True(plan.RepositoryDirty);
         Assert.Equal("dev-dirty", plan.ImageTag);
-        Assert.Equal("modular-static:dev-dirty", plan.ImageReference);
+        Assert.Equal("registry.example.test/modular-static:dev-dirty", plan.ImageReference);
         Assert.Equal(
             [
                 "build",
                 "--tag",
-                "modular-static:dev-dirty",
+                "registry.example.test/modular-static:dev-dirty",
                 "--label",
                 "name=modular-static",
+                "--label",
+                "registry=registry.example.test",
+                "--label",
+                "repository=registry.example.test/modular-static",
                 "--label",
                 "tag=dev-dirty"
             ],
@@ -1644,6 +1672,60 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(
             "shop-cache",
             Assert.Single(container.Annotations.OfType<ContainerNameAnnotation>()).Name);
+    }
+
+    [Fact]
+    public async Task Factory_created_container_resource_uses_the_resolved_published_image()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var imageName = $"module-test-database-{Guid.NewGuid():N}";
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:data:Containers:database";
+        builder.Configuration[$"{section}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
+        ModuleResourceImage? resolvedImage = null;
+        var imageOptions = new ModuleContainerExportOptions(
+            imageName,
+            "dotnet",
+            "publish",
+            ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageRegistry = "registry.example.test",
+            ImageTag = "development"
+        };
+        var module = await builder.ExportModuleAsync("data", definition =>
+            definition.AddResource<ContainerResource>(
+                "database",
+                context =>
+                {
+                    resolvedImage = context.Image;
+                    return context.ApplicationBuilder
+                        .AddContainer(context.ResourceName, "library/database", "default")
+                        .WithImageRegistry("docker.io");
+                },
+                imageOptions));
+
+        imageOptions.ImageRegistry = "mutated.example.test";
+        imageOptions.ImageTag = "mutated";
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(resolvedImage);
+        Assert.Equal("registry.example.test", resolvedImage.Registry);
+        Assert.Equal(imageName, resolvedImage.Name);
+        Assert.Equal($"registry.example.test/{imageName}", resolvedImage.Repository);
+        Assert.Equal($"registry.example.test/{imageName}:development", resolvedImage.Reference);
+        var container = module.GetResource<ContainerResource>("database").Resource;
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("registry.example.test", image.Registry);
+        Assert.Equal(imageName, image.Image);
+        Assert.Equal("development", image.Tag);
+        Assert.Equal(
+            ImagePullPolicy.Always,
+            Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal(resolvedImage.Reference, installer.ImageReference);
+        Assert.Same(installer, Assert.Single(container.Annotations.OfType<WaitAnnotation>()).Resource);
     }
 
     [Fact]

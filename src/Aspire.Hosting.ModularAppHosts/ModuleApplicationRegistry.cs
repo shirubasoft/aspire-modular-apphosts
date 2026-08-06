@@ -141,6 +141,8 @@ internal sealed class ModuleApplicationRegistry(
             {
                 DistributedApplicationModuleProject => ModulePreviewResourceKind.Project,
                 DistributedApplicationModuleContainer => ModulePreviewResourceKind.Container,
+                IDistributedApplicationModuleFactoryResource { ImagePublishOptions: not null } =>
+                    ModulePreviewResourceKind.Container,
                 _ => (ModulePreviewResourceKind?)null
             };
             if (actualKind != image.ResourceKind)
@@ -174,11 +176,21 @@ internal sealed class ModuleApplicationRegistry(
             .All(container =>
                 images.TryGetValue(container.Name, out var image) &&
                 image.ResourceKind == ModulePreviewResourceKind.Container);
+        var publishableFactoryResourcesAreDigestSatisfied = module.ResourceDefinitions
+            .OfType<IDistributedApplicationModuleFactoryResource>()
+            .Where(resource => resource.ImagePublishOptions is not null)
+            .All(resource =>
+                images.TryGetValue(resource.Name, out var image) &&
+                image.ResourceKind == ModulePreviewResourceKind.Container);
         var hasRepositoryIndependentPreviewImage = images.Count > 0 &&
-            (module.ProjectDefinitions.Count > 0 || module.ContainerDefinitions.Count > 0);
+            (module.ProjectDefinitions.Count > 0 ||
+                module.ContainerDefinitions.Count > 0 ||
+                module.ResourceDefinitions.OfType<IDistributedApplicationModuleFactoryResource>()
+                    .Any(resource => resource.ImagePublishOptions is not null));
         return hasRepositoryIndependentPreviewImage &&
             projectsAreDigestSatisfied &&
-            publishableContainersAreDigestSatisfied;
+            publishableContainersAreDigestSatisfied &&
+            publishableFactoryResourcesAreDigestSatisfied;
     }
 
     internal bool TryGetResource(string name, out IResource? resource) =>
@@ -282,7 +294,9 @@ internal sealed class ModuleApplicationRegistry(
                 imageOptions = containerOptions;
             }
 
-            imageOptions.ImageName = image.Repository;
+            var (registry, name) = ModuleImageReference.ParseRepository(image.Repository);
+            imageOptions.ImageRegistry = registry ?? string.Empty;
+            imageOptions.ImageName = name;
             imageOptions.ImageSHA256 = image.Sha256;
             imageOptions.PublishImage = false;
         }

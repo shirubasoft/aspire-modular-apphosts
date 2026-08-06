@@ -318,6 +318,8 @@ internal sealed class DistributedApplicationModuleContainer(
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
 {
+    ModuleContainerExportOptions? ImagePublishOptions { get; }
+
     IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
         DistributedApplicationModuleResourceAnnotation annotation);
@@ -325,13 +327,16 @@ internal interface IDistributedApplicationModuleFactoryResource : IDistributedAp
 
 internal sealed class DistributedApplicationModuleResource<TResource>(
     string name,
-    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
+    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+    ModuleContainerExportOptions? imagePublishOptions)
     : IDistributedApplicationModuleFactoryResource
     where TResource : IResource
 {
     public string Name { get; } = name;
 
     public Type ResourceType => typeof(TResource);
+
+    public ModuleContainerExportOptions? ImagePublishOptions { get; } = imagePublishOptions;
 
     public IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
@@ -357,7 +362,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     DistributedApplicationModule module,
     string resourceName,
     string repositoryPath,
-    bool imported) : IDistributedApplicationModuleResourceContext
+    bool imported,
+    ModuleResourceImage? image = null) : IDistributedApplicationModuleResourceContext
 {
     public IDistributedApplicationBuilder ApplicationBuilder { get; } = applicationBuilder;
 
@@ -366,6 +372,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     public string RepositoryPath { get; } = repositoryPath;
 
     public bool Imported { get; } = imported;
+
+    public ModuleResourceImage? Image { get; } = image;
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
         where TResource : IResource => module.GetResource<TResource>(name);

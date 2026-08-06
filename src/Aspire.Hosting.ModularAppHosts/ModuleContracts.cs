@@ -64,6 +64,14 @@ public interface IDistributedApplicationModuleBuilder
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
         where TResource : IResource;
 
+    /// <summary>Adds a factory-created container resource with an explicit image publish command.</summary>
+    IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions imagePublishOptions)
+        where TResource : ContainerResource =>
+        throw new NotSupportedException("This module builder does not support factory-created image publishers.");
+
     /// <summary>Adds a generated Aspire project reference to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
         where TProject : IProjectMetadata, new();
@@ -128,6 +136,9 @@ public interface IDistributedApplicationModuleResourceContext
 
     /// <summary>Gets whether the module is being imported rather than added from local source.</summary>
     bool Imported { get; }
+
+    /// <summary>Gets the resolved image for a factory-created container resource, when one was declared.</summary>
+    ModuleResourceImage? Image => null;
 
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)
@@ -207,8 +218,19 @@ public sealed class ModuleContainerExportOptions(
     /// <summary>Placeholder for the complete effective image reference in a publish argument.</summary>
     public const string ImageReferencePlaceholder = "{image}";
 
+    /// <summary>Placeholder for the explicit image registry, or an empty string when none is configured.</summary>
+    public const string ImageRegistryPlaceholder = "{image-registry}";
+
+    /// <summary>Placeholder for the effective image repository, including the registry when configured.</summary>
+    public const string ImageRepositoryPlaceholder = "{image-repository}";
+
     /// <summary>Gets the image name that the publish command must create.</summary>
     public string ImageName { get; } = imageName;
+
+    /// <summary>
+    /// Gets or sets the explicit registry host. When set, <see cref="ImageName"/> is the registry-relative repository.
+    /// </summary>
+    public string? ImageRegistry { get; set; }
 
     /// <summary>Gets the executable invoked by the service installer.</summary>
     public string PublishCommand { get; } = publishCommand;
@@ -240,6 +262,34 @@ public sealed class ModuleContainerExportOptions(
     /// Gets or sets the branch, tag, or commit checked out from <see cref="BuildRepository"/> before publishing.
     /// </summary>
     public string? BuildRepositoryRevision { get; set; }
+}
+
+/// <summary>Describes the effective image assigned to a factory-created container resource.</summary>
+public sealed class ModuleResourceImage
+{
+    internal ModuleResourceImage(string? registry, string name, string tag)
+    {
+        Registry = registry;
+        Name = name;
+        Tag = tag;
+        Repository = string.IsNullOrWhiteSpace(registry) ? name : $"{registry}/{name}";
+        Reference = $"{Repository}:{tag}";
+    }
+
+    /// <summary>Gets the explicit registry host, or <see langword="null"/> for an unqualified image.</summary>
+    public string? Registry { get; }
+
+    /// <summary>Gets the image repository path without the explicit registry.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the effective image tag, including the dirty suffix when applicable.</summary>
+    public string Tag { get; }
+
+    /// <summary>Gets the image repository, including the registry when configured.</summary>
+    public string Repository { get; }
+
+    /// <summary>Gets the complete image reference.</summary>
+    public string Reference { get; }
 }
 
 /// <summary>Controls the directory used to resolve a module project path.</summary>
