@@ -234,7 +234,10 @@ module.AddResource<SqlServerServerResource>(
     ServerResourceName,
     context => context.ApplicationBuilder
         .AddSqlServer(context.ResourceName, password)
-        .WithImage(context.Image!.Name, context.Image.Tag),
+        // AddSqlServer brings its own registry and WithImage only replaces the name, so a registry-qualified
+        // module image also has to replace the registry.
+        .WithImage("orders-database", context.Image!.Tag)
+        .WithImageRegistry("ghcr.io/example"),
     new ModuleContainerExportOptions(
         imageName: "ghcr.io/example/orders-database",
         publishCommand: "pwsh",

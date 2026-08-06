@@ -6,7 +6,15 @@
       "version": "13.4.6",
       "commands": [
         "aspire"
-      ]
+      ],
+      "rollForward": false
+    },
+    "shirubasoft.aspire.modularapphosts.tool": {
+      "version": "4.0.0",
+      "commands": [
+        "dotnet-modular-apphosts"
+      ],
+      "rollForward": false
     }
   }
 }
