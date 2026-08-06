@@ -105,6 +105,15 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the effective container image name.</summary>
     public string? ImageName { get; set; }
 
+    /// <summary>Gets or sets the explicit container registry host.</summary>
+    public string? ImageRegistry { get; set; }
+
+    /// <summary>Gets or sets the image reference produced by a legacy publish command before final retagging.</summary>
+    public string? ProducedImageReference { get; set; }
+
+    /// <summary>Gets or sets whether a missing clean image is pulled before its publish command runs.</summary>
+    public bool? PullBeforeBuild { get; set; }
+
     /// <summary>Gets or sets the effective container image tag.</summary>
     public string? ImageTag { get; set; }
 

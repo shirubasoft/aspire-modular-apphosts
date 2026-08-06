@@ -115,6 +115,14 @@ internal sealed class DistributedApplicationModule(
         var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
         foreach (var project in _projects)
         {
+            if (project.PathBase == ModuleProjectPathBase.Repository)
+            {
+                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
+                    Repository,
+                    appHostDirectory);
+                continue;
+            }
+
             var repositoryRoot = await RepositoryInspector.FindRepositoryRootAsync(
                 project.ProjectPath,
                 gitExecutablePath,
@@ -148,6 +156,8 @@ internal sealed class DistributedApplicationModule(
 
         var repositoryRoots = _projects
             .Select(project => project.SourceRepositoryRoot)
+            .Where(repositoryRoot => repositoryRoot is not null)
+            .Select(repositoryRoot => repositoryRoot!)
             .Distinct(PathSafety.Comparer)
             .ToArray();
 
@@ -165,6 +175,19 @@ internal sealed class DistributedApplicationModule(
                 repositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private static string? GetDefinitionRepositoryRoot(
+        string? repository,
+        string appHostDirectory)
+    {
+        if (!string.IsNullOrWhiteSpace(repository) &&
+            !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+        {
+            return Path.GetFullPath(repository, appHostDirectory);
+        }
+
+        return null;
     }
 
     private static async Task<string?> TryGetConfiguredLocalRepositoryRootAsync(
@@ -225,7 +248,8 @@ internal sealed class DistributedApplicationModule(
 internal sealed class DistributedApplicationModuleProject(
     string name,
     string projectPath,
-    string sourceRepositoryRoot) : IDistributedApplicationModuleProject
+    ModuleProjectPathBase pathBase,
+    string? sourceRepositoryRoot) : IDistributedApplicationModuleProject
 {
     public string Name { get; } = name;
 
@@ -233,11 +257,20 @@ internal sealed class DistributedApplicationModuleProject(
 
     public string ProjectPath { get; } = projectPath;
 
+    internal ModuleProjectPathBase PathBase { get; } = pathBase;
+
     public bool IsExportedAsContainer => Export is not null;
 
-    internal string SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
+    internal string? SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
 
     internal Action<IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
+
+    internal string GetRepositoryRelativeProjectPath()
+    {
+        return PathBase == ModuleProjectPathBase.Repository
+            ? ProjectPath
+            : Path.GetRelativePath(SourceRepositoryRoot!, ProjectPath);
+    }
 
     internal ModuleContainerExport Export => _export
         ?? throw new InvalidOperationException($"Project '{Name}' has not been exported as a container.");
@@ -285,6 +318,8 @@ internal sealed class DistributedApplicationModuleContainer(
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
 {
+    ModuleContainerExportOptions? ImagePublishOptions { get; }
+
     IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
         DistributedApplicationModuleResourceAnnotation annotation);
@@ -292,13 +327,16 @@ internal interface IDistributedApplicationModuleFactoryResource : IDistributedAp
 
 internal sealed class DistributedApplicationModuleResource<TResource>(
     string name,
-    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
+    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+    ModuleContainerExportOptions? imagePublishOptions)
     : IDistributedApplicationModuleFactoryResource
     where TResource : IResource
 {
     public string Name { get; } = name;
 
     public Type ResourceType => typeof(TResource);
+
+    public ModuleContainerExportOptions? ImagePublishOptions { get; } = imagePublishOptions;
 
     public IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
@@ -324,7 +362,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     DistributedApplicationModule module,
     string resourceName,
     string repositoryPath,
-    bool imported) : IDistributedApplicationModuleResourceContext
+    bool imported,
+    ModuleResourceImage? image = null) : IDistributedApplicationModuleResourceContext
 {
     public IDistributedApplicationBuilder ApplicationBuilder { get; } = applicationBuilder;
 
@@ -333,6 +372,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     public string RepositoryPath { get; } = repositoryPath;
 
     public bool Imported { get; } = imported;
+
+    public ModuleResourceImage? Image { get; } = image;
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
         where TResource : IResource => module.GetResource<TResource>(name);

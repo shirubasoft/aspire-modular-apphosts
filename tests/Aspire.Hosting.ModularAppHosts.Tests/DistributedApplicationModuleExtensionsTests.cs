@@ -1364,17 +1364,19 @@ public sealed class DistributedApplicationModuleExtensionsTests
         };
         var options = new ModuleContainerExportOptions("modular-static", "podman", publishArguments)
         {
+            ImageRegistry = "registry.example.test",
             ImageTag = "dev",
             BuildRepository = repository.Path
         };
         var module = await builder.ExportModuleAsync("static", definition =>
         {
             definition.WithRepository(repository.Path);
-            definition.AddContainer("static", "modular-static", "dev")
+            definition.AddContainer("static", "registry.example.test/modular-static", "dev")
                 .WithImagePublishCommand(options);
         });
 
         publishArguments[0] = "mutated";
+        options.ImageRegistry = "mutated.example.test";
         options.ImageTag = "changed";
         options.WorkingDirectory = "missing";
         options.BuildRepository = Path.Combine(repository.Path, "missing");
@@ -1385,9 +1387,10 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal("registry.example.test", image.Registry);
         Assert.Equal("dev-dirty", image.Tag);
         Assert.Equal(
-            ["build", "--tag", "modular-static:dev-dirty", "."],
+            ["build", "--tag", "registry.example.test/modular-static:dev-dirty", "."],
             installer.PublishArguments);
         Assert.Equal(repository.Path, installer.WorkingDirectory);
     }
@@ -1479,6 +1482,91 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Clean_image_publish_plan_pulls_before_falling_back_to_build()
+    {
+        var options = new ModuleContainerExportOptions("modular-static", "podman", "build")
+        {
+            ImageTag = "dev",
+            PullBeforeBuild = true
+        };
+        var operations = new List<string>();
+
+        var pulled = await ModuleImagePublishPlan.CreateAsync(
+            options,
+            repositoryDirty: false,
+            (imageReference, _) =>
+            {
+                operations.Add($"inspect {imageReference}");
+                return Task.FromResult(false);
+            },
+            (imageReference, _) =>
+            {
+                operations.Add($"pull {imageReference}");
+                return Task.FromResult(true);
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.False(pulled.ShouldPublish);
+        Assert.Equal(
+            ["inspect modular-static:dev", "pull modular-static:dev"],
+            operations);
+
+        var fallback = await ModuleImagePublishPlan.CreateAsync(
+            options,
+            repositoryDirty: false,
+            (_, _) => Task.FromResult(false),
+            (_, _) => Task.FromResult(false),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(fallback.ShouldPublish);
+    }
+
+    [Fact]
+    public async Task Image_publish_plan_resolves_a_legacy_output_reference_for_retagging()
+    {
+        var options = new ModuleContainerExportOptions("modular-static", "podman", "build")
+        {
+            ImageRegistry = "registry.example.test",
+            ImageTag = "dev",
+            ProducedImageReference = "legacy.example.test/static:production"
+        };
+
+        var plan = await ModuleImagePublishPlan.CreateAsync(
+            options,
+            repositoryDirty: true,
+            (_, _) => throw new InvalidOperationException("Dirty images must not be inspected."),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(plan.RequiresRetag);
+        Assert.Equal("legacy.example.test/static:production", plan.ProducedImageReference);
+        Assert.Equal("registry.example.test/modular-static:dev-dirty", plan.ImageReference);
+
+        options.ProducedImageReference = ModuleContainerExportOptions.ImageReferencePlaceholder;
+        var alreadyFinal = await ModuleImagePublishPlan.CreateAsync(
+            options,
+            repositoryDirty: true,
+            (_, _) => throw new InvalidOperationException("Dirty images must not be inspected."),
+            TestContext.Current.CancellationToken);
+        Assert.False(alreadyFinal.RequiresRetag);
+    }
+
+    [Theory]
+    [InlineData("ghcr.io/example/nested/image", "ghcr.io", "example/nested/image")]
+    [InlineData("localhost:5000/example/image", "localhost:5000", "example/image")]
+    [InlineData("example/nested/image", null, "example/nested/image")]
+    [InlineData("local-image", null, "local-image")]
+    public void Image_repository_parser_follows_OCI_registry_rules(
+        string repository,
+        string? expectedRegistry,
+        string expectedName)
+    {
+        var (registry, name) = ModuleImageReference.ParseRepository(repository);
+
+        Assert.Equal(expectedRegistry, registry);
+        Assert.Equal(expectedName, name);
+    }
+
+    [Fact]
     public async Task Dirty_image_publish_plan_always_publishes_and_resolves_image_placeholders()
     {
         var options = new ModuleContainerExportOptions(
@@ -1490,8 +1578,13 @@ public sealed class DistributedApplicationModuleExtensionsTests
             "--label",
             $"name={ModuleContainerExportOptions.ImageNamePlaceholder}",
             "--label",
+            $"registry={ModuleContainerExportOptions.ImageRegistryPlaceholder}",
+            "--label",
+            $"repository={ModuleContainerExportOptions.ImageRepositoryPlaceholder}",
+            "--label",
             $"tag={ModuleContainerExportOptions.ImageTagPlaceholder}")
         {
+            ImageRegistry = "registry.example.test",
             ImageTag = "dev"
         };
 
@@ -1504,14 +1597,18 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.True(plan.ShouldPublish);
         Assert.True(plan.RepositoryDirty);
         Assert.Equal("dev-dirty", plan.ImageTag);
-        Assert.Equal("modular-static:dev-dirty", plan.ImageReference);
+        Assert.Equal("registry.example.test/modular-static:dev-dirty", plan.ImageReference);
         Assert.Equal(
             [
                 "build",
                 "--tag",
-                "modular-static:dev-dirty",
+                "registry.example.test/modular-static:dev-dirty",
                 "--label",
                 "name=modular-static",
+                "--label",
+                "registry=registry.example.test",
+                "--label",
+                "repository=registry.example.test/modular-static",
                 "--label",
                 "tag=dev-dirty"
             ],
@@ -1540,6 +1637,126 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal("dev-dirty", plan.ImageTag);
         Assert.Equal("modular-static:dev-dirty", plan.ImageReference);
         Assert.Equal(["build", "modular-static:dev-dirty"], plan.PublishArguments);
+    }
+
+    [Fact]
+    public async Task Legacy_publish_output_is_retagged_before_the_container_starts()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        var imageOptions = new ModuleContainerExportOptions(
+            "modular-static",
+            "dotnet",
+            "publish")
+        {
+            ImageTag = "dev",
+            ProducedImageReference = "legacy.example.test/static:production"
+        };
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(imageOptions);
+        });
+
+        imageOptions.ProducedImageReference = "mutated.example.test/static:latest";
+        await builder.AddAsync(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var retagger = Assert.Single(builder.Resources.OfType<ModuleImageRetagResource>());
+        Assert.Equal("legacy.example.test/static:production", retagger.SourceImageReference);
+        Assert.Equal("modular-static:dev-dirty", retagger.TargetImageReference);
+        Assert.Same(
+            retagger,
+            Assert.Single(container.Annotations.OfType<WaitAnnotation>()).Resource);
+        Assert.Same(
+            installer,
+            Assert.Single(retagger.Annotations.OfType<WaitAnnotation>()).Resource);
+        Assert.Same(
+            installer,
+            Assert.Single(container.Annotations.OfType<ModuleRepositoryInstallerAnnotation>()).Installer);
+    }
+
+    [Fact]
+    public async Task Effective_publish_output_does_not_reserve_an_unused_retag_resource_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = ModuleContainerExportOptions.ImageReferencePlaceholder
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Equal(2, builder.Resources.OfType<ContainerResource>().Count());
+        Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleImageRetagResource>());
+    }
+
+    [Fact]
+    public async Task Dirty_publish_output_reserves_its_retag_resource_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        File.AppendAllText(repository.ProjectPath, Environment.NewLine + "<!-- dirty -->");
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = "modular-static:dev"
+                });
+        });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
+
+        Assert.Contains("static-image-tagger", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Clean_publish_output_does_not_reserve_an_unused_literal_retag_name()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        var builder = CreateBuilder(repository.Path);
+        builder.AddContainer("static-image-tagger", "busybox");
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(repository.Path, "HEAD");
+            definition.AddContainer("static", "modular-static", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "modular-static",
+                    "dotnet",
+                    "publish")
+                {
+                    ImageTag = "dev",
+                    ProducedImageReference = "modular-static:dev"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Equal(2, builder.Resources.OfType<ContainerResource>().Count());
+        Assert.Empty(builder.Resources.OfType<ModuleImageRetagResource>());
     }
 
     [Fact]
@@ -1622,6 +1839,123 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(
             "portable-resource",
             imported.GetResource<TestResource>("portable-resource").Resource.Name);
+    }
+
+    [Fact]
+    public async Task Generic_resource_context_exposes_the_effective_import_name()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        await builder.ExportModuleAsync("portable", definition =>
+            definition.AddResource<ContainerResource>("cache", context =>
+                context.ApplicationBuilder
+                    .AddContainer(context.ResourceName, "redis")
+                    .WithContainerName(context.ResourceName)));
+
+        var imported = await builder.ImportModuleAsync(
+            "portable",
+            new ModuleImportOptions { ResourcePrefix = "shop-" });
+
+        var container = imported.GetResource<ContainerResource>("cache").Resource;
+        Assert.Equal("shop-cache", container.Name);
+        Assert.Equal(
+            "shop-cache",
+            Assert.Single(container.Annotations.OfType<ContainerNameAnnotation>()).Name);
+    }
+
+    [Fact]
+    public async Task Factory_created_container_resource_uses_the_resolved_published_image()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var imageName = $"module-test-database-{Guid.NewGuid():N}";
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:data:Containers:database";
+        builder.Configuration[$"{section}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
+        ModuleResourceImage? resolvedImage = null;
+        var imageOptions = new ModuleContainerExportOptions(
+            imageName,
+            "dotnet",
+            "publish",
+            ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageRegistry = "registry.example.test",
+            ImageTag = "development"
+        };
+        var module = await builder.ExportModuleAsync("data", definition =>
+            definition.AddResource<ContainerResource>(
+                "database",
+                context =>
+                {
+                    resolvedImage = context.Image;
+                    return context.ApplicationBuilder
+                        .AddContainer(context.ResourceName, "library/database", "default")
+                        .WithImageRegistry("docker.io");
+                },
+                imageOptions));
+
+        imageOptions.ImageRegistry = "mutated.example.test";
+        imageOptions.ImageTag = "mutated";
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(resolvedImage);
+        Assert.Equal("registry.example.test", resolvedImage.Registry);
+        Assert.Equal(imageName, resolvedImage.Name);
+        Assert.Equal($"registry.example.test/{imageName}", resolvedImage.Repository);
+        Assert.Equal($"registry.example.test/{imageName}:development", resolvedImage.Reference);
+        var container = module.GetResource<ContainerResource>("database").Resource;
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("registry.example.test", image.Registry);
+        Assert.Equal(imageName, image.Image);
+        Assert.Equal("development", image.Tag);
+        Assert.Equal(
+            ImagePullPolicy.Always,
+            Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal(resolvedImage.Reference, installer.ImageReference);
+        Assert.Same(installer, Assert.Single(container.Annotations.OfType<WaitAnnotation>()).Resource);
+    }
+
+    [Fact]
+    public async Task Factory_resource_context_exposes_the_configured_immutable_image_reference()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var digest = $"sha256:{new string('a', 64)}";
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:data:Containers:database";
+        builder.Configuration[$"{section}:ImageSHA256"] = digest;
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+        ModuleResourceImage? resolvedImage = null;
+        var module = await builder.ExportModuleAsync("data", definition =>
+            definition.AddResource<ContainerResource>(
+                "database",
+                context =>
+                {
+                    resolvedImage = context.Image;
+                    return context.ApplicationBuilder.AddContainer(context.ResourceName, "database");
+                },
+                new ModuleContainerExportOptions("example/database", "dotnet", "publish")
+                {
+                    ImageRegistry = "registry.example.test",
+                    ImageTag = "development"
+                }));
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(resolvedImage);
+        Assert.Equal(digest, resolvedImage.Digest);
+        Assert.Equal($"registry.example.test/example/database@{digest}", resolvedImage.Reference);
+        Assert.Contains(
+            module.Resources,
+            resource => resource.Name == "database" &&
+                typeof(ContainerResource).IsAssignableFrom(resource.ResourceType));
+        Assert.Empty(module.Containers);
+        var container = module.GetResource<ContainerResource>("database").Resource;
+        Assert.Equal(
+            digest["sha256:".Length..],
+            Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>()).SHA256);
     }
 
     [Fact]
@@ -1733,6 +2067,102 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Repository_relative_project_materializes_from_the_module_repository()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var moduleRoot = Path.Combine(workspace.Path, "module");
+        var projectPath = Path.Combine(moduleRoot, "src", "Api", "Api.csproj");
+        var appHostDirectory = Path.Combine(workspace.Path, "consumer", "AppHost");
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(appHostDirectory);
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:catalog:Projects:api:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
+        var module = await builder.ExportModuleAsync("catalog", definition =>
+        {
+            definition.WithRepository(moduleRoot);
+            definition.AddProject(
+                    "api",
+                    Path.Combine("src", "Api", "Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("catalog-api", "dotnet", ["publish"]);
+        });
+
+        await builder.AddAsync(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Equal(projectPath, project.GetProjectMetadata().ProjectPath);
+    }
+
+    [Fact]
+    public async Task Local_repository_relative_project_uses_the_git_root_of_a_nested_apphost()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        var appHostDirectory = Path.Combine(repository.Path, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        var builder = CreateBuilder(appHostDirectory);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
+        var relativeProjectPath = Path.GetRelativePath(repository.Path, repository.ProjectPath);
+        var module = await builder.ExportModuleAsync("catalog", definition =>
+            definition.AddProject(
+                    "api",
+                    relativeProjectPath,
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("catalog-api", "dotnet", ["publish"]));
+
+        await builder.AddAsync(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Equal(repository.ProjectPath, project.GetProjectMetadata().ProjectPath);
+    }
+
+    [Fact]
+    public async Task Imported_repository_relative_project_preserves_its_publish_directory()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var moduleRoot = Path.Combine(workspace.Path, "module");
+        var appHostDirectory = Path.Combine(workspace.Path, "consumer", "AppHost");
+        Directory.CreateDirectory(moduleRoot);
+        Directory.CreateDirectory(appHostDirectory);
+        var builder = CreateBuilder(appHostDirectory);
+        var imageName = $"module-test-catalog-{Guid.NewGuid():N}";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        await builder.ExportModuleAsync("catalog", definition =>
+        {
+            definition.WithRepository(moduleRoot);
+            definition.AddProject(
+                    "api",
+                    Path.Combine("src", "Api", "Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer(imageName, "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync("catalog");
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(moduleRoot, "catalog", appHostDirectory);
+        Assert.Equal(Path.Combine(imports.Path, canonicalName, "src", "Api"), installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task Repository_relative_project_rejects_rooted_paths()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            builder.ExportModuleAsync("catalog", definition =>
+                definition.AddProject("api", repository.ProjectPath, ModuleProjectPathBase.Repository)));
+
+        Assert.Equal("projectPath", exception.ParamName);
+        Assert.Contains("cannot be rooted", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task WithRepository_after_projects_rebases_repository_relative_paths()
     {
         using var source = TemporaryDirectory.Create();
@@ -1792,12 +2222,15 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public async Task Repository_synchronizer_pulls_a_clean_worktree_and_requires_a_remote_for_a_missing_clone()
+    public async Task Repository_synchronizer_pulls_a_clean_worktree_with_an_upstream()
     {
-        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        using var source = await TestRepository.CreateAsync(initializeGit: true);
+        using var parent = TemporaryDirectory.Create();
+        var checkout = Path.Combine(parent.Path, "checkout");
+        await TestRepository.RunGitAsync(parent.Path, "clone", "--", source.Path, checkout);
 
         var pull = await RepositorySynchronizer.CreateCommandAsync(
-            repository.Path,
+            checkout,
             repository: null,
             updateRepository: true,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -1805,13 +2238,36 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.NotNull(pull);
         Assert.Equal("git", pull.Executable);
         Assert.Equal(
-            ["-C", repository.Path, "pull", "--ff-only", "--recurse-submodules"],
+            ["-C", checkout, "pull", "--ff-only", "--recurse-submodules"],
             pull.Arguments);
         Assert.Null(await RepositorySynchronizer.CreateCommandAsync(
-            repository.Path,
+            checkout,
             repository: null,
             updateRepository: false,
             cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Repository_synchronizer_leaves_a_clean_worktree_without_an_upstream_unchanged()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        await TestRepository.RunGitAsync(repository.Path, "switch", "-c", "local-work");
+
+        var command = await RepositorySynchronizer.CreateCommandAsync(
+            repository.Path,
+            repository: null,
+            updateRepository: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Null(command);
+        Assert.False(await RepositoryInspector.HasUpstreamAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Repository_synchronizer_requires_a_remote_for_a_missing_clone()
+    {
 
         using var imports = TemporaryDirectory.Create();
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>

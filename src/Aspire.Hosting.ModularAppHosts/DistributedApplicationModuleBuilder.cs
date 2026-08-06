@@ -49,10 +49,35 @@ internal sealed class DistributedApplicationModuleBuilder(
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
         where TResource : IResource
     {
+        return AddResourceCore(name, resourceFactory, imagePublishOptions: null);
+    }
+
+    public IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions imagePublishOptions)
+        where TResource : ContainerResource
+    {
+        ArgumentNullException.ThrowIfNull(imagePublishOptions);
+        return AddResourceCore(
+            name,
+            resourceFactory,
+            DistributedApplicationModuleProjectBuilder.CopyOptions(imagePublishOptions));
+    }
+
+    private DistributedApplicationModuleBuilder AddResourceCore<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions? imagePublishOptions)
+        where TResource : IResource
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(resourceFactory);
 
-        module.AddResource(new DistributedApplicationModuleResource<TResource>(name, resourceFactory));
+        module.AddResource(new DistributedApplicationModuleResource<TResource>(
+            name,
+            resourceFactory,
+            imagePublishOptions));
         return this;
     }
 
@@ -64,14 +89,42 @@ internal sealed class DistributedApplicationModuleBuilder(
 
     public IDistributedApplicationModuleProjectBuilder AddProject(string name, string projectPath)
     {
+        return AddProject(name, projectPath, ModuleProjectPathBase.AppHost);
+    }
+
+    public IDistributedApplicationModuleProjectBuilder AddProject(
+        string name,
+        string projectPath,
+        ModuleProjectPathBase pathBase)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        if (!Enum.IsDefined(pathBase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pathBase));
+        }
 
-        var absoluteProjectPath = Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory);
-        var repositoryRoot = Path.GetDirectoryName(absoluteProjectPath)
-            ?? throw new InvalidOperationException($"Unable to determine the directory for '{absoluteProjectPath}'.");
+        if (pathBase == ModuleProjectPathBase.Repository && Path.IsPathRooted(projectPath))
+        {
+            throw new ArgumentException(
+                "A repository-relative module project path cannot be rooted.",
+                nameof(projectPath));
+        }
 
-        var project = new DistributedApplicationModuleProject(name, absoluteProjectPath, repositoryRoot);
+        var declaredProjectPath = pathBase == ModuleProjectPathBase.AppHost
+            ? Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory)
+            : projectPath;
+        var repositoryRoot = pathBase == ModuleProjectPathBase.AppHost
+            ? Path.GetDirectoryName(declaredProjectPath)
+                ?? throw new InvalidOperationException(
+                    $"Unable to determine the directory for '{declaredProjectPath}'.")
+            : null;
+
+        var project = new DistributedApplicationModuleProject(
+            name,
+            declaredProjectPath,
+            pathBase,
+            repositoryRoot);
         module.AddProject(project);
         return new DistributedApplicationModuleProjectBuilder(project);
     }
@@ -161,6 +214,9 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
             options.PublishCommand,
             options.PublishArguments.ToArray())
         {
+            ImageRegistry = options.ImageRegistry,
+            ProducedImageReference = options.ProducedImageReference,
+            PullBeforeBuild = options.PullBeforeBuild,
             ImageTag = options.ImageTag,
             WorkingDirectory = options.WorkingDirectory,
             BuildRepository = options.BuildRepository,
@@ -186,12 +242,13 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
         ModuleContainerExportOptions options)
     {
         var copiedOptions = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
-        if (!string.Equals(container.Image, copiedOptions.ImageName, StringComparison.Ordinal) ||
+        var imageRepository = ModuleImageReference.GetRepository(copiedOptions);
+        if (!string.Equals(container.Image, imageRepository, StringComparison.Ordinal) ||
             (!string.IsNullOrWhiteSpace(copiedOptions.ImageTag) &&
                 !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal)))
         {
             throw new ArgumentException(
-                $"The explicitly configured publish image '{copiedOptions.ImageName}:{copiedOptions.ImageTag}' must match " +
+                $"The explicitly configured publish image '{imageRepository}:{copiedOptions.ImageTag}' must match " +
                 $"the container image '{container.Image}:{container.Tag}'.",
                 nameof(options));
         }

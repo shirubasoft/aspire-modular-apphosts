@@ -30,11 +30,24 @@ public sealed class ModuleRepositoryInstallerResource(
     /// <summary>Gets the effective image publish arguments after image placeholders are resolved.</summary>
     public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
 
-    /// <summary>Gets the effective image reference produced by this installer.</summary>
+    /// <summary>Gets the effective image reference prepared by this installer and any chained retag step.</summary>
     public string ImageReference { get; } = imageReference;
 
     /// <summary>Gets whether the repository was dirty when the module was materialized.</summary>
     public bool RepositoryDirty { get; } = repositoryDirty;
+}
+
+internal sealed class ModuleImageRetagResource(
+    string name,
+    string containerRuntime,
+    string workingDirectory,
+    string sourceImageReference,
+    string targetImageReference)
+    : ExecutableResource(name, containerRuntime, workingDirectory)
+{
+    public string SourceImageReference { get; } = sourceImageReference;
+
+    public string TargetImageReference { get; } = targetImageReference;
 }
 
 /// <summary>Associates a materialized resource with its module definition.</summary>

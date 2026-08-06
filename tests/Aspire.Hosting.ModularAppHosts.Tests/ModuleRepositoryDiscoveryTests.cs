@@ -275,6 +275,83 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public async Task Repository_relative_project_does_not_inherit_the_consumer_repository_identity()
+    {
+        using var parent = TemporaryDirectory.Create();
+        var appHostRoot = Path.Combine(parent.Path, "consumer");
+        var appHostDirectory = Path.Combine(appHostRoot, "src", "AppHost");
+        var moduleRoot = Path.Combine(parent.Path, "orders");
+        var relativeProjectPath = Path.Combine("src", "Orders.Api", "Orders.Api.csproj");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
+        await RunGitAsync(
+            appHostRoot,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/consumer.git");
+        Directory.CreateDirectory(Path.Combine(moduleRoot, "src", "Orders.Api"));
+        File.WriteAllText(Path.Combine(moduleRoot, relativeProjectPath), ProjectContents);
+        await InitializeGitAsync(moduleRoot, "feature/orders-service");
+        await RunGitAsync(
+            moduleRoot,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/orders.git");
+
+        var builder = CreateBuilder(appHostDirectory);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
+            Path.Combine(parent.Path, "missing-gh");
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/orders.git");
+            definition.AddProject(
+                    "orders-api",
+                    relativeProjectPath,
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+        });
+
+        await builder.AddAsync(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var annotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal(moduleRoot, annotation.RepositoryPath);
+    }
+
+    [Fact]
+    public async Task Repository_relative_project_does_not_infer_the_consumer_remote()
+    {
+        using var repository = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(repository.Path, "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(repository.Path, "README.md"), "consumer");
+        await InitializeGitAsync(repository.Path, "main");
+        await RunGitAsync(
+            repository.Path,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/consumer.git");
+        var builder = CreateBuilder(appHostDirectory);
+
+        var module = await builder.ExportModuleAsync("orders", definition =>
+            definition.AddProject(
+                    "orders-api",
+                    Path.Combine("src", "Orders.Api", "Orders.Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]));
+
+        var definition = Assert.IsType<DistributedApplicationModule>(module);
+        Assert.Null(definition.Repository);
+        Assert.Null(Assert.Single(definition.ProjectDefinitions).SourceRepositoryRoot);
+    }
+
+    [Fact]
     public async Task Missing_sibling_repository_is_cloned_through_configured_gh_process()
     {
         if (OperatingSystem.IsWindows())

@@ -15,13 +15,20 @@ public interface IDistributedApplicationModule
     /// <summary>Gets the module contract version.</summary>
     string Version { get; }
 
-    /// <summary>Gets every resource exported by the module in declaration order.</summary>
+    /// <summary>
+    /// Gets every resource exported by the module in declaration order, including container resources created by
+    /// <see cref="IDistributedApplicationModuleBuilder.AddResource{TResource}(string, Func{IDistributedApplicationModuleResourceContext, IResourceBuilder{TResource}}, ModuleContainerExportOptions)"/>.
+    /// </summary>
     IReadOnlyList<IDistributedApplicationModuleResource> Resources { get; }
 
     /// <summary>Gets the projects exported by the module.</summary>
     IReadOnlyList<IDistributedApplicationModuleProject> Projects { get; }
 
-    /// <summary>Gets the containers exported by the module.</summary>
+    /// <summary>
+    /// Gets containers declared with <see cref="IDistributedApplicationModuleBuilder.AddContainer"/>. Factory-created
+    /// container resources are exposed through <see cref="Resources"/> with a <see cref="IDistributedApplicationModuleResource.ResourceType"/>
+    /// assignable to <see cref="ContainerResource"/>.
+    /// </summary>
     IReadOnlyList<IDistributedApplicationModuleContainer> Containers { get; }
 
     /// <summary>Gets a materialized module resource by name.</summary>
@@ -64,12 +71,32 @@ public interface IDistributedApplicationModuleBuilder
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
         where TResource : IResource;
 
+    /// <summary>Adds a factory-created container resource with an explicit image publish command.</summary>
+    IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions imagePublishOptions)
+        where TResource : ContainerResource =>
+        throw new NotSupportedException("This module builder does not support factory-created image publishers.");
+
     /// <summary>Adds a generated Aspire project reference to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
         where TProject : IProjectMetadata, new();
 
     /// <summary>Adds a project path to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject(string name, string projectPath);
+
+    /// <summary>Adds a project path resolved from the module repository when it is materialized.</summary>
+    IDistributedApplicationModuleProjectBuilder AddProject(
+        string name,
+        string projectPath,
+        ModuleProjectPathBase pathBase) => pathBase switch
+        {
+            ModuleProjectPathBase.AppHost => AddProject(name, projectPath),
+            ModuleProjectPathBase.Repository => throw new NotSupportedException(
+                "This module builder does not support repository-relative project paths."),
+            _ => throw new ArgumentOutOfRangeException(nameof(pathBase))
+        };
 
     /// <summary>Adds an existing container image to the module.</summary>
     IDistributedApplicationModuleContainerBuilder AddContainer(
@@ -108,7 +135,7 @@ public interface IDistributedApplicationModuleResourceContext
     /// <summary>Gets the AppHost builder receiving the resource.</summary>
     IDistributedApplicationBuilder ApplicationBuilder { get; }
 
-    /// <summary>Gets the declared name that the factory must assign to its resource.</summary>
+    /// <summary>Gets the effective name, including any import prefix or alias, that the factory must assign.</summary>
     string ResourceName { get; }
 
     /// <summary>Gets the local source or managed repository path for this module.</summary>
@@ -116,6 +143,9 @@ public interface IDistributedApplicationModuleResourceContext
 
     /// <summary>Gets whether the module is being imported rather than added from local source.</summary>
     bool Imported { get; }
+
+    /// <summary>Gets the resolved image for a factory-created container resource, when one was declared.</summary>
+    ModuleResourceImage? Image => null;
 
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)
@@ -195,8 +225,28 @@ public sealed class ModuleContainerExportOptions(
     /// <summary>Placeholder for the complete effective image reference in a publish argument.</summary>
     public const string ImageReferencePlaceholder = "{image}";
 
+    /// <summary>Placeholder for the explicit image registry, or an empty string when none is configured.</summary>
+    public const string ImageRegistryPlaceholder = "{image-registry}";
+
+    /// <summary>Placeholder for the effective image repository, including the registry when configured.</summary>
+    public const string ImageRepositoryPlaceholder = "{image-repository}";
+
     /// <summary>Gets the image name that the publish command must create.</summary>
     public string ImageName { get; } = imageName;
+
+    /// <summary>
+    /// Gets or sets the explicit registry host. When set, <see cref="ImageName"/> is the registry-relative repository.
+    /// </summary>
+    public string? ImageRegistry { get; set; }
+
+    /// <summary>
+    /// Gets or sets the image reference produced by a legacy publish command. When it differs from the effective
+    /// image reference, the installer tags it after the command succeeds.
+    /// </summary>
+    public string? ProducedImageReference { get; set; }
+
+    /// <summary>Gets or sets whether a missing clean image is pulled before the publish command is run.</summary>
+    public bool PullBeforeBuild { get; set; }
 
     /// <summary>Gets the executable invoked by the service installer.</summary>
     public string PublishCommand { get; } = publishCommand;
@@ -228,4 +278,46 @@ public sealed class ModuleContainerExportOptions(
     /// Gets or sets the branch, tag, or commit checked out from <see cref="BuildRepository"/> before publishing.
     /// </summary>
     public string? BuildRepositoryRevision { get; set; }
+}
+
+/// <summary>Describes the effective image assigned to a factory-created container resource.</summary>
+public sealed class ModuleResourceImage
+{
+    internal ModuleResourceImage(string? registry, string name, string tag, string? digest = null)
+    {
+        Registry = registry;
+        Name = name;
+        Tag = tag;
+        Digest = digest;
+        Repository = string.IsNullOrWhiteSpace(registry) ? name : $"{registry}/{name}";
+        Reference = digest is null ? $"{Repository}:{tag}" : $"{Repository}@{digest}";
+    }
+
+    /// <summary>Gets the explicit registry host, or <see langword="null"/> for an unqualified image.</summary>
+    public string? Registry { get; }
+
+    /// <summary>Gets the image repository path without the explicit registry.</summary>
+    public string Name { get; }
+
+    /// <summary>Gets the effective image tag, including the dirty suffix when applicable.</summary>
+    public string Tag { get; }
+
+    /// <summary>Gets the configured immutable image digest, including its algorithm prefix, when present.</summary>
+    public string? Digest { get; }
+
+    /// <summary>Gets the image repository, including the registry when configured.</summary>
+    public string Repository { get; }
+
+    /// <summary>Gets the complete effective image reference, preferring <see cref="Digest"/> when present.</summary>
+    public string Reference { get; }
+}
+
+/// <summary>Controls the directory used to resolve a module project path.</summary>
+public enum ModuleProjectPathBase
+{
+    /// <summary>Resolves the path from the AppHost that defines the module.</summary>
+    AppHost,
+
+    /// <summary>Resolves the path from the local or imported module repository during materialization.</summary>
+    Repository
 }
