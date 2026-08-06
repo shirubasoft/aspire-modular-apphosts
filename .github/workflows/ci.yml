@@ -11,7 +11,57 @@ permissions:
   contents: read
 
 jobs:
+  release-version:
+    if: >-
+      vars.NUGET_PUBLISH_ENABLED == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.release-version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install locked release tooling
+        run: npm ci --prefix .github/release
+
+      - name: Bootstrap pre-1.0 version baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git describe --tags --abbrev=0 --match 'v[0-9]*' >/dev/null 2>&1; then
+            git tag v0.0.0 "$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+          fi
+
+      - name: Calculate release version
+        id: release-version
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_RELEASE_VERSION_FILE: ${{ runner.temp }}/next-release-version
+        run: |
+          set -euo pipefail
+          .github/release/node_modules/.bin/semantic-release --dry-run
+          if [[ -f "$NEXT_RELEASE_VERSION_FILE" ]]; then
+            echo "version=$(<"$NEXT_RELEASE_VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          fi
+
   build-test-pack:
+    needs: release-version
+    if: >-
+      always() &&
+      (needs.release-version.result == 'success' || needs.release-version.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -32,7 +82,17 @@ jobs:
 
       - name: Validate, test, and pack on Linux
         if: runner.os != 'Windows'
-        run: ./build.sh
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_VERSION" ]]; then
+            ./build.sh --package-version "$RELEASE_VERSION"
+            printf '%s\n' "$RELEASE_VERSION" > artifacts/release-version.txt
+          else
+            ./build.sh
+          fi
 
       - name: Enforce core library line coverage
         if: runner.os != 'Windows'
@@ -78,7 +138,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: nuget-packages
-          path: artifacts/*.nupkg
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+            artifacts/release-version.txt
           if-no-files-found: error
 
   e2e-docker-compose:
