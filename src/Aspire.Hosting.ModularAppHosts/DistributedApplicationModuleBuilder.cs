@@ -64,14 +64,42 @@ internal sealed class DistributedApplicationModuleBuilder(
 
     public IDistributedApplicationModuleProjectBuilder AddProject(string name, string projectPath)
     {
+        return AddProject(name, projectPath, ModuleProjectPathBase.AppHost);
+    }
+
+    public IDistributedApplicationModuleProjectBuilder AddProject(
+        string name,
+        string projectPath,
+        ModuleProjectPathBase pathBase)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        if (!Enum.IsDefined(pathBase))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pathBase));
+        }
 
-        var absoluteProjectPath = Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory);
-        var repositoryRoot = Path.GetDirectoryName(absoluteProjectPath)
-            ?? throw new InvalidOperationException($"Unable to determine the directory for '{absoluteProjectPath}'.");
+        if (pathBase == ModuleProjectPathBase.Repository && Path.IsPathRooted(projectPath))
+        {
+            throw new ArgumentException(
+                "A repository-relative module project path cannot be rooted.",
+                nameof(projectPath));
+        }
 
-        var project = new DistributedApplicationModuleProject(name, absoluteProjectPath, repositoryRoot);
+        var declaredProjectPath = pathBase == ModuleProjectPathBase.AppHost
+            ? Path.GetFullPath(projectPath, applicationBuilder.AppHostDirectory)
+            : projectPath;
+        var repositoryRoot = pathBase == ModuleProjectPathBase.AppHost
+            ? Path.GetDirectoryName(declaredProjectPath)
+                ?? throw new InvalidOperationException(
+                    $"Unable to determine the directory for '{declaredProjectPath}'.")
+            : applicationBuilder.AppHostDirectory;
+
+        var project = new DistributedApplicationModuleProject(
+            name,
+            declaredProjectPath,
+            pathBase,
+            repositoryRoot);
         module.AddProject(project);
         return new DistributedApplicationModuleProjectBuilder(project);
     }

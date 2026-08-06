@@ -1625,6 +1625,28 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Generic_resource_context_exposes_the_effective_import_name()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        await builder.ExportModuleAsync("portable", definition =>
+            definition.AddResource<ContainerResource>("cache", context =>
+                context.ApplicationBuilder
+                    .AddContainer(context.ResourceName, "redis")
+                    .WithContainerName(context.ResourceName)));
+
+        var imported = await builder.ImportModuleAsync(
+            "portable",
+            new ModuleImportOptions { ResourcePrefix = "shop-" });
+
+        var container = imported.GetResource<ContainerResource>("cache").Resource;
+        Assert.Equal("shop-cache", container.Name);
+        Assert.Equal(
+            "shop-cache",
+            Assert.Single(container.Annotations.OfType<ContainerNameAnnotation>()).Name);
+    }
+
+    [Fact]
     public async Task Generic_resource_factory_must_return_the_declared_name()
     {
         using var repository = await TestRepository.CreateAsync();
@@ -1730,6 +1752,79 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(
             Path.Combine(directory.Path, "apphosta-apphosta", "Api"),
             installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task Repository_relative_project_materializes_from_the_module_repository()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var moduleRoot = Path.Combine(workspace.Path, "module");
+        var projectPath = Path.Combine(moduleRoot, "src", "Api", "Api.csproj");
+        var appHostDirectory = Path.Combine(workspace.Path, "consumer", "AppHost");
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(appHostDirectory);
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:catalog:Projects:api:ProjectMode"] =
+            nameof(ModuleProjectMode.Project);
+        var module = await builder.ExportModuleAsync("catalog", definition =>
+        {
+            definition.WithRepository(moduleRoot);
+            definition.AddProject(
+                    "api",
+                    Path.Combine("src", "Api", "Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("catalog-api", "dotnet", ["publish"]);
+        });
+
+        await builder.AddAsync(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Equal(projectPath, project.GetProjectMetadata().ProjectPath);
+    }
+
+    [Fact]
+    public async Task Imported_repository_relative_project_preserves_its_publish_directory()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var moduleRoot = Path.Combine(workspace.Path, "module");
+        var appHostDirectory = Path.Combine(workspace.Path, "consumer", "AppHost");
+        Directory.CreateDirectory(moduleRoot);
+        Directory.CreateDirectory(appHostDirectory);
+        var builder = CreateBuilder(appHostDirectory);
+        var imageName = $"module-test-catalog-{Guid.NewGuid():N}";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        await builder.ExportModuleAsync("catalog", definition =>
+        {
+            definition.WithRepository(moduleRoot);
+            definition.AddProject(
+                    "api",
+                    Path.Combine("src", "Api", "Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer(imageName, "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync("catalog");
+
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(moduleRoot, "catalog", appHostDirectory);
+        Assert.Equal(Path.Combine(imports.Path, canonicalName, "src", "Api"), installer.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task Repository_relative_project_rejects_rooted_paths()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            builder.ExportModuleAsync("catalog", definition =>
+                definition.AddProject("api", repository.ProjectPath, ModuleProjectPathBase.Repository)));
+
+        Assert.Equal("projectPath", exception.ParamName);
+        Assert.Contains("cannot be rooted", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

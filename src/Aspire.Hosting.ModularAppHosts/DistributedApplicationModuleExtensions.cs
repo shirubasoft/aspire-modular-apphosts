@@ -496,9 +496,8 @@ public static partial class DistributedApplicationModuleExtensions
         CancellationToken cancellationToken)
     {
         var export = project.Export;
-        var sourceProjectDirectory = Path.GetDirectoryName(project.ProjectPath)
-            ?? throw new InvalidOperationException($"Unable to determine the directory for '{project.ProjectPath}'.");
-        var projectDirectoryRelativePath = Path.GetRelativePath(project.SourceRepositoryRoot, sourceProjectDirectory);
+        var projectRelativePath = project.GetRepositoryRelativeProjectPath();
+        var projectDirectoryRelativePath = Path.GetDirectoryName(projectRelativePath) ?? ".";
         var projectOptions = moduleOptions?.FindProject(project.Name);
         var runAsContainer = !builder.ExecutionContext.IsRunMode ||
             ResolveProjectMode(options, moduleOptions, projectOptions, imported) == ModuleProjectMode.Container;
@@ -688,7 +687,7 @@ public static partial class DistributedApplicationModuleExtensions
         bool imported,
         ModuleApplicationRegistry registry)
     {
-        var projectRelativePath = Path.GetRelativePath(project.SourceRepositoryRoot, project.ProjectPath);
+        var projectRelativePath = project.GetRepositoryRelativeProjectPath();
         var materializedProjectPath = PathSafety.GetContainedPath(repositoryPath, projectRelativePath, nameof(project.ProjectPath));
         if (!File.Exists(materializedProjectPath))
         {
@@ -1375,7 +1374,7 @@ public static partial class DistributedApplicationModuleExtensions
     {
         foreach (var project in module.ProjectDefinitions)
         {
-            var relativePath = Path.GetRelativePath(project.SourceRepositoryRoot, project.ProjectPath);
+            var relativePath = project.GetRepositoryRelativeProjectPath();
             var materializedPath = PathSafety.GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
             if (!File.Exists(materializedPath))
             {

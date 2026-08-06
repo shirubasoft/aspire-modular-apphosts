@@ -25,7 +25,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
 
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
-                    module.AddProject("orders-api", "Orders.Api.csproj");
+                    module.AddProject("orders-api", "Orders.Api.csproj", ModuleProjectPathBase.Repository);
                     module.AddContainer(CacheResourceName, "redis");
                     module.AddResource<ParameterResource>("region", context =>
                         throw new System.NotSupportedException());

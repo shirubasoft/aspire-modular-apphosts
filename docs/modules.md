@@ -216,6 +216,22 @@ module.AddProject<Projects.Orders_Api>("orders-api")
 
 `ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing `ExportAsContainer` callback applies to its container representation.
 
+Contracts distributed as packages should declare the project relative to the module repository so the receiving AppHost does not need the same source-tree layout:
+
+```csharp
+module.AddProject(
+        "orders-api",
+        "src/Orders.Api/Orders.Api.csproj",
+        ModuleProjectPathBase.Repository)
+    .ExportAsContainer(new ModuleContainerExportOptions(
+        "orders-api",
+        "dotnet",
+        "publish",
+        ModuleContainerExportOptions.ImageReferencePlaceholder));
+```
+
+Repository-relative paths are resolved only after the local source tree or imported checkout is selected. The two-argument `AddProject(name, projectPath)` overload remains relative to the defining AppHost, and generated `AddProject<TProject>` metadata follows that existing behavior.
+
 ### Any Aspire resource
 
 `AddResource<TResource>` accepts a lazy factory for first-party integrations, community integrations, and custom resource types:
@@ -227,7 +243,16 @@ module.AddResource<PostgresServerResource>("postgres", context =>
 
 Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically when the command uses the module repository. A publisher with an explicit `BuildRepository` can keep the module definition repository-independent.
 
-Factories run in declaration order when the module is materialized. The context provides the receiving builder, required resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`.
+Factories run in declaration order when the module is materialized. The context provides the receiving builder, effective resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`. That name already includes the import prefix or alias, so runtime container names can follow it when a fixed name is unavoidable:
+
+```csharp
+module.AddResource<ContainerResource>("cache", context =>
+    context.ApplicationBuilder
+        .AddContainer(context.ResourceName, "redis")
+        .WithContainerName(context.ResourceName));
+```
+
+Prefixes and aliases do not rewrite arbitrary string configuration or fixed host ports. Prefer resource references and dynamically allocated host ports; when an integration requires literal values, derive every related name from `context.ResourceName` and make host ports configurable by the receiving AppHost.
 
 Modules containing only repository-independent resources, such as existing images or parameters, can be imported without `WithRepository`.
 
@@ -442,7 +467,7 @@ Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repo
 
 Repository synchronization is keyed by the canonical Git root and shared across modules. When multiple modules belong to the same checkout, the AppHost's module registry executes one synchronization task and routes its buffered progress to the first module resource's log stream. Automatic fast-forward updates run only for branches that track an upstream; a clean local-only branch is preserved just like a dirty checkout.
 
-Repository-relative project and publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
+Project paths declared with `ModuleProjectPathBase.Repository` and repository-relative publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
 
 ### Optional sibling discovery and cloning
 

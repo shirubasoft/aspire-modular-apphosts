@@ -196,7 +196,7 @@ public sealed class PackedPackageContractTests
             {
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
-                    module.AddProject("orders-api", "Orders.Api.csproj")
+                    module.AddProject("orders-api", "Orders.Api.csproj", ModuleProjectPathBase.Repository)
                         .ExportAsContainer("orders-api", "dotnet", ["publish"]);
                 }
             }

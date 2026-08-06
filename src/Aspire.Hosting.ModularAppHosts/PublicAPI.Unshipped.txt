@@ -3,6 +3,7 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.Configuratio
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.ConfigurationSection.get -> Microsoft.Extensions.Configuration.IConfigurationSection!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.GetOptions<TOptions>() -> Microsoft.Extensions.Options.IOptions<TOptions!>!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.GetRequiredModule(string! name, string! version) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!
+Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder.AddProject(string! name, string! projectPath, Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase pathBase) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.BuildRepository.get -> string?
@@ -114,6 +115,9 @@ Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepository.get 
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepository.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevision.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.BuildRepositoryRevision.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
+Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase.AppHost = 0 -> Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
+Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase.Repository = 1 -> Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
 const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 1 -> int
 const Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.CurrentSchemaVersion = 1 -> int
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!

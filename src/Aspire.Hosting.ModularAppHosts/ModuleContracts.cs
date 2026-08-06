@@ -71,6 +71,12 @@ public interface IDistributedApplicationModuleBuilder
     /// <summary>Adds a project path to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject(string name, string projectPath);
 
+    /// <summary>Adds a project path resolved from the module repository when it is materialized.</summary>
+    IDistributedApplicationModuleProjectBuilder AddProject(
+        string name,
+        string projectPath,
+        ModuleProjectPathBase pathBase);
+
     /// <summary>Adds an existing container image to the module.</summary>
     IDistributedApplicationModuleContainerBuilder AddContainer(
         string name,
@@ -108,7 +114,7 @@ public interface IDistributedApplicationModuleResourceContext
     /// <summary>Gets the AppHost builder receiving the resource.</summary>
     IDistributedApplicationBuilder ApplicationBuilder { get; }
 
-    /// <summary>Gets the declared name that the factory must assign to its resource.</summary>
+    /// <summary>Gets the effective name, including any import prefix or alias, that the factory must assign.</summary>
     string ResourceName { get; }
 
     /// <summary>Gets the local source or managed repository path for this module.</summary>
@@ -228,4 +234,14 @@ public sealed class ModuleContainerExportOptions(
     /// Gets or sets the branch, tag, or commit checked out from <see cref="BuildRepository"/> before publishing.
     /// </summary>
     public string? BuildRepositoryRevision { get; set; }
+}
+
+/// <summary>Controls the directory used to resolve a module project path.</summary>
+public enum ModuleProjectPathBase
+{
+    /// <summary>Resolves the path from the AppHost that defines the module.</summary>
+    AppHost,
+
+    /// <summary>Resolves the path from the local or imported module repository during materialization.</summary>
+    Repository
 }
