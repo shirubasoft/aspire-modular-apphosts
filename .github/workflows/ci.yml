@@ -267,7 +267,7 @@ jobs:
             --timeout 180 \
             --non-interactive
 
-  e2e-image-push:
+  e2e-image-registry-pipelines:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -289,6 +289,9 @@ jobs:
 
       - name: Push scoped and complete image sets to a local registry
         run: bash samples/ImagePushE2E/test-image-push.sh
+
+      - name: Pull scoped and complete image sets from a local registry
+        run: bash samples/ImagePushE2E/test-image-pull.sh
 
   e2e-multi-repo:
     runs-on: ubuntu-latest

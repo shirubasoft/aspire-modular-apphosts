@@ -30,7 +30,7 @@ public sealed class ModuleImagePushPipelineTests
         await builder.AddAsync(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
-        var step = Assert.Single(await CreateStepsAsync(container));
+        var step = Assert.Single(await CreatePushStepsAsync(container));
         Assert.Equal("push-orders-api", step.Name);
         Assert.Same(container, step.Resource);
         Assert.Contains(WellKnownPipelineSteps.PushPrereq, step.DependsOnSteps);
@@ -75,7 +75,7 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Equal(2, containers.Length);
         foreach (var container in containers)
         {
-            var step = Assert.Single(await CreateStepsAsync(container));
+            var step = Assert.Single(await CreatePushStepsAsync(container));
             Assert.Equal($"push-{container.Name}", step.Name);
         }
     }
@@ -125,7 +125,7 @@ public sealed class ModuleImagePushPipelineTests
 
         Assert.Equal("services/orders", pushOptions.RemoteImageName);
         Assert.Equal("preview", pushOptions.RemoteImageTag);
-        Assert.Single(await CreateStepsAsync(container));
+        Assert.Single(await CreatePushStepsAsync(container));
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public sealed class ModuleImagePushPipelineTests
 
         ModuleImagePushPipeline.ApplySelection(
             [apiStep, workerStep],
-            new ModuleImagePushSelection(["orders-api"]));
+            new ModuleImageSelection(["orders-api"]));
 
         Assert.Contains(WellKnownPipelineSteps.Push, apiStep.RequiredBySteps);
         Assert.DoesNotContain(WellKnownPipelineSteps.Push, workerStep.RequiredBySteps);
@@ -197,7 +197,7 @@ public sealed class ModuleImagePushPipelineTests
         var exception = Assert.Throws<InvalidOperationException>(() =>
             ModuleImagePushPipeline.ApplySelection(
                 [CreatePushStep("orders-api")],
-                new ModuleImagePushSelection(["missing-api"])));
+                new ModuleImageSelection(["missing-api"])));
 
         Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);
         Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
@@ -215,7 +215,7 @@ public sealed class ModuleImagePushPipelineTests
         };
     }
 
-    private static async Task<IReadOnlyList<PipelineStep>> CreateStepsAsync(IResource resource)
+    private static async Task<IReadOnlyList<PipelineStep>> CreatePushStepsAsync(IResource resource)
     {
         var steps = new List<PipelineStep>();
         foreach (var annotation in resource.Annotations.OfType<PipelineStepAnnotation>())
@@ -227,7 +227,9 @@ public sealed class ModuleImagePushPipelineTests
             }));
         }
 
-        return steps;
+        return steps
+            .Where(step => step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+            .ToArray();
     }
 
     private static IDistributedApplicationBuilder CreatePublishBuilder(string projectDirectory)
