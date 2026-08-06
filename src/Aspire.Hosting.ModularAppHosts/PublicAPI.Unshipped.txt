@@ -126,3 +126,10 @@ static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(string! pa
 static Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewManifest!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewResolution!>!
 static Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModulePreviewResolution!>!
+Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext.Image.get -> Aspire.Hosting.ModularAppHosts.ModuleResourceImage?
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage.ModuleResourceImage(string! name, string! tag) -> void
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Name.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Reference.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Tag.get -> string!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.AddResource<TResource>(this Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder! module, string! name, System.Func<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext!, Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource>!>! resourceFactory, Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions! imagePublishOptions) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!

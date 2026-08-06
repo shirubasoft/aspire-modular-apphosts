@@ -227,6 +227,27 @@ module.AddResource<PostgresServerResource>("postgres", context =>
 
 Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically when the command uses the module repository. A publisher with an explicit `BuildRepository` can keep the module definition repository-independent.
 
+A generic factory can also own an image built by an explicit command. Pass `ModuleContainerExportOptions` to `AddResource<TResource>` when the resource is not a plain container—an Aspire integration such as `AddSqlServer` or `AddPostgres`—but its image still has to be built:
+
+```csharp
+module.AddResource<SqlServerServerResource>(
+    ServerResourceName,
+    context => context.ApplicationBuilder
+        .AddSqlServer(context.ResourceName, password)
+        .WithImage(context.Image!.Name, context.Image.Tag),
+    new ModuleContainerExportOptions(
+        imageName: "ghcr.io/example/orders-database",
+        publishCommand: "pwsh",
+        publishArguments: ["build-docker.ps1"])
+    {
+        ImageTag = "production",
+        BuildRepository = "https://github.com/example/orders-database.git",
+        WorkingDirectory = "."
+    });
+```
+
+The factory receives the resolved image through `context.Image` and must apply it to the resource it creates; the name and tag already include configuration overrides and the `-dirty` suffix. The resource waits for the same one-shot installer a declared container gets, so `TResource` must support waiting, and it is configured under the module's `Containers` section like any other module image. Because the factory owns the resource, `ImagePullPolicy` and `ImageSHA256` overrides do not apply—set those in the factory itself.
+
 Factories run in declaration order when the module is materialized. The context provides the receiving builder, required resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`.
 
 Modules containing only repository-independent resources, such as existing images or parameters, can be imported without `WithRepository`.

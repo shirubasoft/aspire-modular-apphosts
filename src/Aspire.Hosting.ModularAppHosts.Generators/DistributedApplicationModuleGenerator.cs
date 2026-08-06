@@ -27,6 +27,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
     private const string ModuleBuilderMetadataName =
         "Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder";
 
+    /// <summary>Declarations that extend the module builder instead of being declared on it.</summary>
+    private const string ModuleBuilderExtensionsMetadataName =
+        "Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions";
+
     private static readonly DiagnosticDescriptor InvalidModuleDeclaration = new(
         "SAMHSG001",
         "Invalid generated module declaration",
@@ -259,8 +263,14 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                     continue;
                 }
 
-                if (semanticModel.GetOperation(invocation, cancellationToken) is not IInvocationOperation operation ||
-                    operation.TargetMethod.ContainingType.ToDisplayString() != ModuleBuilderMetadataName)
+                if (semanticModel.GetOperation(invocation, cancellationToken) is not IInvocationOperation operation)
+                {
+                    continue;
+                }
+
+                var declaringType = operation.TargetMethod.ContainingType.ToDisplayString();
+                if (declaringType != ModuleBuilderMetadataName &&
+                    declaringType != ModuleBuilderExtensionsMetadataName)
                 {
                     continue;
                 }

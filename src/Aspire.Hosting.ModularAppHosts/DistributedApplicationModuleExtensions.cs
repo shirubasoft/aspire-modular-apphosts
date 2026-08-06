@@ -47,6 +47,42 @@ public static partial class DistributedApplicationModuleExtensions
         return builder.ConfigureModularAppHosts(options => options.PublishImages = true);
     }
 
+    /// <summary>
+    /// Adds any Aspire resource type whose container image is published by an explicit command, such as a database
+    /// server image built by the repository that owns its schema.
+    /// </summary>
+    /// <remarks>
+    /// The factory receives the resolved image through <see cref="IDistributedApplicationModuleResourceContext.Image"/>
+    /// and must apply it to the resource it creates. In run mode the resource waits for the same one-shot installer
+    /// <see cref="IDistributedApplicationModuleContainerBuilder.WithImagePublishCommand"/> attaches to a declared
+    /// container, and the resource is configurable under the module's <c>Containers</c> section.
+    /// </remarks>
+    /// <typeparam name="TResource">The resource type returned by the factory.</typeparam>
+    /// <param name="module">The module being defined.</param>
+    /// <param name="name">The declared resource name.</param>
+    /// <param name="resourceFactory">The factory that materializes the resource.</param>
+    /// <param name="imagePublishOptions">The command that publishes the resource's image.</param>
+    /// <returns>The module builder.</returns>
+    public static IDistributedApplicationModuleBuilder AddResource<TResource>(
+        this IDistributedApplicationModuleBuilder module,
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions imagePublishOptions)
+        where TResource : IResource, IResourceWithWaitSupport
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(imagePublishOptions);
+
+        if (module is not DistributedApplicationModuleBuilder concreteModule)
+        {
+            throw new ArgumentException(
+                $"Image publishing requires the module builder supplied by {nameof(DefineModuleAsync)}.",
+                nameof(module));
+        }
+
+        return concreteModule.AddResource(name, resourceFactory, imagePublishOptions);
+    }
+
     /// <summary>Gets the Aspire parameter name used when an imported module has no configured repository.</summary>
     public static string GetRepositoryParameterName(
         this IDistributedApplicationBuilder builder,
@@ -465,14 +501,17 @@ public static partial class DistributedApplicationModuleExtensions
                         cancellationToken).ConfigureAwait(false);
                     break;
                 case IDistributedApplicationModuleFactoryResource resource:
-                    MaterializeResource(
+                    await MaterializeResourceAsync(
                         builder,
                         module,
                         resource,
                         resourceNames[resource.Name],
-                        definitionRepository.RepositoryPath,
+                        definitionRepository,
                         imported,
-                        registry);
+                        registry,
+                        options,
+                        moduleOptions,
+                        cancellationToken).ConfigureAwait(false);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -726,31 +765,98 @@ public static partial class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
 
-    private static void MaterializeResource(
+    private static async Task MaterializeResourceAsync(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         IDistributedApplicationModuleFactoryResource definition,
         string resourceName,
-        string repositoryPath,
+        MaterializedModuleRepository definitionRepository,
         bool imported,
-        ModuleApplicationRegistry registry)
+        ModuleApplicationRegistry registry,
+        ModularAppHostsOptions options,
+        DistributedApplicationModuleOptions? moduleOptions,
+        CancellationToken cancellationToken)
     {
-        var context = new DistributedApplicationModuleResourceContext(
-            builder,
-            module,
-            resourceName,
+        var repositoryPath = definitionRepository.RepositoryPath;
+        var annotation = new DistributedApplicationModuleResourceAnnotation(
+            module.Name,
+            definition.Name,
             repositoryPath,
             imported);
-        var resource = definition.Materialize(
-            context,
-            new DistributedApplicationModuleResourceAnnotation(
-                module.Name,
-                definition.Name,
-                repositoryPath,
-                imported));
 
-        registry.TrackResource(resource);
-        module.TrackMaterializedResource(builder, definition.Name, resource);
+        if (definition.ImagePublishOptions is null)
+        {
+            var resource = definition.Materialize(
+                new DistributedApplicationModuleResourceContext(
+                    builder,
+                    module,
+                    resourceName,
+                    repositoryPath,
+                    imported),
+                annotation);
+
+            registry.TrackResource(resource);
+            module.TrackMaterializedResource(builder, definition.Name, resource);
+            return;
+        }
+
+        var resourceOptions = moduleOptions?.FindContainer(definition.Name);
+        var publishImage = resourceOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
+        var buildRepository = await ResolveBuildRepositoryAsync(
+            builder,
+            module,
+            definition.Name,
+            definition.ImagePublishOptions,
+            resourceOptions,
+            definitionRepository,
+            publishImage,
+            registry,
+            options,
+            moduleOptions,
+            cancellationToken).ConfigureAwait(false);
+        var publishOptions = ApplyImageOptions(
+            definition.ImagePublishOptions,
+            resourceOptions,
+            buildRepository.DefaultImageTag);
+        var publishPlan = await CreateImagePublishPlanAsync(
+            builder,
+            publishOptions,
+            buildRepository.RepositoryDirty && publishImage,
+            inspectExistingImage: publishImage,
+            cancellationToken).ConfigureAwait(false);
+        var installs = builder.ExecutionContext.IsRunMode && publishImage && publishPlan.ShouldPublish;
+        var publishWorkingDirectory = installs
+            ? PathSafety.GetContainedPath(
+                buildRepository.RepositoryPath,
+                publishOptions.WorkingDirectory ?? ".",
+                nameof(ModuleContainerExportOptions.WorkingDirectory))
+            : null;
+
+        var materializedResource = definition.Materialize(
+            new DistributedApplicationModuleResourceContext(
+                builder,
+                module,
+                resourceName,
+                repositoryPath,
+                imported,
+                new ModuleResourceImage(publishPlan.ImageName, publishPlan.ImageTag)),
+            annotation,
+            installs
+                ? parent => AddImagePublishInstaller(
+                    builder,
+                    resourceName,
+                    publishOptions,
+                    publishPlan,
+                    buildRepository.RepositoryPath,
+                    publishWorkingDirectory!,
+                    buildRepository.Repository,
+                    buildRepository.UpdateRepository,
+                    parent,
+                    registry)
+                : null);
+
+        registry.TrackResource(materializedResource);
+        module.TrackMaterializedResource(builder, definition.Name, materializedResource);
     }
 
     private static Task<ModuleImagePublishPlan> CreateImagePublishPlanAsync(
@@ -992,15 +1098,9 @@ public static partial class DistributedApplicationModuleExtensions
     {
         var definitionRepositoryIdentity = definitionRepository ??
             GetLocalRepositoryPath(builder, module, repository: null);
-        foreach (var container in module.ContainerDefinitions)
+        foreach (var (containerName, declared) in DeclaredImagePublishers(module))
         {
-            var declared = container.ImagePublishOptions;
-            if (declared is null)
-            {
-                continue;
-            }
-
-            var configured = moduleOptions?.FindContainer(container.Name);
+            var configured = moduleOptions?.FindContainer(containerName);
             var buildRepository = GetConfiguredValue(configured?.BuildRepository) ??
                 GetConfiguredValue(declared.BuildRepository);
             var buildRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
@@ -1028,6 +1128,26 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         return false;
+    }
+
+    /// <summary>Every module resource that declares an image publisher, keyed by its configurable container name.</summary>
+    private static IEnumerable<(string Name, ModuleContainerExportOptions Options)> DeclaredImagePublishers(
+        DistributedApplicationModule module)
+    {
+        foreach (var definition in module.ResourceDefinitions)
+        {
+            var declared = definition switch
+            {
+                DistributedApplicationModuleContainer container => container.ImagePublishOptions,
+                IDistributedApplicationModuleFactoryResource resource => resource.ImagePublishOptions,
+                _ => null
+            };
+
+            if (declared is not null)
+            {
+                yield return (definition.Name, declared);
+            }
+        }
     }
 
     private static void ApplyImagePullPolicy(
@@ -1063,6 +1183,35 @@ public static partial class DistributedApplicationModuleExtensions
         IResourceBuilder<ContainerResource> container,
         ModuleApplicationRegistry registry)
     {
+        var installer = AddImagePublishInstaller(
+            builder,
+            resourceName,
+            options,
+            publishPlan,
+            repositoryPath,
+            publishWorkingDirectory,
+            repository,
+            updateRepository,
+            container.Resource,
+            registry);
+
+        container
+            .WaitForCompletion(installer)
+            .WithAnnotation(new ModuleRepositoryInstallerAnnotation(installer.Resource));
+    }
+
+    private static IResourceBuilder<ModuleRepositoryInstallerResource> AddImagePublishInstaller(
+        IDistributedApplicationBuilder builder,
+        string resourceName,
+        ModuleContainerExportOptions options,
+        ModuleImagePublishPlan publishPlan,
+        string repositoryPath,
+        string publishWorkingDirectory,
+        string? repository,
+        bool updateRepository,
+        IResource parent,
+        ModuleApplicationRegistry registry)
+    {
         var installerResource = new ModuleRepositoryInstallerResource(
             GetInstallerName(resourceName),
             repositoryPath,
@@ -1079,16 +1228,13 @@ public static partial class DistributedApplicationModuleExtensions
             .WithEnvironment(
                 "ASPIRE_MODULE_IMAGE",
                 publishPlan.ImageReference)
-            .WithParentRelationship(container.Resource)
+            .WithParentRelationship(parent)
             .ExcludeFromManifest()
             .WithCertificateTrustScope(CertificateTrustScope.None)
             .WithIconName("ArrowDownload");
 
-        container
-            .WaitForCompletion(installer)
-            .WithAnnotation(new ModuleRepositoryInstallerAnnotation(installerResource));
-
         registry.TrackResource(installer.Resource);
+        return installer;
     }
 
     private static void ConfigureRepositorySynchronization(
@@ -1348,8 +1494,14 @@ public static partial class DistributedApplicationModuleExtensions
         var projectNames = module.ProjectDefinitions
             .Select(project => project.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A resource factory that declares an image publisher is configured under Containers too, because every
+        // setting in that section describes an image rather than a container resource.
         var containerNames = module.ContainerDefinitions
             .Select(container => container.Name)
+            .Concat(module.ResourceDefinitions
+                .OfType<IDistributedApplicationModuleFactoryResource>()
+                .Where(resource => resource.ImagePublishOptions is not null)
+                .Select(resource => resource.Name))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var missingProject = configured.Projects.Keys.FirstOrDefault(name => !projectNames.Contains(name));
@@ -1457,6 +1609,10 @@ public static partial class DistributedApplicationModuleExtensions
                 moduleOptions?.FindContainer(container.Name)?.PublishImage ??
                     moduleOptions?.PublishImages ??
                     options.PublishImages,
+            IDistributedApplicationModuleFactoryResource resource when resource.ImagePublishOptions is not null =>
+                moduleOptions?.FindContainer(resource.Name)?.PublishImage ??
+                    moduleOptions?.PublishImages ??
+                    options.PublishImages,
             _ => false
         };
 
@@ -1478,13 +1634,24 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(moduleOptions?.FindProject(project.Name)?.ImageTag) is null &&
                 GetConfiguredValue(project.Export.Options.ImageTag) is null,
             DistributedApplicationModuleContainer container when container.ImagePublishOptions is not null =>
-                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.ImageSHA256) is null &&
-                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.ImageTag) is null &&
-                GetConfiguredValue(container.ImagePublishOptions.ImageTag) is null &&
-                GetConfiguredValue(moduleOptions?.FindContainer(container.Name)?.BuildRepository) is null &&
-                GetConfiguredValue(container.ImagePublishOptions.BuildRepository) is null,
+                RequiresRepositoryImageTag(container.Name, container.ImagePublishOptions, moduleOptions),
+            IDistributedApplicationModuleFactoryResource resource when resource.ImagePublishOptions is not null =>
+                RequiresRepositoryImageTag(resource.Name, resource.ImagePublishOptions, moduleOptions),
             _ => false
         });
+    }
+
+    private static bool RequiresRepositoryImageTag(
+        string resourceName,
+        ModuleContainerExportOptions declared,
+        DistributedApplicationModuleOptions? moduleOptions)
+    {
+        var configured = moduleOptions?.FindContainer(resourceName);
+        return GetConfiguredValue(configured?.ImageSHA256) is null &&
+            GetConfiguredValue(configured?.ImageTag) is null &&
+            GetConfiguredValue(declared.ImageTag) is null &&
+            GetConfiguredValue(configured?.BuildRepository) is null &&
+            GetConfiguredValue(declared.BuildRepository) is null;
     }
 
     private static ModuleProjectMode ResolveProjectMode(

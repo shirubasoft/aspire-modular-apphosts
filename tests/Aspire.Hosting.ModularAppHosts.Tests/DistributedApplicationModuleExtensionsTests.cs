@@ -733,6 +733,105 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task A_resource_factory_can_publish_its_image_from_another_repository()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync();
+        using var buildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        var builder = CreateBuilder(definitionRepository.Path);
+        ModuleResourceImage? factoryImage = null;
+
+        var module = await builder.ExportModuleAsync("database", definition =>
+            definition.AddResource(
+                "database-server",
+                context =>
+                {
+                    factoryImage = context.Image;
+                    return context.ApplicationBuilder.AddContainer(
+                        context.ResourceName,
+                        context.Image!.Name,
+                        context.Image.Tag);
+                },
+                new ModuleContainerExportOptions("example/database", "pwsh", "build-docker.ps1")
+                {
+                    ImageTag = "production",
+                    BuildRepository = buildRepository.Path,
+                    WorkingDirectory = "."
+                }));
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(factoryImage);
+        Assert.Equal("example/database", factoryImage.Name);
+        Assert.Equal("production", factoryImage.Tag);
+        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Equal("database-server-installer", installer.Name);
+        Assert.Equal("pwsh", installer.Command);
+        Assert.Equal(Path.GetFullPath(buildRepository.Path), Path.GetFullPath(installer.WorkingDirectory));
+        var server = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var wait = Assert.Single(server.Annotations.OfType<WaitAnnotation>());
+        Assert.Same(installer, wait.Resource);
+        Assert.Single(server.Annotations.OfType<ModuleRepositoryInstallerAnnotation>());
+    }
+
+    [Fact]
+    public async Task Configuration_can_disable_publishing_for_a_resource_factory_image()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:database:Containers:database-server";
+        builder.Configuration[$"{section}:ImageTag"] = "preview";
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+
+        var module = await builder.ExportModuleAsync("database", definition =>
+            definition.AddResource(
+                "database-server",
+                context => context.ApplicationBuilder.AddContainer(
+                    context.ResourceName,
+                    context.Image!.Name,
+                    context.Image.Tag),
+                new ModuleContainerExportOptions("example/database", "pwsh", "build-docker.ps1")
+                {
+                    ImageTag = "production"
+                }));
+
+        await builder.AddAsync(module);
+
+        var image = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations
+                .OfType<ContainerImageAnnotation>());
+        Assert.Equal("example/database", image.Image);
+        Assert.Equal("preview", image.Tag);
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+    }
+
+    [Fact]
+    public async Task Configuration_rejects_an_unknown_resource_factory_image_name()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:database:Containers:typo:ImageTag"] = "dev";
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.ExportModuleAsync("database", definition =>
+                definition.AddResource(
+                    "database-server",
+                    context => context.ApplicationBuilder.AddContainer(
+                        context.ResourceName,
+                        context.Image!.Name,
+                        context.Image.Tag),
+                    new ModuleContainerExportOptions("example/database", "pwsh", "build-docker.ps1")
+                    {
+                        ImageTag = "production"
+                    })));
+
+        Assert.Contains("container service 'typo'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'database-server'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ConfigureModularAppHosts_applies_programmatic_options_before_materialization()
     {
         using var repository = await TestRepository.CreateAsync();

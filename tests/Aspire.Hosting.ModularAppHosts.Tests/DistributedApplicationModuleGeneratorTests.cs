@@ -63,6 +63,42 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Fact]
+    public void Generator_creates_a_typed_property_for_a_resource_factory_that_publishes_its_image()
+    {
+        const string source = """
+            using Aspire.Hosting.ApplicationModel;
+            using Aspire.Hosting.ModularAppHosts;
+
+            namespace GeneratedSample;
+
+            [GenerateDistributedApplicationModule(Name, Version = "1")]
+            public static partial class DatabaseModule
+            {
+                public const string Name = "database";
+                public const string ServerResourceName = "database-server";
+
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddResource<ContainerResource>(
+                        ServerResourceName,
+                        context => throw new System.NotSupportedException(),
+                        new ModuleContainerExportOptions("example/database", "pwsh", "build-docker.ps1"));
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains(
+            "IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Server",
+            generated,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Generator_creates_a_strongly_typed_reference_for_use_in_other_module_definitions()
     {
         const string source = """

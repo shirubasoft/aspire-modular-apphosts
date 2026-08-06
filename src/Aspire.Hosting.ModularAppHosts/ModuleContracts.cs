@@ -117,9 +117,30 @@ public interface IDistributedApplicationModuleResourceContext
     /// <summary>Gets whether the module is being imported rather than added from local source.</summary>
     bool Imported { get; }
 
+    /// <summary>
+    /// Gets the resolved image the factory must use, or <see langword="null"/> when the resource declares no image
+    /// publisher. The name and tag already reflect configuration overrides and the dirty-repository suffix.
+    /// </summary>
+    ModuleResourceImage? Image => null;
+
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)
         where TResource : IResource;
+}
+
+/// <summary>The container image a module resource factory must materialize.</summary>
+/// <param name="name">The image name without a tag.</param>
+/// <param name="tag">The image tag.</param>
+public sealed class ModuleResourceImage(string name, string tag)
+{
+    /// <summary>Gets the image name without a tag.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>Gets the image tag.</summary>
+    public string Tag { get; } = tag;
+
+    /// <summary>Gets the complete <c>name:tag</c> image reference.</summary>
+    public string Reference => $"{Name}:{Tag}";
 }
 
 /// <summary>A container contained in a distributed application module.</summary>

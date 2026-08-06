@@ -56,6 +56,22 @@ internal sealed class DistributedApplicationModuleBuilder(
         return this;
     }
 
+    internal IDistributedApplicationModuleBuilder AddResource<TResource>(
+        string name,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        ModuleContainerExportOptions imagePublishOptions)
+        where TResource : IResource, IResourceWithWaitSupport
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(resourceFactory);
+
+        module.AddResource(new DistributedApplicationModulePublishedResource<TResource>(
+            name,
+            resourceFactory,
+            DistributedApplicationModuleProjectBuilder.CopyOptions(imagePublishOptions)));
+        return this;
+    }
+
     public IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
         where TProject : IProjectMetadata, new()
     {

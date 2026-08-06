@@ -54,8 +54,7 @@ internal sealed class DistributedApplicationModule(
         _resources.Add(container);
     }
 
-    internal void AddResource<TResource>(DistributedApplicationModuleResource<TResource> resource)
-        where TResource : IResource
+    internal void AddResource(IDistributedApplicationModuleFactoryResource resource)
     {
         ThrowIfNameIsAlreadyUsed(resource.Name);
         _resources.Add(resource);
@@ -285,9 +284,13 @@ internal sealed class DistributedApplicationModuleContainer(
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
 {
+    /// <summary>The publisher declared for this resource, or <see langword="null"/> when its image already exists.</summary>
+    ModuleContainerExportOptions? ImagePublishOptions { get; }
+
     IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
-        DistributedApplicationModuleResourceAnnotation annotation);
+        DistributedApplicationModuleResourceAnnotation annotation,
+        Func<IResource, IResourceBuilder<ModuleRepositoryInstallerResource>>? createInstaller = null);
 }
 
 internal sealed class DistributedApplicationModuleResource<TResource>(
@@ -300,22 +303,71 @@ internal sealed class DistributedApplicationModuleResource<TResource>(
 
     public Type ResourceType => typeof(TResource);
 
+    public ModuleContainerExportOptions? ImagePublishOptions => null;
+
     public IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
-        DistributedApplicationModuleResourceAnnotation annotation)
+        DistributedApplicationModuleResourceAnnotation annotation,
+        Func<IResource, IResourceBuilder<ModuleRepositoryInstallerResource>>? createInstaller = null)
+    {
+        var resource = ModuleFactoryResource.Invoke(Name, resourceFactory, context);
+        resource.WithAnnotation(annotation);
+        return resource.Resource;
+    }
+}
+
+internal sealed class DistributedApplicationModulePublishedResource<TResource>(
+    string name,
+    Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+    ModuleContainerExportOptions imagePublishOptions)
+    : IDistributedApplicationModuleFactoryResource
+    where TResource : IResource, IResourceWithWaitSupport
+{
+    public string Name { get; } = name;
+
+    public Type ResourceType => typeof(TResource);
+
+    public ModuleContainerExportOptions? ImagePublishOptions { get; } = imagePublishOptions;
+
+    public IResource Materialize(
+        IDistributedApplicationModuleResourceContext context,
+        DistributedApplicationModuleResourceAnnotation annotation,
+        Func<IResource, IResourceBuilder<ModuleRepositoryInstallerResource>>? createInstaller = null)
+    {
+        var resource = ModuleFactoryResource.Invoke(Name, resourceFactory, context);
+        resource.WithAnnotation(annotation);
+
+        if (createInstaller is not null)
+        {
+            var installer = createInstaller(resource.Resource);
+            resource
+                .WaitForCompletion(installer)
+                .WithAnnotation(new ModuleRepositoryInstallerAnnotation(installer.Resource));
+        }
+
+        return resource.Resource;
+    }
+}
+
+internal static class ModuleFactoryResource
+{
+    internal static IResourceBuilder<TResource> Invoke<TResource>(
+        string declaredName,
+        Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
+        IDistributedApplicationModuleResourceContext context)
+        where TResource : IResource
     {
         var resource = resourceFactory(context)
-            ?? throw new InvalidOperationException($"The factory for module resource '{Name}' returned null.");
+            ?? throw new InvalidOperationException($"The factory for module resource '{declaredName}' returned null.");
 
         if (!string.Equals(resource.Resource.Name, context.ResourceName, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                $"The factory for module resource '{Name}' returned a resource named '{resource.Resource.Name}'. " +
+                $"The factory for module resource '{declaredName}' returned a resource named '{resource.Resource.Name}'. " +
                 "Use context.ResourceName when creating the resource.");
         }
 
-        resource.WithAnnotation(annotation);
-        return resource.Resource;
+        return resource;
     }
 }
 
@@ -324,7 +376,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     DistributedApplicationModule module,
     string resourceName,
     string repositoryPath,
-    bool imported) : IDistributedApplicationModuleResourceContext
+    bool imported,
+    ModuleResourceImage? image = null) : IDistributedApplicationModuleResourceContext
 {
     public IDistributedApplicationBuilder ApplicationBuilder { get; } = applicationBuilder;
 
@@ -333,6 +386,8 @@ internal sealed class DistributedApplicationModuleResourceContext(
     public string RepositoryPath { get; } = repositoryPath;
 
     public bool Imported { get; } = imported;
+
+    public ModuleResourceImage? Image { get; } = image;
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
         where TResource : IResource => module.GetResource<TResource>(name);
