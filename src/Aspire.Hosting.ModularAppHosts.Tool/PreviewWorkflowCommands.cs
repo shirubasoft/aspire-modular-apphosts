@@ -182,6 +182,7 @@ internal static partial class PreviewTool
             ? Path.GetFullPath(config)
             : null;
         var gitExecutable = options.Optional("git-executable") ?? "git";
+        var githubCli = options.Optional("gh-executable") ?? "gh";
         var dotnetExecutable = options.Optional("dotnet-executable") ?? "dotnet";
         var dockerExecutable = options.Optional("docker-executable") ?? "docker";
         options.EnsureOnly(
@@ -195,6 +196,7 @@ internal static partial class PreviewTool
             "github-env",
             "nuget-config",
             "git-executable",
+            "gh-executable",
             "dotnet-executable",
             "docker-executable",
             "property");
@@ -272,6 +274,7 @@ internal static partial class PreviewTool
                     module.Selection,
                     checkoutPath,
                     gitExecutable,
+                    githubCli,
                     cancellationToken).ConfigureAwait(false);
                 var projectPath = GetContainedPath(
                     checkoutPath,
@@ -425,6 +428,7 @@ internal static partial class PreviewTool
         ModulePreviewSelection selection,
         string checkoutPath,
         string gitExecutable,
+        string githubCli,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(checkoutPath);
@@ -442,7 +446,10 @@ internal static partial class PreviewTool
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
-            ["fetch", "--quiet", "--no-tags", "--depth", "1", "origin", selection.Commit],
+            GitHubGitAuthentication.ConfigureCredentialHelper(
+                ["fetch", "--quiet", "--no-tags", "--depth", "1", "origin", selection.Commit],
+                selection.Repository,
+                githubCli),
             checkoutPath,
             "git fetch exact preview commit",
             cancellationToken).ConfigureAwait(false);

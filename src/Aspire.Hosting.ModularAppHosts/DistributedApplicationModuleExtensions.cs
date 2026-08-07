@@ -387,6 +387,7 @@ public static partial class DistributedApplicationModuleExtensions
                     cancellationToken,
                     repositoryRevision,
                     GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                    GetConfiguredValue(options.GitHubCliPath) ?? "gh",
                     options.RepositoryCommandTimeout,
                     progress)).ConfigureAwait(false);
         }
@@ -1212,6 +1213,7 @@ public static partial class DistributedApplicationModuleExtensions
                     cancellationToken,
                     requestedRevision,
                     gitExecutablePath,
+                    GetConfiguredValue(options.GitHubCliPath) ?? "gh",
                     options.RepositoryCommandTimeout,
                     progress)).ConfigureAwait(false);
         }
@@ -1512,6 +1514,7 @@ public static partial class DistributedApplicationModuleExtensions
                     cancellationToken,
                     repositoryRevision,
                     gitExecutablePath,
+                    GetConfiguredValue(registry.Options.GitHubCliPath) ?? "gh",
                     repositoryCommandTimeout,
                     progress),
                 progress => LogRepositoryProgress(logger, progress)).ConfigureAwait(false);

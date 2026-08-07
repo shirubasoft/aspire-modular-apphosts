@@ -2394,6 +2394,51 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Repository_synchronizer_uses_configured_GitHub_CLI_for_authenticated_revision_operations()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        await TestRepository.RunGitAsync(
+            repository.Path,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/orders.git");
+        var revision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var githubCli = Path.Combine(repository.Path, "tools", "custom gh");
+
+        var commands = await RepositorySynchronizer.CreateCommandsAsync(
+            repository.Path,
+            "https://github.com/acme/orders.git",
+            updateRepository: true,
+            revision,
+            githubCliPath: githubCli,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Collection(
+            commands,
+            fetch =>
+            {
+                Assert.Equal("git", fetch.Executable);
+                Assert.Contains(
+                    $"credential.https://github.com.helper=!'{githubCli}' auth git-credential",
+                    fetch.Arguments);
+                Assert.Contains("fetch", fetch.Arguments);
+            },
+            checkout => Assert.Equal(
+                ["-C", repository.Path, "checkout", "--detach", "FETCH_HEAD"],
+                checkout.Arguments),
+            submodule =>
+            {
+                Assert.Contains(
+                    $"credential.https://github.com.helper=!'{githubCli}' auth git-credential",
+                    submodule.Arguments);
+                Assert.Contains("submodule", submodule.Arguments);
+            });
+    }
+
+    [Fact]
     public async Task Repository_synchronizer_rejects_a_checkout_with_the_wrong_origin()
     {
         using var repository = await TestRepository.CreateAsync(initializeGit: true);

@@ -1,5 +1,8 @@
 using Aspire.Hosting.ModularAppHosts;
+using CliWrap;
+using CliWrap.Buffered;
 using Xunit;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
@@ -59,11 +62,70 @@ public sealed class ModuleCliRunnerTests
 
         var command = Assert.Single(await RepositorySynchronizer.CreateCommandsAsync(
             path,
-            "https://github.com/acme/orders.git",
+            "https://example.test/acme/orders.git",
             updateRepository: true,
             gitExecutablePath: "custom-git",
             cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("custom-git", command.Executable);
+    }
+
+    [Fact]
+    public async Task Missing_GitHub_repository_is_cloned_with_the_configured_GitHub_CLI()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}");
+
+        var command = Assert.Single(await RepositorySynchronizer.CreateCommandsAsync(
+            path,
+            "https://github.com/acme/orders.git",
+            updateRepository: true,
+            githubCliPath: "custom-gh",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("custom-gh", command.Executable);
+        Assert.Equal(
+            ["repo", "clone", "https://github.com/acme/orders.git", path, "--", "--recurse-submodules"],
+            command.Arguments);
+    }
+
+    [Fact]
+    public async Task GitHub_CLI_credential_helper_is_process_scoped_without_exposing_its_token()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = TemporaryDirectory.Create();
+        var githubCli = Path.Combine(directory.Path, "fake gh");
+        var log = Path.Combine(directory.Path, "gh-arguments.txt");
+        const string token = "test-token-that-must-not-be-an-argument";
+        await File.WriteAllTextAsync(
+            githubCli,
+            $$"""
+            #!/bin/sh
+            printf '%s\n' "$*" > '{{log}}'
+            cat >/dev/null
+            printf 'username=x-access-token\npassword={{token}}\n'
+            """,
+            TestContext.Current.CancellationToken);
+        File.SetUnixFileMode(
+            githubCli,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var arguments = GitHubGitAuthentication.ConfigureCredentialHelper(
+            ["credential", "fill"],
+            "https://github.com/acme/orders.git",
+            githubCli);
+        var result = await CliCommand.Wrap("git")
+            .WithArguments(arguments)
+            .WithWorkingDirectory(directory.Path)
+            .WithStandardInputPipe(PipeSource.FromString("protocol=https\nhost=github.com\n\n"))
+            .ExecuteBufferedAsync(TestContext.Current.CancellationToken);
+        var helperArguments = await File.ReadAllTextAsync(log, TestContext.Current.CancellationToken);
+
+        Assert.Contains($"password={token}", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Equal("auth git-credential get", helperArguments.Trim());
+        Assert.DoesNotContain(token, arguments);
     }
 }

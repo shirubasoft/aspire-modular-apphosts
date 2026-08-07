@@ -30,7 +30,7 @@ internal static partial class PreviewTool
           dotnet modular-apphosts preview materialize --manifest <path> --policy <path>
               --work-directory <path> --resolution <path> [--package-feed <path>]
               --consumer-repository <url> --consumer-commit <full-commit>
-              [--github-env <path>] [--property <name>=<value>]...
+              [--github-env <path>] [--property <name>=<value>]... [--gh-executable <path>]
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]... [--wait] [--github-output <path>]

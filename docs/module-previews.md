@@ -294,6 +294,10 @@ The image-only GitHub environment contains `ModulePreview__Resolution`; it does 
 
 The work directory must be empty. Authentication for Git, NuGet, and OCI registries is configured by
 the workflow and never appears in the request, descriptor, policy, or resolution.
+When source fallback fetches a private GitHub HTTPS repository, `materialize` uses the configured
+`gh` executable as a process-scoped Git credential helper. Set `GH_TOKEN` or `GITHUB_TOKEN` for that
+process, and use `--gh-executable <path>` only when `gh` is not on `PATH`. No global Git configuration
+or credential-bearing repository URL is required.
 
 ## Apply the trusted resolution
 

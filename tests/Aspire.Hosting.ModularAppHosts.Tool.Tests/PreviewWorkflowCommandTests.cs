@@ -186,6 +186,19 @@ public sealed class PreviewWorkflowCommandTests
             printf '%s\n' "$*" >> '{{dockerLog}}'
             """,
             cancellationToken);
+        var githubCli = await directory.WriteExecutableAsync(
+            "fake-gh",
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            if [[ "$*" == "auth git-credential get" ]]; then
+              cat >/dev/null
+              printf 'username=x-access-token\npassword=hidden-test-token\n'
+              exit 0
+            fi
+            exit 2
+            """,
+            cancellationToken);
 
         var workDirectory = Path.Combine(directory.Path, "materialization-work");
         var resolutionPath = Path.Combine(directory.Path, "resolved-preview.json");
@@ -202,6 +215,7 @@ public sealed class PreviewWorkflowCommandTests
                 "--consumer-commit", BaseCommit,
                 "--github-env", githubEnvironmentPath,
                 "--git-executable", git,
+                "--gh-executable", githubCli,
                 "--dotnet-executable", dotnet,
                 "--docker-executable", docker,
                 "--property", "ModularAppHostsVersion=1.2.3"
@@ -221,9 +235,15 @@ public sealed class PreviewWorkflowCommandTests
         var gitArguments = await File.ReadAllLinesAsync(
             Path.Combine(directory.Path, "git-arguments.txt"),
             cancellationToken);
+        var fetchArguments = Assert.Single(gitArguments, arguments =>
+            arguments.EndsWith(
+                $"fetch --quiet --no-tags --depth 1 origin {Commit}",
+                StringComparison.Ordinal));
         Assert.Contains(
-            $"fetch --quiet --no-tags --depth 1 origin {Commit}",
-            gitArguments);
+            $"credential.https://github.com.helper=!'{githubCli}' auth git-credential",
+            fetchArguments,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("hidden-test-token", fetchArguments, StringComparison.Ordinal);
         Assert.Contains($"remote add origin {Repository}", gitArguments);
 
         var dotnetArguments = await File.ReadAllLinesAsync(dotnetLog, cancellationToken);
