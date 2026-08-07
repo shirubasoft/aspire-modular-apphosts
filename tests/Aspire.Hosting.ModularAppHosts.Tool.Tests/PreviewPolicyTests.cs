@@ -201,6 +201,36 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Evaluator_compares_GitHub_repository_owner_and_path_without_case_sensitivity()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = "https://github.com/SHIRUBASOFT/preview-PRODUCER.git";
+        manifest.Modules[0].Repository = "https://GITHUB.com/Shirubasoft/PREVIEW-producer.git";
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, CreatePolicy());
+
+        Assert.Single(evaluation.Modules);
+    }
+
+    [Fact]
+    public void Evaluator_keeps_non_GitHub_repository_paths_case_sensitive_and_reports_expected_identity()
+    {
+        const string actual = "https://git.example.com/Shirubasoft/Preview-Producer.git";
+        const string expected = "https://git.example.com/shirubasoft/Preview-Producer.git";
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = actual;
+        manifest.Modules[0].Repository = actual;
+        var policy = CreatePolicy();
+        policy.Modules[0].Repository = expected;
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains(actual, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Evaluator_accepts_an_omitted_optional_contract()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -284,6 +314,22 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Evaluator_matches_external_GitHub_producer_allowlists_without_case_sensitivity()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = "https://github.com/SHIRUBASOFT/IMAGE-BUILDER.git";
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Required = false;
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
+
+        Assert.Single(evaluation.Modules);
+    }
+
+    [Fact]
     public void Evaluator_rejects_an_external_producer_without_per_image_authorization()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -344,6 +390,31 @@ public sealed class PreviewPolicyTests
         var exception = Assert.Throws<InvalidDataException>(policy.Validate);
 
         Assert.Contains("duplicate producer repository", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Policy_rejects_case_only_duplicate_GitHub_producer_repositories()
+    {
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://GITHUB.com/Shirubasoft/IMAGE-BUILDER.git");
+
+        var exception = Assert.Throws<InvalidDataException>(policy.Validate);
+
+        Assert.Contains("duplicate producer repository", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Policy_allows_case_distinct_non_GitHub_producer_repository_paths()
+    {
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://git.example.com/Shirubasoft/image-builder.git");
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://git.example.com/shirubasoft/image-builder.git");
+
+        policy.Validate();
     }
 
     [Fact]

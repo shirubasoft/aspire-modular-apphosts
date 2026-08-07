@@ -124,6 +124,38 @@ public sealed class PreviewWorkflowCommandTests
     }
 
     [Fact]
+    public async Task Produce_treats_case_variants_of_a_GitHub_module_repository_as_owned()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteProducerDescriptorAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "module-preview.json");
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--pin", $"preview-producer=https://github.com/SHIRUBASOFT/PREVIEW-PRODUCER.git@{Commit}",
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken);
+        Assert.Single(manifest.Contracts);
+    }
+
+    [Fact]
     public async Task Produce_discovers_and_pushes_AppHost_images_with_named_Aspire_steps()
     {
         if (OperatingSystem.IsWindows())

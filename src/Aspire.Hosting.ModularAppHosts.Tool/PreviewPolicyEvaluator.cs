@@ -28,10 +28,11 @@ internal static class PreviewPolicyEvaluator
                     $"Module '{selection.Name}' is not allowed by the consumer preview policy.");
             }
 
-            if (!string.Equals(selection.Repository, modulePolicy.Repository, StringComparison.Ordinal))
+            if (!RepositoryIdentityComparer.Instance.Equals(selection.Repository, modulePolicy.Repository))
             {
                 throw new InvalidDataException(
-                    $"Repository '{selection.Repository}' is not allowed for module '{selection.Name}'.");
+                    $"Repository '{selection.Repository}' is not allowed for module '{selection.Name}'. " +
+                    $"Expected repository '{modulePolicy.Repository}'.");
             }
 
             contracts.TryGetValue(selection.Name, out var contract);
@@ -72,7 +73,9 @@ internal static class PreviewPolicyEvaluator
             if (!ProducerMatchesSelection(manifest.Producer, selection))
             {
                 throw new InvalidDataException(
-                    $"Preview producer repository and commit do not match module '{contract.Module}', " +
+                    $"Preview producer repository and commit " +
+                    $"('{manifest.Producer.Repository}' at '{manifest.Producer.Commit}') do not match " +
+                    $"module '{contract.Module}' ('{selection.Repository}' at '{selection.Commit}'), " +
                     "so the producer cannot request its contract package.");
             }
         }
@@ -87,11 +90,15 @@ internal static class PreviewPolicyEvaluator
                 var imagePolicy = FindImagePolicy(image, modulePolicy.Images);
                 if (!imagePolicy.ProducerRepositories.Contains(
                         manifest.Producer.Repository,
-                        StringComparer.Ordinal))
+                        RepositoryIdentityComparer.Instance))
                 {
+                    var expectedRepositories = new[] { selection.Repository }
+                        .Concat(imagePolicy.ProducerRepositories)
+                        .Select(repository => $"'{repository}'");
                     throw new InvalidDataException(
                         $"Preview producer repository '{manifest.Producer.Repository}' is not allowed for image " +
-                        $"resource '{image.Resource}' in module '{image.Module}'.");
+                        $"resource '{image.Resource}' in module '{image.Module}'. Expected one of: " +
+                        $"{string.Join(", ", expectedRepositories)}.");
                 }
             }
         }
@@ -175,7 +182,7 @@ internal static class PreviewPolicyEvaluator
     private static bool ProducerMatchesSelection(
         ModulePreviewProducer producer,
         ModulePreviewSelection selection) =>
-        string.Equals(selection.Repository, producer.Repository, StringComparison.Ordinal) &&
+        RepositoryIdentityComparer.Instance.Equals(selection.Repository, producer.Repository) &&
         string.Equals(selection.Commit, producer.Commit, StringComparison.OrdinalIgnoreCase);
 
     private static string ToWireName(ModulePreviewResourceKind resourceKind) =>
@@ -414,7 +421,7 @@ internal static class PreviewPolicyValidation
                 }
             }
 
-            var producerRepositories = new HashSet<string>(StringComparer.Ordinal);
+            var producerRepositories = new HashSet<string>(RepositoryIdentityComparer.Instance);
             foreach (var repository in image.ProducerRepositories)
             {
                 ValidateRepositoryUrl(

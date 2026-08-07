@@ -183,12 +183,14 @@ internal static partial class PreviewTool
         }
 
         var producerOwnsDescriptorModule =
-            string.Equals(moduleSelection.Repository, producer.Repository, StringComparison.Ordinal) &&
+            RepositoryIdentityComparer.Instance.Equals(moduleSelection.Repository, producer.Repository) &&
             string.Equals(moduleSelection.Commit, producer.Commit, StringComparison.OrdinalIgnoreCase);
         if (manifest.Contracts.Count > 0 && !producerOwnsDescriptorModule)
         {
             throw new PreviewToolException(
-                $"The preview producer repository and commit do not match module '{descriptor.Module}', " +
+                $"The preview producer repository and commit " +
+                $"('{producer.Repository}' at '{producer.Commit}') do not match module '{descriptor.Module}' " +
+                $"('{moduleSelection.Repository}' at '{moduleSelection.Commit}'), " +
                 "so the producer cannot request its contract package. Use an image-only descriptor.");
         }
 
