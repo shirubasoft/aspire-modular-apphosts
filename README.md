@@ -109,9 +109,11 @@ For CI, `preview workflow generate producer` writes a reviewable GitHub Actions 
 an attached checkout, isolated tool installs, one aggregate `aspire do push <resource>...` pipeline run,
 Docker's registry-reported digest formatter, the exact contract version, `gh workflow run`, and
 `gh run watch`. Descriptor/image joining and validation stay in `preview produce`, not generated
-shell or `jq`. Registry and package authentication remain explicit producer-owned script hooks; the
-generated workflow contains no service, registry, feed, or organization-specific credentials. See
-the preview guide for the generator options and hook contract.
+shell or `jq`. Registry and package authentication remain explicit producer-owned hooks. A strict
+JSON settings file can select runner labels or a runner group, configure or skip .NET setup, provide
+a checkout-token expression, and add typed steps at stable phase boundaries. The generated workflow
+contains no service, registry, feed, or organization-specific credentials. See the preview guide for
+the generator options and hook contract.
 
 Generate the producer descriptor itself with `preview descriptor generate producer --apphost ...
 --module ...`, and run the same command with `--check` in CI. The command derives publisher kinds,

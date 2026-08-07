@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/preview-workflow-settings.schema.json",
+  "runsOn": {
+    "group": "sample-linux-runners",
+    "labels": [
+      "self-hosted",
+      "linux"
+    ]
+  },
+  "dotnet": {
+    "version": "10.0.x"
+  },
+  "checkout": {
+    "token": "${{ steps.checkout-token.outputs.token }}"
+  },
+  "steps": {
+    "beforeCheckout": [
+      {
+        "id": "checkout-token",
+        "name": "Create checkout token",
+        "uses": "actions/create-github-app-token@v2",
+        "with": {
+          "app-id": "${{ vars.PREVIEW_APP_ID }}",
+          "private-key": "${{ env.APP_PRIVATE_KEY }}"
+        }
+      }
+    ],
+    "afterCheckout": [
+      {
+        "name": "Create local package source",
+        "run": "mkdir -p local-packages",
+        "shell": "bash"
+      }
+    ],
+    "beforeContract": [
+      {
+        "name": "Verify package source",
+        "run": "test -d local-packages",
+        "shell": "bash"
+      }
+    ],
+    "beforeProduce": [
+      {
+        "name": "Record image phase",
+        "run": "echo 'Image production starting' >> \"$GITHUB_STEP_SUMMARY\"",
+        "shell": "bash"
+      }
+    ],
+    "beforeTrigger": [
+      {
+        "name": "Verify preview request",
+        "run": "test -s \"$PREVIEW_ARTIFACTS_DIR/module-preview.json\"",
+        "shell": "bash"
+      }
+    ]
+  }
+}

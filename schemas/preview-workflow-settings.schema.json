@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/preview-workflow-settings.schema.json",
+  "title": "Modular AppHosts producer workflow settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "runsOn",
+    "dotnet"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/preview-workflow-settings.schema.json"
+    },
+    "runsOn": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptySingleLine"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "group"
+          ],
+          "properties": {
+            "group": {
+              "$ref": "#/$defs/nonEmptySingleLine"
+            },
+            "labels": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/nonEmptySingleLine"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dotnet": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1,
+      "properties": {
+        "globalJson": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "skip": {
+          "const": true
+        }
+      }
+    },
+    "checkout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "token": {
+          "type": "string",
+          "pattern": "^\\$\\{\\{[^\\x00-\\x1F\\x7F-\\x9F]+\\}\\}$"
+        }
+      }
+    },
+    "steps": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "beforeCheckout": {
+          "$ref": "#/$defs/steps"
+        },
+        "afterCheckout": {
+          "$ref": "#/$defs/steps"
+        },
+        "beforeContract": {
+          "$ref": "#/$defs/steps"
+        },
+        "beforeProduce": {
+          "$ref": "#/$defs/steps"
+        },
+        "beforeTrigger": {
+          "$ref": "#/$defs/steps"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptySingleLine": {
+      "type": "string",
+      "pattern": "^(?=.*\\S)[^\\x00-\\x1F\\x7F-\\x9F]+$"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "uses"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "run"
+                ]
+              },
+              {
+                "required": [
+                  "shell"
+                ]
+              },
+              {
+                "required": [
+                  "working-directory"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "run"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "uses"
+                ]
+              },
+              {
+                "required": [
+                  "with"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "uses": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "run": {
+          "type": "string",
+          "pattern": "^(?=[\\s\\S]*\\S)[^\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F]+$"
+        },
+        "with": {
+          "$ref": "#/$defs/withMap"
+        },
+        "env": {
+          "$ref": "#/$defs/envMap"
+        },
+        "if": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "shell": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        },
+        "working-directory": {
+          "$ref": "#/$defs/nonEmptySingleLine"
+        }
+      }
+    },
+    "withMap": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/nonEmptySingleLine"
+      }
+    },
+    "envMap": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/nonEmptySingleLine"
+      }
+    }
+  }
+}

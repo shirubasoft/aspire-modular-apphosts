@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/preview-workflow-settings.schema.json",
+  "runsOn": {
+    "group": "sample-runners",
+    "labels": [
+      "self-hosted",
+      "linux"
+    ]
+  },
+  "dotnet": {
+    "version": "10.0.x"
+  },
+  "checkout": {
+    "token": "${{ steps.app-token.outputs.token }}"
+  },
+  "steps": {
+    "beforeCheckout": [
+      {
+        "id": "app-token",
+        "name": "Create repository token",
+        "uses": "actions/create-github-app-token@v2",
+        "with": {
+          "private-key": "${{ secrets.APP_PRIVATE_KEY }}",
+          "app-id": "${{ vars.APP_ID }}"
+        },
+        "env": {
+          "TOKEN_SCOPE": "producer"
+        },
+        "if": "${{ github.actor != 'dependabot[bot]' }}"
+      }
+    ],
+    "afterCheckout": [
+      {
+        "id": "prepare-feed",
+        "name": "Prepare local package feed",
+        "run": "mkdir -p local-packages\nprintf 'ready\\n'",
+        "env": {
+          "FEED_PATH": "local-packages"
+        },
+        "if": "${{ always() }}",
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}"
+      }
+    ],
+    "beforeContract": [
+      {
+        "name": "Authenticate package source",
+        "run": "./scripts/authenticate-packages.sh",
+        "shell": "bash"
+      }
+    ],
+    "beforeProduce": [
+      {
+        "name": "Authenticate container registry",
+        "uses": "docker/login-action@v3",
+        "with": {
+          "registry": "registry.example.test",
+          "username": "${{ vars.REGISTRY_USERNAME }}",
+          "password": "${{ secrets.REGISTRY_TOKEN }}"
+        }
+      }
+    ],
+    "beforeTrigger": [
+      {
+        "name": "Record preview request",
+        "run": "test -s \"$PREVIEW_ARTIFACTS_DIR/module-preview.json\"",
+        "shell": "bash"
+      }
+    ]
+  }
+}

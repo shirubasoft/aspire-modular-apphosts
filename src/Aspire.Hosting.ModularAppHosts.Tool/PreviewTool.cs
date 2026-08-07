@@ -43,6 +43,7 @@ internal static partial class PreviewTool
               --aspire-version <exact-version> --tool-version <exact-version>
               --github-token-secret <name>
               (--registry-auth-script <path> | --anonymous-registry)
+              [--settings <path> | --global-json <path>]
               [--package-auth-script <path>] [--contract-publish-script <path>]
               [--secret <environment-name>=<secret-name>]...
               [--working-directory <path>] [--force]

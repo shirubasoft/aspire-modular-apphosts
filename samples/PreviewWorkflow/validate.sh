@@ -129,9 +129,11 @@ dotnet run --project "$tool_project" --configuration Release -- \
     --aspire-version "$aspire_version" \
     --tool-version 4.4.0 \
     --github-token-secret PREVIEW_AUTOMATION_TOKEN \
+    --settings samples/PreviewWorkflow/workflow-settings.json \
     --registry-auth-script samples/PreviewWorkflow/authenticate-registry.sh \
     --secret REGISTRY_USERNAME=SAMPLE_REGISTRY_USERNAME \
-    --secret REGISTRY_TOKEN=SAMPLE_REGISTRY_TOKEN
+    --secret REGISTRY_TOKEN=SAMPLE_REGISTRY_TOKEN \
+    --secret APP_PRIVATE_KEY=PREVIEW_APP_PRIVATE_KEY
 
 bash -n samples/PreviewWorkflow/authenticate-registry.sh
 grep --fixed-strings --quiet 'preview produce' "$generated_workflow"
@@ -143,5 +145,24 @@ if grep --fixed-strings --quiet 'jq' "$generated_workflow"; then
     exit 1
 fi
 grep --fixed-strings --quiet 'samples/PreviewWorkflow/authenticate-registry.sh' "$generated_workflow"
+grep --fixed-strings --quiet "group: 'sample-linux-runners'" "$generated_workflow"
+grep --fixed-strings --quiet "dotnet-version: '10.0.x'" "$generated_workflow"
+grep --fixed-strings --quiet "token: '\${{ steps.checkout-token.outputs.token }}'" "$generated_workflow"
+
+before_checkout_line="$(grep --line-number --fixed-strings 'Create checkout token' "$generated_workflow" | cut -d: -f1)"
+checkout_line="$(grep --line-number --fixed-strings 'Check out the pushed producer branch' "$generated_workflow" | cut -d: -f1)"
+after_checkout_line="$(grep --line-number --fixed-strings 'Create local package source' "$generated_workflow" | cut -d: -f1)"
+before_contract_line="$(grep --line-number --fixed-strings 'Verify package source' "$generated_workflow" | cut -d: -f1)"
+before_produce_line="$(grep --line-number --fixed-strings 'Record image phase' "$generated_workflow" | cut -d: -f1)"
+produce_line="$(grep --line-number --fixed-strings 'Produce immutable preview request' "$generated_workflow" | cut -d: -f1)"
+before_trigger_line="$(grep --line-number --fixed-strings 'Verify preview request' "$generated_workflow" | cut -d: -f1)"
+trigger_line="$(grep --line-number --fixed-strings 'Trigger and wait for consumer E2E' "$generated_workflow" | cut -d: -f1)"
+test "$before_checkout_line" -lt "$checkout_line"
+test "$checkout_line" -lt "$after_checkout_line"
+test "$after_checkout_line" -lt "$before_contract_line"
+test "$before_contract_line" -lt "$before_produce_line"
+test "$before_produce_line" -lt "$produce_line"
+test "$produce_line" -lt "$before_trigger_line"
+test "$before_trigger_line" -lt "$trigger_line"
 
 echo "Verified the external image policy and generated producer workflow."

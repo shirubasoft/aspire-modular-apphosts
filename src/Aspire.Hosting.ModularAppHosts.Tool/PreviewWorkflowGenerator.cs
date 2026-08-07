@@ -47,9 +47,25 @@ internal static partial class PreviewTool
         var githubTokenSecret = ValidateGitHubName(
             options.Required("github-token-secret"),
             "github-token-secret");
-        var globalJsonPath = ValidateWorkflowRepositoryPath(
-            options.Optional("global-json") ?? "global.json",
-            "global-json");
+        var settingsPath = options.Optional("settings") is { } configuredSettings
+            ? ValidateWorkflowRepositoryPath(configuredSettings, "settings")
+            : null;
+        var globalJsonOption = options.Optional("global-json");
+        if (settingsPath is not null && globalJsonOption is not null)
+        {
+            throw new PreviewToolException(
+                "--global-json cannot be combined with --settings; configure dotnet.globalJson in the settings file.");
+        }
+
+        var settings = settingsPath is null
+            ? PreviewWorkflowSettings.Default
+            : await PreviewWorkflowSettings.LoadAsync(
+                Path.GetFullPath(settingsPath, workingDirectory),
+                cancellationToken).ConfigureAwait(false);
+        var dotNetSetup = globalJsonOption is null
+            ? settings.DotNetSetup
+            : PreviewWorkflowDotNetSetup.FromGlobalJson(
+                ValidateWorkflowRepositoryPath(globalJsonOption, "global-json"));
         var registryAuthenticationScript = options.Optional("registry-auth-script") is { } registryScript
             ? ValidateWorkflowRepositoryPath(registryScript, "registry-auth-script")
             : null;
@@ -72,6 +88,7 @@ internal static partial class PreviewTool
             "aspire-version",
             "tool-version",
             "github-token-secret",
+            "settings",
             "global-json",
             "registry-auth-script",
             "package-auth-script",
@@ -114,7 +131,10 @@ internal static partial class PreviewTool
             aspireVersion,
             toolVersion,
             githubTokenSecret,
-            globalJsonPath,
+            settings.Runner,
+            dotNetSetup,
+            settings.Checkout?.Token,
+            settings,
             registryAuthenticationScript,
             packageAuthenticationScript,
             contractPublishScript,
@@ -254,7 +274,7 @@ internal static partial class PreviewTool
         builder.AppendLine();
         builder.AppendLine("jobs:");
         builder.AppendLine("  preview:");
-        builder.AppendLine("    runs-on: ubuntu-latest");
+        AppendRunsOn(builder, options.Runner);
         builder.AppendLine("    outputs:");
         builder.AppendLine("      workflow-run-id: ${{ steps.trigger.outputs.workflow_run_id }}");
         builder.AppendLine("      workflow-run-url: ${{ steps.trigger.outputs.workflow_run_url }}");
@@ -263,11 +283,11 @@ internal static partial class PreviewTool
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      PRODUCER_DESCRIPTOR: {YamlString(options.DescriptorPath)}");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      ASPIRE_VERSION: {YamlString(options.AspireVersion)}");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      MODULAR_APPHOSTS_VERSION: {YamlString(options.ToolVersion)}");
-        builder.AppendLine("      PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview");
-        builder.AppendLine("      ASPIRE_TOOL_DIR: ${{ runner.temp }}/tools/aspire");
-        builder.AppendLine("      MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/tools/modular-apphosts");
-        builder.AppendLine("      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/tools/nuget/nuget.config");
-        builder.AppendLine("      NUGET_PACKAGES: ${{ runner.temp }}/nuget-packages");
+        builder.AppendLine("      PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/artifacts");
+        builder.AppendLine("      ASPIRE_TOOL_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/aspire");
+        builder.AppendLine("      MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/modular-apphosts");
+        builder.AppendLine("      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/nuget/nuget.config");
+        builder.AppendLine("      NUGET_PACKAGES: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/nuget-packages");
         builder.AppendLine("      Aspire__ModularAppHosts__PublishImages: 'true'");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      GH_TOKEN: ${{{{ secrets.{options.GitHubTokenSecret} }}}}");
         if (options.HasContract)
@@ -281,16 +301,19 @@ internal static partial class PreviewTool
         }
 
         builder.AppendLine("    steps:");
+        AppendHookSteps(builder, options.Settings, PreviewWorkflowHookPhase.BeforeCheckout);
         builder.AppendLine("      - name: Check out the pushed producer branch");
         builder.AppendLine("        uses: actions/checkout@v4");
         builder.AppendLine("        with:");
         builder.AppendLine("          ref: ${{ inputs.source-ref || github.head_ref || github.ref_name }}");
         builder.AppendLine("          fetch-depth: 0");
-        builder.AppendLine();
-        builder.AppendLine("      - name: Set up .NET");
-        builder.AppendLine("        uses: actions/setup-dotnet@v5");
-        builder.AppendLine("        with:");
-        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          global-json-file: {YamlString(options.GlobalJsonPath)}");
+        if (options.CheckoutToken is not null)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          token: {YamlString(options.CheckoutToken)}");
+        }
+
+        AppendHookSteps(builder, options.Settings, PreviewWorkflowHookPhase.AfterCheckout);
+        AppendDotNetSetup(builder, options.DotNetSetup);
         builder.AppendLine();
         builder.AppendLine("      - name: Install isolated workflow tools");
         builder.AppendLine("        shell: bash");
@@ -316,6 +339,7 @@ internal static partial class PreviewTool
         builder.AppendLine("            --output \"$PREVIEW_ARTIFACTS_DIR/producer.json\" \\");
         builder.AppendLine("            --working-directory \"$GITHUB_WORKSPACE\"");
 
+        AppendHookSteps(builder, options.Settings, PreviewWorkflowHookPhase.BeforeContract);
         AppendScriptStep(builder, "Authenticate package feed", options.PackageAuthenticationScript);
         if (options.ContractPublishScript is not null)
         {
@@ -327,6 +351,7 @@ internal static partial class PreviewTool
             builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          bash \"$GITHUB_WORKSPACE/{ShellDoubleQuoted(options.ContractPublishScript)}\" \"$CONTRACT_VERSION\"");
         }
 
+        AppendHookSteps(builder, options.Settings, PreviewWorkflowHookPhase.BeforeProduce);
         AppendScriptStep(builder, "Authenticate image registries", options.RegistryAuthenticationScript);
         builder.AppendLine();
         builder.AppendLine("      - name: Produce immutable preview request");
@@ -349,6 +374,7 @@ internal static partial class PreviewTool
         builder.AppendLine("          )");
         builder.AppendLine("          \"$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts\" \\");
         builder.AppendLine("            \"${produce_args[@]}\"");
+        AppendHookSteps(builder, options.Settings, PreviewWorkflowHookPhase.BeforeTrigger);
         builder.AppendLine();
         builder.AppendLine("      - name: Trigger and wait for consumer E2E");
         builder.AppendLine("        id: trigger");
@@ -478,6 +504,127 @@ internal static partial class PreviewTool
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          bash \"$GITHUB_WORKSPACE/{ShellDoubleQuoted(repositoryPath)}\"");
     }
 
+    private static void AppendRunsOn(StringBuilder builder, PreviewWorkflowRunner runner)
+    {
+        if (runner.Label is not null)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"    runs-on: {YamlString(runner.Label)}");
+            return;
+        }
+
+        builder.AppendLine("    runs-on:");
+        if (runner.Group is not null)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      group: {YamlString(runner.Group)}");
+            if (runner.Labels.Count > 0)
+            {
+                builder.AppendLine("      labels:");
+                foreach (var label in runner.Labels)
+                {
+                    builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        - {YamlString(label)}");
+                }
+            }
+
+            return;
+        }
+
+        foreach (var label in runner.Labels)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      - {YamlString(label)}");
+        }
+    }
+
+    private static void AppendDotNetSetup(
+        StringBuilder builder,
+        PreviewWorkflowDotNetSetup setup)
+    {
+        if (setup.IsSkipped)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("      - name: Set up .NET");
+        builder.AppendLine("        uses: actions/setup-dotnet@v5");
+        builder.AppendLine("        with:");
+        if (setup.GlobalJson is not null)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          global-json-file: {YamlString(setup.GlobalJson)}");
+        }
+        else
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          dotnet-version: {YamlString(setup.Version!)}");
+        }
+    }
+
+    private static void AppendHookSteps(
+        StringBuilder builder,
+        PreviewWorkflowSettings settings,
+        PreviewWorkflowHookPhase phase)
+    {
+        foreach (var step in settings.GetSteps(phase))
+        {
+            builder.AppendLine();
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      - name: {YamlString(step.Name ?? step.Id ?? "Configured workflow step")}");
+            if (step.Id is not null)
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        id: {YamlString(step.Id)}");
+            }
+
+            if (step.If is not null)
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        if: {YamlString(step.If)}");
+            }
+
+            if (step.Uses is not null)
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        uses: {YamlString(step.Uses)}");
+                AppendStepMapping(builder, "with", step.With);
+                AppendStepMapping(builder, "env", step.Env);
+                continue;
+            }
+
+            if (step.Shell is not null)
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        shell: {YamlString(step.Shell)}");
+            }
+
+            if (step.WorkingDirectory is not null)
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        working-directory: {YamlString(step.WorkingDirectory)}");
+            }
+
+            AppendStepMapping(builder, "env", step.Env);
+            builder.AppendLine("        run: |");
+            foreach (var line in step.Run!
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Replace('\r', '\n')
+                .Split('\n'))
+            {
+                builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          {line}");
+            }
+        }
+    }
+
+    private static void AppendStepMapping(
+        StringBuilder builder,
+        string name,
+        SortedDictionary<string, string> values)
+    {
+        if (values.Count == 0)
+        {
+            return;
+        }
+
+        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"        {name}:");
+        foreach (var pair in values)
+        {
+            builder.AppendLine(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"          {YamlString(pair.Key)}: {YamlString(pair.Value)}");
+        }
+    }
+
     private static string YamlString(string value) => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 
     private static string ShellDoubleQuoted(string value) =>
@@ -498,7 +645,10 @@ internal static partial class PreviewTool
         string AspireVersion,
         string ToolVersion,
         string GitHubTokenSecret,
-        string GlobalJsonPath,
+        PreviewWorkflowRunner Runner,
+        PreviewWorkflowDotNetSetup DotNetSetup,
+        string? CheckoutToken,
+        PreviewWorkflowSettings Settings,
         string? RegistryAuthenticationScript,
         string? PackageAuthenticationScript,
         string? ContractPublishScript,

@@ -130,17 +130,84 @@ dotnet modular-apphosts preview workflow generate producer \
   --aspire-version 13.4.6 \
   --tool-version 4.4.0 \
   --github-token-secret PREVIEW_AUTOMATION_TOKEN \
+  --settings .github/module-preview-workflow.json \
   --registry-auth-script .github/scripts/login-preview-registries.sh \
   --package-auth-script .github/scripts/login-package-feed.sh \
   --contract-publish-script .github/scripts/publish-preview-contract.sh \
   --secret REGISTRY_TOKEN=PREVIEW_REGISTRY_TOKEN \
-  --secret PACKAGE_TOKEN=PREVIEW_PACKAGE_TOKEN
+  --secret PACKAGE_TOKEN=PREVIEW_PACKAGE_TOKEN \
+  --secret APP_PRIVATE_KEY=PREVIEW_APP_PRIVATE_KEY
 ```
 
 All paths embedded in the workflow are repository-relative. `--working-directory` changes where the
 generator reads the descriptor without changing that checked-in path, which is useful to tools that
 stage repository contents elsewhere. The output is deterministic for the same descriptor and
 options, so commit it and review changes like other CI code.
+
+`--settings` accepts a strict JSON document described by
+[`preview-workflow-settings.schema.json`](../schemas/preview-workflow-settings.schema.json). The
+document configures repository-specific GitHub Actions details without embedding them into the
+generator:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/preview-workflow-settings.schema.json",
+  "runsOn": {
+    "group": "trusted-linux-runners",
+    "labels": ["self-hosted", "linux"]
+  },
+  "dotnet": {
+    "version": "10.0.x"
+  },
+  "checkout": {
+    "token": "${{ steps.app-token.outputs.token }}"
+  },
+  "steps": {
+    "beforeCheckout": [
+      {
+        "id": "app-token",
+        "name": "Create checkout token",
+        "uses": "actions/create-github-app-token@v2",
+        "with": {
+          "app-id": "${{ vars.PREVIEW_APP_ID }}",
+          "private-key": "${{ env.APP_PRIVATE_KEY }}"
+        }
+      }
+    ],
+    "afterCheckout": [
+      {
+        "name": "Prepare local package source",
+        "run": "mkdir -p local-packages",
+        "shell": "bash"
+      }
+    ]
+  }
+}
+```
+
+`runsOn` accepts a single runner label, an array of labels, or a group object with optional labels.
+`dotnet` must select exactly one of `globalJson`, `version`, or `skip: true`; selecting `version` or
+`skip` means a producer does not need a `global.json`. `checkout.token` must be a GitHub Actions
+expression. Without `--settings`, generation retains the defaults `ubuntu-latest` and
+`dotnet.globalJson: global.json`; the existing `--global-json` option remains available only when no
+settings file is supplied.
+Generated artifacts, tool installations, and package caches use paths scoped by the workflow run ID
+and attempt, so retries and persistent self-hosted runners never reuse an earlier run's state.
+
+Typed custom steps can be placed in `beforeCheckout`, `afterCheckout`, `beforeContract`,
+`beforeProduce`, and `beforeTrigger`. Each step must define exactly one of `uses` or `run`, and may
+only use `id`, `name`, `with`, `env`, `if`, `shell`, and `working-directory` where GitHub Actions
+permits them. Step IDs are unique across all phases and cannot use generated IDs such as `trigger`.
+Objects reject unknown properties, and mappings are rendered in ordinal key order, so equal settings
+always produce byte-for-byte equal YAML. Secrets used by custom steps should be mapped with
+`--secret`; this both declares them for `workflow_call` and exposes the chosen environment name to
+the step.
+
+The hook boundaries are stable: `beforeCheckout` precedes the generated checkout;
+`afterCheckout` precedes .NET setup and tool installation; `beforeContract` follows branch
+verification and precedes package authentication/publishing; `beforeProduce` precedes registry
+authentication and image production; and `beforeTrigger` runs after the immutable request exists but
+before the consumer dispatch.
 
 Generation refuses to replace an existing file; pass `--force` only when intentionally regenerating
 the checked-in workflow.

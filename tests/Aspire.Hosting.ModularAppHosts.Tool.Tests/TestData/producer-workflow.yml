@@ -49,7 +49,7 @@ run-name: Module preview · ${{ inputs.source-ref || github.head_ref || github.r
 
 jobs:
   preview:
-    runs-on: ubuntu-latest
+    runs-on: 'ubuntu-latest'
     outputs:
       workflow-run-id: ${{ steps.trigger.outputs.workflow_run_id }}
       workflow-run-url: ${{ steps.trigger.outputs.workflow_run_url }}
@@ -58,11 +58,11 @@ jobs:
       PRODUCER_DESCRIPTOR: 'module-preview.producer.json'
       ASPIRE_VERSION: '13.4.6'
       MODULAR_APPHOSTS_VERSION: '4.4.0'
-      PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview
-      ASPIRE_TOOL_DIR: ${{ runner.temp }}/tools/aspire
-      MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/tools/modular-apphosts
-      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/tools/nuget/nuget.config
-      NUGET_PACKAGES: ${{ runner.temp }}/nuget-packages
+      PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/artifacts
+      ASPIRE_TOOL_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/aspire
+      MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/modular-apphosts
+      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/tools/nuget/nuget.config
+      NUGET_PACKAGES: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/nuget-packages
       Aspire__ModularAppHosts__PublishImages: 'true'
       GH_TOKEN: ${{ secrets.PREVIEW_GITHUB_TOKEN }}
       CONTRACT_VERSION: ${{ inputs.contract-version }}

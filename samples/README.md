@@ -115,8 +115,10 @@ the [sample README](ImagePushE2E/README.md) for commands.
 
 [`PreviewWorkflow`](PreviewWorkflow/README.md) validates an image-only request from a separately
 authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
-image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
-strict validation without dispatching a workflow or contacting an artifact service.
+image pipeline AppHost. Its strict settings file exercises runner groups, .NET version setup,
+checkout-token wiring, and every typed hook phase. The sample stays offline: example repository and
+registry identities exercise strict validation without dispatching a workflow or contacting an
+artifact service.
 
 ## Contract dependency preview sample
 

@@ -73,6 +73,9 @@ public sealed class PackedPackageContractTests
         Assert.True(ContainsEntry(
             packages.ToolPackagePath,
             "schemas/module-preview-producer.schema.json"));
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "schemas/preview-workflow-settings.schema.json"));
         Assert.False(ContainsEntry(
             packages.ToolPackagePath,
             "tools/net10.0/any/Aspire.Hosting.dll"));
