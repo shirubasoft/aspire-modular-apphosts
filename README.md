@@ -23,12 +23,12 @@ The testing package is optional. Keeping it separate means regular AppHosts do n
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
-The runtime packages and tool target .NET 10, and the Aspire-facing packages require Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
+The runtime packages and tool target .NET 10, the source generator supports .NET SDK 10.0.100 or later, and the Aspire-facing packages require Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
 They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/LICENSE).
 
 ## Quick start
 
-Prerequisites are the .NET 10 SDK, Aspire CLI 13.4 or later, and a running Docker 28+ or Podman 5+ container runtime. In an existing AppHost or shared contract project, install the core package, install the item template, and scaffold a contract:
+Prerequisites are .NET SDK 10.0.100 or later, Aspire CLI 13.4 or later, and a running Docker 28+ or Podman 5+ container runtime. In an existing AppHost or shared contract project, install the core package, install the item template, and scaffold a contract:
 
 ```bash
 dotnet add package Shirubasoft.Aspire.ModularAppHosts

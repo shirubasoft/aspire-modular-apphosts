@@ -16,6 +16,7 @@ public sealed class PackedPackageContractTests
     private const string TestingPackageId = "Shirubasoft.Aspire.ModularAppHosts.Testing";
     private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
     private const string ToolPackageId = "Shirubasoft.Aspire.ModularAppHosts.Tool";
+    private const string MinimumSupportedSdkVersion = "10.0.100";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
     private static PackageArtifacts? _packageArtifacts;
     private readonly PackageTestWorkspace _workspace;
@@ -182,6 +183,21 @@ public sealed class PackedPackageContractTests
     }
 
     [Fact]
+    public async Task Core_package_generator_targets_the_minimum_supported_compiler()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        const string generatorAssembly =
+            "analyzers/dotnet/cs/Shirubasoft.Aspire.ModularAppHosts.Generators.dll";
+
+        Assert.Equal(
+            new Version(5, 0, 0, 0),
+            ReadAssemblyReferenceVersion(packages.CorePackagePath, generatorAssembly, "Microsoft.CodeAnalysis"));
+        Assert.Equal(
+            new Version(5, 0, 0, 0),
+            ReadAssemblyReferenceVersion(packages.CorePackagePath, generatorAssembly, "Microsoft.CodeAnalysis.CSharp"));
+    }
+
+    [Fact]
     public async Task Packed_core_package_compiles_a_source_generator_consumer()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
@@ -244,6 +260,39 @@ public sealed class PackedPackageContractTests
             CorePackageId,
             source,
             TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Packed_core_package_compiles_a_generated_consumer_with_the_minimum_sdk()
+    {
+        Assert.SkipUnless(
+            await IsMinimumSdkFeatureBandInstalledAsync(TestContext.Current.CancellationToken),
+            $"The .NET SDK {MinimumSupportedSdkVersion} feature band is not installed.");
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            namespace MinimumSdkConsumer;
+
+            [GenerateDistributedApplicationModule("compatible")]
+            public static partial class CompatibleModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("cache", "redis");
+                }
+
+                public static System.Type GeneratedModuleType => typeof(Module);
+            }
+            """;
+
+        await BuildConsumerAsync(
+            packages,
+            "MinimumSdkCoreConsumer",
+            CorePackageId,
+            source,
+            TestContext.Current.CancellationToken,
+            MinimumSupportedSdkVersion);
     }
 
     [Fact]
@@ -526,12 +575,40 @@ public sealed class PackedPackageContractTests
             $"Assembly '{entryPath}' does not declare {nameof(AssemblyInformationalVersionAttribute)}.");
     }
 
+    private static Version ReadAssemblyReferenceVersion(
+        string packagePath,
+        string entryPath,
+        string assemblyName)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        using var stream = entry.Open();
+        using var assemblyStream = new MemoryStream();
+        stream.CopyTo(assemblyStream);
+        assemblyStream.Position = 0;
+        using var peReader = new PEReader(assemblyStream);
+        var metadata = peReader.GetMetadataReader();
+        foreach (var referenceHandle in metadata.AssemblyReferences)
+        {
+            var reference = metadata.GetAssemblyReference(referenceHandle);
+            if (string.Equals(metadata.GetString(reference.Name), assemblyName, StringComparison.Ordinal))
+            {
+                return reference.Version;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Assembly '{entryPath}' does not reference '{assemblyName}'.");
+    }
+
     private static async Task BuildConsumerAsync(
         PackageArtifacts packages,
         string name,
         string packageId,
         string source,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? sdkVersion = null)
     {
         var projectDirectory = Path.Combine(packages.OutputPath, name);
         Directory.CreateDirectory(projectDirectory);
@@ -551,6 +628,19 @@ public sealed class PackedPackageContractTests
             </Project>
             """);
         File.WriteAllText(Path.Combine(projectDirectory, "Contract.cs"), source);
+        if (sdkVersion is not null)
+        {
+            File.WriteAllText(Path.Combine(projectDirectory, "global.json"), $$"""
+                {
+                  "sdk": {
+                    "version": "{{sdkVersion}}",
+                    "rollForward": "latestPatch",
+                    "allowPrerelease": false
+                  }
+                }
+                """);
+        }
+
         new XDocument(
             new XElement("configuration",
                 new XElement("packageSources",
@@ -578,6 +668,17 @@ public sealed class PackedPackageContractTests
             "--configuration",
             "Release",
             "--no-restore");
+    }
+
+    private static async Task<bool> IsMinimumSdkFeatureBandInstalledAsync(CancellationToken cancellationToken)
+    {
+        var result = await CliCommand.Wrap("dotnet")
+            .WithArguments("--list-sdks")
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(cancellationToken);
+        return result.IsSuccess && result.StandardOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Any(line => line.StartsWith("10.0.1", StringComparison.Ordinal));
     }
 
     private static async Task RunDotNetAsync(
