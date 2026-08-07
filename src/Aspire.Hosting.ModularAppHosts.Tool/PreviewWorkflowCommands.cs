@@ -378,6 +378,8 @@ internal static partial class PreviewTool
         var githubCli = options.Optional("gh-executable") ?? "gh";
         var dotnetExecutable = options.Optional("dotnet-executable") ?? "dotnet";
         var dockerExecutable = options.Optional("docker-executable") ?? "docker";
+        var commandTimeout = ParseMaterializationCommandTimeout(
+            options.Optional("command-timeout-seconds"));
         options.EnsureOnly(
             "manifest",
             "policy",
@@ -392,6 +394,7 @@ internal static partial class PreviewTool
             "gh-executable",
             "dotnet-executable",
             "docker-executable",
+            "command-timeout-seconds",
             "property");
 
         if (nugetConfig is not null && !File.Exists(nugetConfig))
@@ -450,6 +453,7 @@ internal static partial class PreviewTool
                     packageFeed!,
                     nugetConfig,
                     dotnetExecutable,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
             else
@@ -468,6 +472,7 @@ internal static partial class PreviewTool
                     checkoutPath,
                     gitExecutable,
                     githubCli,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
                 var projectPath = GetContainedPath(
                     checkoutPath,
@@ -489,6 +494,7 @@ internal static partial class PreviewTool
                     nugetConfig,
                     properties,
                     dotnetExecutable,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
             resolution.Contracts.Add(new ModulePreviewResolvedContract
@@ -506,13 +512,16 @@ internal static partial class PreviewTool
         {
             var reference = $"{image.Repository}@{image.Sha256}";
             await Console.Error.WriteLineAsync($"verifying image {reference}").ConfigureAwait(false);
+            var operation = $"OCI image verification for '{reference}'";
             var result = await RunCommandAsync(
                 dockerExecutable,
                 ["buildx", "imagetools", "inspect", reference],
                 workDirectory,
                 standardInput: null,
-                cancellationToken).ConfigureAwait(false);
-            EnsureSuccess(result, $"OCI image verification for '{reference}'");
+                cancellationToken,
+                timeout: commandTimeout,
+                timeoutOperation: operation).ConfigureAwait(false);
+            EnsureSuccess(result, operation);
             resolution.Images.Add(CopyImage(image));
         }
 
@@ -530,6 +539,29 @@ internal static partial class PreviewTool
 
         await Console.Out.WriteLineAsync(resolutionPath).ConfigureAwait(false);
         return 0;
+    }
+
+    internal static TimeSpan ParseMaterializationCommandTimeout(string? seconds)
+    {
+        const int defaultSeconds = 120;
+        const int maximumSeconds = 86400;
+        if (seconds is null)
+        {
+            return TimeSpan.FromSeconds(defaultSeconds);
+        }
+
+        if (!int.TryParse(
+                seconds,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsedSeconds) ||
+            parsedSeconds is < 1 or > maximumSeconds)
+        {
+            throw new PreviewToolException(
+                $"--command-timeout-seconds must be an integer from 1 through {maximumSeconds}.");
+        }
+
+        return TimeSpan.FromSeconds(parsedSeconds);
     }
 
     private static Dictionary<string, string> ParseMaterializationProperties(
@@ -622,6 +654,7 @@ internal static partial class PreviewTool
         string checkoutPath,
         string gitExecutable,
         string githubCli,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(checkoutPath);
@@ -630,12 +663,14 @@ internal static partial class PreviewTool
             ["init", "--quiet", checkoutPath],
             Path.GetDirectoryName(checkoutPath)!,
             "git init",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
             ["remote", "add", "origin", selection.Repository],
             checkoutPath,
             "git remote add",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
@@ -645,21 +680,26 @@ internal static partial class PreviewTool
                 githubCli),
             checkoutPath,
             "git fetch exact preview commit",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
             ["-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD"],
             checkoutPath,
             "git checkout exact preview commit",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
+        const string resolveOperation = "git rev-parse exact preview commit";
         var head = await RunCommandAsync(
             gitExecutable,
             ["rev-parse", "HEAD"],
             checkoutPath,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(head, "git rev-parse exact preview commit");
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: resolveOperation).ConfigureAwait(false);
+        EnsureSuccess(head, resolveOperation);
         if (!string.Equals(head.StandardOutput.Trim(), selection.Commit, StringComparison.OrdinalIgnoreCase))
         {
             throw new PreviewToolException(
@@ -667,13 +707,16 @@ internal static partial class PreviewTool
                 $"not requested commit '{selection.Commit}'.");
         }
 
+        const string statusOperation = "git status after exact preview checkout";
         var status = await RunCommandAsync(
             gitExecutable,
             ["status", "--porcelain=v1", "--untracked-files=all"],
             checkoutPath,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(status, "git status after exact preview checkout");
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: statusOperation).ConfigureAwait(false);
+        EnsureSuccess(status, statusOperation);
         if (!string.IsNullOrWhiteSpace(status.StandardOutput))
         {
             throw new PreviewToolException(
@@ -689,6 +732,7 @@ internal static partial class PreviewTool
         string? nugetConfig,
         IReadOnlyDictionary<string, string> properties,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var packageFeedParent = Path.GetDirectoryName(packageFeed)
@@ -709,6 +753,7 @@ internal static partial class PreviewTool
                 nugetConfig,
                 properties,
                 dotnetExecutable,
+                commandTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -727,6 +772,7 @@ internal static partial class PreviewTool
         string packageFeed,
         string? nugetConfig,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var resolutionDirectory = Path.Combine(
@@ -770,6 +816,7 @@ internal static partial class PreviewTool
             restoreArguments,
             resolutionDirectory,
             $"resolve published contract '{contract.PackageId}'",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var candidates = Directory.Exists(packagesDirectory)
@@ -915,6 +962,7 @@ internal static partial class PreviewTool
         string? nugetConfig,
         IReadOnlyDictionary<string, string> properties,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var allowedProperties = policy.AllowedPackProperties.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -935,6 +983,7 @@ internal static partial class PreviewTool
             restoreArguments,
             Path.GetDirectoryName(projectPath)!,
             $"restore contract '{contract.PackageId}'",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var packArguments = new List<string>
@@ -954,6 +1003,7 @@ internal static partial class PreviewTool
             packArguments,
             Path.GetDirectoryName(projectPath)!,
             $"pack contract '{contract.PackageId}'",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var candidates = Directory.GetFiles(stagingDirectory, "*.nupkg", SearchOption.TopDirectoryOnly)
@@ -1024,11 +1074,12 @@ internal static partial class PreviewTool
         }
     }
 
-    private static async Task RunRequiredCommandAsync(
+    internal static async Task RunRequiredCommandAsync(
         string executable,
         IReadOnlyList<string> arguments,
         string workingDirectory,
         string operation,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var result = await RunCommandAsync(
@@ -1036,7 +1087,9 @@ internal static partial class PreviewTool
             arguments,
             workingDirectory,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: operation).ConfigureAwait(false);
         EnsureSuccess(result, operation);
     }
 

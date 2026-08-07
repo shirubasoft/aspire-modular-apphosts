@@ -528,6 +528,57 @@ public sealed class PreviewWorkflowCommandTests
             await File.ReadAllLinesAsync(githubEnvironmentPath, cancellationToken));
     }
 
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("86401")]
+    [InlineData("1.5")]
+    public void Materialize_rejects_command_timeouts_outside_the_bounded_integer_range(string seconds)
+    {
+        var exception = Assert.Throws<PreviewToolException>(() =>
+            PreviewTool.ParseMaterializationCommandTimeout(seconds));
+
+        Assert.Contains("integer from 1 through 86400", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Materialize_command_timeout_defaults_to_two_minutes_and_accepts_the_upper_bound()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(120), PreviewTool.ParseMaterializationCommandTimeout(null));
+        Assert.Equal(TimeSpan.FromSeconds(86400), PreviewTool.ParseMaterializationCommandTimeout("86400"));
+    }
+
+    [Fact]
+    public async Task Materialization_command_timeout_identifies_the_failed_operation()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var command = await directory.WriteExecutableAsync(
+            "slow-dotnet",
+            """
+            #!/usr/bin/env bash
+            sleep 10
+            """,
+            TestContext.Current.CancellationToken);
+
+        var exception = await Assert.ThrowsAsync<PreviewToolException>(() =>
+            PreviewTool.RunRequiredCommandAsync(
+                command,
+                ["restore"],
+                directory.Path,
+                "restore contract 'Example.Contract'",
+                TimeSpan.FromSeconds(1),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("restore contract 'Example.Contract'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("command timeout of 1 seconds", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("slow-dotnet", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task External_image_producer_can_override_the_owning_module_selection()
     {

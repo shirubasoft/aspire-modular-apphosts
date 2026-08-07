@@ -33,6 +33,7 @@ internal static partial class PreviewTool
               --work-directory <path> --resolution <path> [--package-feed <path>]
               --consumer-repository <url> --consumer-commit <full-commit>
               [--github-env <path>] [--property <name>=<value>]... [--gh-executable <path>]
+              [--command-timeout-seconds <1-86400>] [--nuget-config <path>]
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]... [--wait] [--github-output <path>]
@@ -47,6 +48,8 @@ internal static partial class PreviewTool
               [--working-directory <path>] [--force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
+        Materialize command timeouts default to 120 seconds per external process.
+        Materialize --nuget-config replaces NuGet's normal configuration chain; include every source and credential.
         --dependency is accepted as an alias for --pin.
         """;
 
@@ -411,7 +414,9 @@ internal static partial class PreviewTool
         string workingDirectory,
         string? standardInput,
         CancellationToken cancellationToken,
-        bool applyTimeout = true)
+        bool applyTimeout = true,
+        TimeSpan? timeout = null,
+        string? timeoutOperation = null)
     {
         var command = CliCommand.Wrap(executable)
             .WithArguments(arguments)
@@ -431,7 +436,8 @@ internal static partial class PreviewTool
                 untimedResult.StandardError);
         }
 
-        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var commandTimeout = timeout ?? TimeSpan.FromMinutes(2);
+        using var timeoutSource = new CancellationTokenSource(commandTimeout);
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutSource.Token);
@@ -442,8 +448,11 @@ internal static partial class PreviewTool
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            var operation = timeoutOperation ?? $"Command '{Path.GetFileName(executable)}'";
             throw new PreviewToolException(
-                $"Command '{Path.GetFileName(executable)}' exceeded the two-minute timeout.",
+                $"{operation} exceeded the command timeout of " +
+                $"{commandTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+                $"seconds while running '{Path.GetFileName(executable)}'.",
                 exception);
         }
     }

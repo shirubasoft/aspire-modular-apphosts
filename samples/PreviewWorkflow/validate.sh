@@ -8,6 +8,8 @@ temporary_directory="$(mktemp -d)"
 verified_request="$temporary_directory/module-preview.verified.json"
 generated_workflow="$temporary_directory/module-preview.yml"
 image_descriptions="$temporary_directory/images"
+materialization_work="$temporary_directory/materialization-work"
+resolution="$temporary_directory/module-preview.resolution.json"
 
 cleanup() {
     rm -r -- "$temporary_directory"
@@ -41,6 +43,23 @@ jq --exit-status '
     (.contracts | length) == 0 and
     (.images | length) == 1
 ' "$verified_request" >/dev/null
+
+dotnet run --project "$tool_project" --configuration Release -- \
+    preview materialize \
+    --manifest "$verified_request" \
+    --policy samples/PreviewWorkflow/module-preview-policy.json \
+    --work-directory "$materialization_work" \
+    --resolution "$resolution" \
+    --consumer-repository https://github.com/example/sample-consumer.git \
+    --consumer-commit fedcba9876543210fedcba9876543210fedcba98 \
+    --docker-executable true \
+    --command-timeout-seconds 5
+
+jq --exit-status '
+    .consumer.repository == "https://github.com/example/sample-consumer.git" and
+    (.contracts | length) == 0 and
+    (.images | length) == 1
+' "$resolution" >/dev/null
 
 ImagePush__RegistryEndpoint=registry.example.test \
     dotnet tool run aspire -- do describe-images \

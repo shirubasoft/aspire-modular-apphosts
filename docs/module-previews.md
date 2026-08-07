@@ -392,6 +392,7 @@ dotnet modular-apphosts preview materialize \
   --consumer-repository "https://github.com/acme/repo-d.git" \
   --consumer-commit "$GITHUB_SHA" \
   --nuget-config "$GITHUB_WORKSPACE/nuget.config" \
+  --command-timeout-seconds 900 \
   --property ModularAppHostsVersion="$ModularAppHostsVersion" \
   --github-env "$GITHUB_ENV"
 ```
@@ -432,6 +433,10 @@ The image-only GitHub environment contains `ModulePreview__Resolution`; it does 
 
 The work directory must be empty. Authentication for Git, NuGet, and OCI registries is configured by
 the workflow and never appears in the request, descriptor, policy, or resolution.
+Each Git fetch, checkout, contract restore, contract pack, and image inspection has a 120-second
+timeout by default. Set `--command-timeout-seconds` to a whole number from 1 through 86400 to change
+that per-process limit. A timeout identifies the materialization operation and executable that
+exceeded the limit.
 `--nuget-config` is passed to `dotnet restore` as `--configfile`, so NuGet uses only that file rather
 than its normal configuration hierarchy. Include every required package source, source mapping, and
 credential in that file. Omit `--nuget-config` to use NuGet's normal machine, user, and repository
