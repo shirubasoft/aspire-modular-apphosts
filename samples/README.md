@@ -36,7 +36,7 @@ The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleCo
 <docker|podman> build --tag modular-sample-static:<sanitized-branch>-<12-character-commit> .
 ```
 
-For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
+For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. Declare the executable and remaining arguments explicitly.
 
 `AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `GeneratedStatic`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
 
@@ -53,7 +53,7 @@ representation receives the same value.
 - Aspire CLI 13.4 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker. The legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable is also honored.
+The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; `DOTNET_ASPIRE_CONTAINER_RUNTIME` is also accepted; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker.
 
 ## Run AppHost A
 
@@ -115,8 +115,7 @@ the [sample README](ImagePushE2E/README.md) for commands.
 
 [`PreviewWorkflow`](PreviewWorkflow/README.md) validates an image-only request from a separately
 authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
-image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
-strict validation without dispatching a workflow or contacting an artifact service.
+image pipeline AppHost. Example repository and registry identities keep the validation offline.
 
 ## External AppHost workflow sample
 

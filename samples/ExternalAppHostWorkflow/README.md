@@ -1,9 +1,8 @@
 # External AppHost producer workflow sample
 
-This sample models two repository owners:
+This sample models a build producer and an AppHost owner:
 
-- `Producer` owns `ImageFixture/Dockerfile` and an image-only preview descriptor, but contains no
-  AppHost or .NET project;
+- `Producer` owns `ImageFixture/Dockerfile` and an image-only preview descriptor;
 - `Consumer/ExternalConsumer.AppHost` owns the module declaration and its image publishing command.
 
 Run the sample from the repository root:
@@ -19,16 +18,15 @@ use a different registry.
 The validation generates a producer workflow configured with a trusted external AppHost repository
 and ref. It checks that the workflow records the exact detached AppHost commit in the preview module
 pin and maps every descriptor image's `BuildRepository` to the producer checkout through standard
-.NET configuration keys. The secret named by `--github-token-secret` authenticates `gh repo clone`.
-It also pins `BuildRepositoryRevision` to the verified producer commit so a revision declared by the
-external module cannot redirect the build.
+.NET configuration keys. The secret named by `--github-token-secret` authenticates `gh repo clone`,
+and the verified producer commit supplies `BuildRepositoryRevision`.
 
 It then starts a temporary local OCI registry and runs the consumer-owned AppHost's real aggregate
-`push` pipeline with `resource:external-image`. The consumer fixture intentionally has no
-`ImageFixture`, so the successful build and push prove that the publishing command used the
-no-AppHost producer directory. The script cleans up its registry container and generated workflow.
+`push` pipeline with `resource:external-image`. The image exists in the producer fixture, so the
+successful build and push verify the configured cross-repository build context. The script cleans up
+its registry container and generated workflow.
 
-The checked-in repository, workflow, registry, and secret names are deliberately non-operational
-placeholders. Scope the token to the producer, external AppHost, and consumer repositories. External
-AppHost workflow generation accepts contracts only when the producer owns the AppHost; the external
-mode is image-only so it cannot attest a contract built from another source identity.
+Replace the checked-in repository, workflow, registry, and secret placeholders with repository-owned
+values. Scope the token to the producer, external AppHost, and consumer repositories. External
+AppHost mode accepts image-only descriptors; contract-producing workflows use a producer-owned
+AppHost.

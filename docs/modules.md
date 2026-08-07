@@ -86,7 +86,7 @@ The annotated type must be a top-level, non-generic, static partial class. The g
 
 The generator supports .NET SDK 10.0.100 and later. Pin at least that version in `global.json`; patch releases and later .NET 10 feature bands are supported.
 
-The untyped API remains available when a generated contract is unnecessary. Generated `AddProject` properties use `IResourceWithEndpoints` because configuration can select a `ProjectResource` or `ContainerResource` at run time:
+Use the untyped API for dynamic contracts. Generated `AddProject` properties use `IResourceWithEndpoints` because configuration can select a `ProjectResource` or `ContainerResource` at run time:
 
 ```csharp
 await builder.DefineModuleAsync(OrdersModule.Name, "1", OrdersModule.Define);
@@ -309,7 +309,7 @@ Modules containing only repository-independent resources, such as existing image
 
 ## Publishing module images
 
-The library does not infer how an image is built. `ExportAsContainer` publishes a project image, `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource, and the image-publishing `AddResource` overload does the same for a factory-created container resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
+Declare how each module image is built. `ExportAsContainer` publishes a project image, `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource, and the image-publishing `AddResource` overload does the same for a factory-created container resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
 
 ```csharp
 var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken);
@@ -327,7 +327,7 @@ module.AddContainer("orders-static", "orders-static")
         ]));
 ```
 
-`ASPIRE_CONTAINER_RUNTIME` takes precedence over the legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable. Without an explicit value, the resolver probes Docker and Podman in parallel, prefers a running runtime over one that is merely installed, and uses Docker as its tie-breaker and fallback.
+The resolver reads `ASPIRE_CONTAINER_RUNTIME` first and also accepts `DOTNET_ASPIRE_CONTAINER_RUNTIME`. Without an explicit value, it probes Docker and Podman in parallel, prefers a running runtime over one that is merely installed, and uses Docker as its tie-breaker and fallback.
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 
@@ -351,9 +351,9 @@ aspire do build
 aspire do build orders-api orders-worker
 ```
 
-Every registry-backed module image also contributes a `push-<resource>` step. That push depends on its matching build step, so `aspire do push` now builds a missing image from the module-owned command before pushing it. Producers no longer need to repeat that command in workflow YAML or prebuild the image locally. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
+Every registry-backed module image also contributes a `push-<resource>` step. That push depends on its matching build step, so `aspire do push` builds a missing image from the module-owned command before pushing it. This keeps the build command in the module contract and the workflow focused on orchestration. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
 
-Remote identity resolution uses one precedence order for describe, pull, and push: an explicit pull mapping (pull only), a per-resource `WithContainerRegistry`, the qualified registry declared by the module, and finally a deployment or default registry. Registries with an empty endpoint, such as the local registry supplied by a Docker Compose environment, are never remote pull or push targets. Consequently, adding a compute environment cannot erase a module-owned registry host.
+Remote identity resolution uses one precedence order for describe, pull, and push: an explicit pull mapping (pull only), a per-resource `WithContainerRegistry`, the qualified registry declared by the module, and finally a deployment or default registry. Registries with an endpoint participate in remote pull and push. Empty-endpoint registries, such as the local registry supplied by a Docker Compose environment, preserve the module-owned registry host.
 
 Project exports retain the `ImageRegistry` from `ModuleContainerExportOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
 
@@ -404,11 +404,11 @@ aspire do describe-images --output-path artifacts
 aspire do describe-images orders-api orders-worker --output-path artifacts
 ```
 
-The command writes deterministic schema-versioned JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need module and image identities without duplicating contract configuration. Schema version 2 adds the module-level metadata; consumers of schema version 1 must upgrade before reading documents emitted by this release.
+The command writes deterministic schema-version-2 JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need module and image identities without duplicating contract configuration.
 
 ### Pull module images
 
-The same registry-backed modular project exports, declared containers, and factory-created containers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource. Resolution starts from the configured module image name and tag, so an owner-qualified repository such as `example/orders-api` is never replaced by an inferred `<resource>:latest` identity.
+The same registry-backed modular project exports, declared containers, and factory-created containers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource. Resolution starts from the configured module image name and tag, preserving an owner-qualified repository such as `example/orders-api`.
 
 Use `WithImagePullMapping` when the pull source must be declared independently of the resource image. The pipeline pulls the supplied complete remote reference and tags it as the resource's effective local image, even when the two references use different registries:
 
@@ -417,7 +417,7 @@ module.AddContainer("api", "ghcr.io/api", "1-0")
     .WithImagePullMapping("mycustomregistry.io/images:api-1-0");
 ```
 
-In this example, `aspire do pull api` executes `pull mycustomregistry.io/images:api-1-0` followed by `tag mycustomregistry.io/images:api-1-0 ghcr.io/api:1-0`. The explicit mapping takes precedence over `WithContainerRegistry`, remote push-name callbacks, and default registry targets for pull resolution. It is pull-only and does not change the resource's push target or otherwise affect `aspire do push`. Because a digest reference cannot be a tag target, the resource's local image must be tag-based.
+In this example, `aspire do pull api` executes `pull mycustomregistry.io/images:api-1-0` followed by `tag mycustomregistry.io/images:api-1-0 ghcr.io/api:1-0`. The explicit mapping takes precedence over `WithContainerRegistry`, remote push-name callbacks, and default registry targets for pull resolution. The mapping applies to pulls; `aspire do push` retains the resource's configured push target. The resource's local image must be tag-based because the pipeline retags the pulled image.
 
 Pull and re-tag lifecycle messages are written both to the Aspire pipeline-step logger and to the pulled resource's `ResourceLoggerService` stream. The pipeline output therefore records the exact remote and local references in CI, while the same structured messages remain associated with the resource for dashboard and programmatic log consumers.
 
@@ -432,7 +432,7 @@ When resource arguments are present, only the selected pull steps run. An unknow
 
 Pull and describe-only commands skip a separate image build repository whenever a configured tag or immutable digest makes the image identity independent of that checkout. When neither is present, the repository is still resolved because its branch and commit determine the effective default tag. Build and push commands resolve only the repositories selected by declared or effective resource name.
 
-Legacy commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. No shell wrapper is required:
+Build commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. The module invokes the runtime directly:
 
 ```csharp
 new ModuleContainerExportOptions("example/orders-database", "pwsh", "./build-image.ps1")
@@ -443,7 +443,7 @@ new ModuleContainerExportOptions("example/orders-database", "pwsh", "./build-ima
 };
 ```
 
-Both settings participate only when image publishing is enabled. With `PublishImage: false`, the run-only build/retag chain is omitted and Aspire's configured `ImagePullPolicy` remains responsible for acquiring the target image.
+`ProducedImageReference` and `PullBeforeBuild` apply when image publishing is enabled. With `PublishImage: false`, Aspire's configured `ImagePullPolicy` acquires the target image.
 
 `WorkingDirectory` is relative to the effective build repository root. It defaults to the project directory for `ExportAsContainer` when the module repository also builds the image. A separate build repository and `WithImagePublishCommand` both default to the build repository root. The command and arguments are executed directly without a shell.
 
@@ -522,7 +522,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
               "ImageRegistry": "ghcr.io",
               "ImageName": "example/orders-api",
               "ImageTag": "debug",
-              "ProducedImageReference": "orders-api:legacy",
+              "ProducedImageReference": "orders-api:build-output",
               "PullBeforeBuild": true,
               "PublishImage": true,
               "PublishCommand": "dotnet",
@@ -587,7 +587,7 @@ builder.ConfigureModularAppHosts(options =>
 });
 ```
 
-Managed repository synchronization buffers clone, fetch, checkout, and pull progress and replays it through Aspire's resource logging service so it appears with the module resource in the dashboard. Discovery and cloning that must finish while constructing the application model continue to stream to the AppHost output. Deferred synchronization before startup honors startup cancellation, and every repository operation is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts. GitHub HTTPS clones use `gh repo clone`; subsequent fetch, pull, and submodule commands use the configured `gh` as a process-scoped Git credential helper. The library does not change global Git configuration or put the token in process arguments.
+Managed repository synchronization buffers clone, fetch, checkout, and pull progress and replays it through Aspire's resource logging service so it appears with the module resource in the dashboard. Discovery and cloning that must finish while constructing the application model continue to stream to the AppHost output. Deferred synchronization before startup honors startup cancellation, and every repository operation is bounded by `RepositoryCommandTimeout`. `GitExecutablePath`, `GitHubCliPath`, and `RepositoryCommandTimeout` configure the processes without changing module contracts. GitHub HTTPS clones use `gh repo clone`; subsequent fetch, pull, and submodule commands use the configured `gh` as a process-scoped Git credential helper. Credentials stay within that helper process.
 
 ## Repository imports
 
@@ -647,6 +647,6 @@ gh repo clone <repository> <sibling-path> -- --recurse-submodules
 
 This feature is off by default. `GitHubCliPath` can select another executable path. Authentication, host selection, and credentials remain GitHub CLI concerns; clone failures retain its diagnostic output. For private GitHub HTTPS repositories, authenticate locally with `gh auth login`. In CI, pass the job token to the AppHost process as `GH_TOKEN` or `GITHUB_TOKEN`; `gh auth git-credential` supplies it only to the Git process that needs it.
 
-Because sibling cloning must finish before repository-backed Aspire resources are added to the model, an enabled missing sibling needs `Repository` from configuration, programmatic options, or `WithRepository`. It cannot wait for an interactive parameter response. Existing managed imports continue to use `RepositoryBasePath` when sibling discovery is disabled. Synchronization happens during model construction when a repository-backed factory or default image identity needs the checkout immediately; other imports can defer it until before startup.
+Sibling cloning finishes before repository-backed Aspire resources are added to the model. For a missing sibling, supply `Repository` through configuration, programmatic options, or `WithRepository`. Existing managed imports use `RepositoryBasePath` when sibling discovery is disabled. Synchronization happens during model construction when a repository-backed factory or default image identity needs the checkout immediately; other imports can defer it until before startup.
 
 See the [Two-AppHost sample](../samples/README.md) for a complete local and imported module.

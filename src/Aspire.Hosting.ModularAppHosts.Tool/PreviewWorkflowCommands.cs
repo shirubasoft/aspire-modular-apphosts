@@ -1047,7 +1047,21 @@ internal static partial class PreviewTool
 
         var sha256 = await ComputeFileSha256Async(producedPackage, cancellationToken).ConfigureAwait(false);
         var packagePath = Path.Combine(packageFeed, Path.GetFileName(producedPackage));
-        File.Move(producedPackage, packagePath, overwrite: true);
+        if (File.Exists(packagePath))
+        {
+            var existingSha256 = await ComputeFileSha256Async(packagePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(existingSha256, sha256, StringComparison.Ordinal))
+            {
+                throw new PreviewToolException(
+                    $"Package feed already contains different bytes for '{contract.PackageId}' " +
+                    $"version '{contract.Version}'.");
+            }
+        }
+        else
+        {
+            File.Move(producedPackage, packagePath);
+        }
+
         return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256, Source: null);
     }
 

@@ -36,10 +36,9 @@ for the resulting container to become healthy, and return `multi-repo-resource-p
 from `/marker.txt`. Building the producer's latest commit would return a different marker and fail
 the job.
 
-The validation also confirms that the isolated consumer no longer contains the contract source or
-build fixture, the managed checkout's origin is the independent producer repository, the expected
-image exists in Docker, `/health.txt` returns the producer-owned health marker, and the AppHost
-stops cleanly.
+The validation restores the contract package into an isolated consumer, verifies the managed
+checkout's independent producer origin, checks the expected Docker image and producer-owned
+`/health.txt` marker, and stops the AppHost cleanly.
 
 ## Run manually
 

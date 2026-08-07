@@ -500,6 +500,30 @@ public sealed class PreviewWorkflowCommandTests
             ],
             environment);
 
+        await File.AppendAllTextAsync(packageTemplate, "different package bytes", cancellationToken);
+        var collisionResolution = Path.Combine(directory.Path, "collision-preview.json");
+        var collisionExitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "materialize",
+                "--manifest", manifestPath,
+                "--policy", policyPath,
+                "--work-directory", Path.Combine(directory.Path, "collision-materialization-work"),
+                "--package-feed", packageFeed,
+                "--resolution", collisionResolution,
+                "--consumer-repository", "https://github.com/shirubasoft/preview-consumer.git",
+                "--consumer-commit", BaseCommit,
+                "--git-executable", git,
+                "--gh-executable", githubCli,
+                "--dotnet-executable", dotnet,
+                "--docker-executable", docker,
+                "--property", "ModularAppHostsVersion=1.2.3"
+            ],
+            cancellationToken);
+
+        Assert.Equal(1, collisionExitCode);
+        Assert.False(File.Exists(collisionResolution));
+        Assert.Equal(expectedPackageSha256, await ComputeSha256Async(packagePath, cancellationToken));
+
         await CreateContractPackageAsync(
             packageTemplate,
             cancellationToken,
