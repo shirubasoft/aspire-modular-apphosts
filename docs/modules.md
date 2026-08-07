@@ -136,7 +136,7 @@ public static void Define(IDistributedApplicationModuleBuilder module)
 {
     var options = module.GetOptions<OrdersModuleOptions>().Value;
     module.AddContainer("orders-api", "example/orders-api")
-        .Configure(container => container.WithEnvironment("REGION", options.Region));
+        .Configure((_, container) => container.WithEnvironment("REGION", options.Region));
 }
 ```
 
@@ -177,11 +177,20 @@ Unknown aliases, aliases that map multiple resources to the same name, installer
 
 ### Existing container images
 
-Use `AddContainer` for an image that already exists in a registry or the local container runtime:
+Use `AddContainer` for an image that already exists in a registry or the local container runtime. Its
+`Configure` callback receives the same materialization context as project callbacks, so a declared
+container can resolve resources declared earlier in the same module:
 
 ```csharp
+module.AddResource<ParameterResource>("cache-password", context =>
+    context.ApplicationBuilder.AddParameter(context.ResourceName, secret: true));
+
 module.AddContainer("orders-cache", "redis", "8-alpine")
-    .Configure(container => container.WithEndpoint(targetPort: 6379, name: "tcp"));
+    .Configure((context, container) => container
+        .WithEnvironment(
+            "REDIS_PASSWORD",
+            context.GetResource<ParameterResource>("cache-password"))
+        .WithEndpoint(targetPort: 6379, name: "tcp"));
 ```
 
 ### Projects and repository-aware factories
@@ -219,7 +228,13 @@ module.AddProject<Projects.Orders_Api>("orders-api")
         ]));
 ```
 
-`ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing `ExportAsContainer` callback applies to its container representation. Both callbacks receive the materialization context, so they can call `GetResource<TResource>` for resources declared earlier in the same module. This keeps project and container configuration aligned without mutable variables in the contract.
+`ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing
+`ExportAsContainer` callback applies to its container representation. Those callbacks and declared
+containers' `Configure` callbacks receive the materialization context, so they can call
+`GetResource<TResource>` for resources declared earlier in the same module. The context also reports the
+effective resource name, repository path, import state, and resolved image identity. This keeps resource
+configuration aligned without mutable variables in the contract. A callback that asks for a later
+resource fails during materialization; move that dependency before the consumer.
 
 Contracts distributed as packages should declare the project relative to the module repository so the receiving AppHost does not need the same source-tree layout:
 

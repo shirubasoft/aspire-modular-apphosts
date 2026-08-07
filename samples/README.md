@@ -9,7 +9,8 @@ AppHost A
 │   └── both callbacks resolve sample-message from the same module context
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
-├── sample-static (ContainerResource, nginx:alpine)
+├── sample-static (ContainerResource, busybox:1.37)
+│   └── its Configure callback resolves sample-message from the same module context
 ├── sample-generated-static ── container build ──> branch-tagged modular-sample-static
 ├── sample-executable (ExecutableResource, explicit start)
 ├── sample-dotnet-tool (DotnetToolResource, explicit start)
@@ -39,11 +40,12 @@ For a dirty repository, the exact image-reference argument is changed to its `-d
 
 `AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `GeneratedStatic`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
 
-The message parameter is declared before `sample-api`. Both `ConfigureProject` and the
-`ExportAsContainer` callback receive the module materialization context, resolve that earlier parameter
-with `context.GetResource<ParameterResource>()`, and inject it into the project or container. CI runs
-AppHost A in project mode and AppHost B in container mode, then asserts that both representations
-receive the same value.
+The message parameter is declared before `sample-api` and `sample-static`. `ConfigureProject`, the
+`ExportAsContainer` callback, and the declared container's `Configure` callback receive the module
+materialization context, resolve that earlier parameter with `context.GetResource<ParameterResource>()`,
+and inject it into their resource. `sample-static` serves the injected value with BusyBox's HTTP
+server. CI runs AppHost A in project mode and AppHost B in container mode, then asserts that every
+representation receives the same value.
 
 ## Prerequisites
 
@@ -60,7 +62,14 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module and opts into the module-declared image publishers. Development configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module and opts into the module-declared image publishers. Development
+configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for
+debugging while publish mode retains its container representation. `sample-generated-static-installer`
+builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly
+from `busybox:1.37`, serving the message obtained from the module-owned parameter. Clean images are
+reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`.
+The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate
+their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
@@ -85,7 +94,8 @@ aspire describe --include-hidden
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
 Run `bash samples/test-modular-apphosts.sh` from the repository root to start both AppHosts exactly as
-CI does and verify that the project and container callbacks resolve the module-owned message.
+CI does and verify that project, exported-project, and declared-container callbacks resolve the
+module-owned message.
 
 ## E2E testing sample
 

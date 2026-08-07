@@ -53,7 +53,7 @@ public static partial class CatalogModule
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
         module.AddContainer(ApiResourceName, "nginx", "alpine")
-            .Configure(container =>
+            .Configure((_, container) =>
                 container.WithHttpEndpoint(targetPort: 80, name: "http"));
     }
 }

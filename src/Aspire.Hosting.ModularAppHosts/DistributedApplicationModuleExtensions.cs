@@ -754,7 +754,18 @@ public static partial class DistributedApplicationModuleExtensions
             container,
             publishPlan?.ImageRegistry ?? GetConfiguredValue(containerOptions?.ImageRegistry));
 
-        definition.ConfigureContainer?.Invoke(container);
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            module,
+            resourceName,
+            definitionRepository.RepositoryPath,
+            imported,
+            new ModuleResourceImage(
+                publishPlan?.ImageRegistry ?? GetConfiguredValue(containerOptions?.ImageRegistry),
+                publishPlan?.ImageName ?? GetConfiguredValue(containerOptions?.ImageName) ?? definition.Image,
+                publishPlan?.ImageTag ?? GetConfiguredValue(containerOptions?.ImageTag) ?? definition.Tag,
+                GetConfiguredValue(containerOptions?.ImageSHA256)));
+        definition.ConfigureContainer?.Invoke(context, container);
 
         if (publishPlan is not null)
         {

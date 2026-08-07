@@ -45,14 +45,14 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             ImageTag = ImageTag,
             WorkingDirectory = "ImageFixture"
         })
-        .Configure(container => container.WithExplicitStart());
+        .Configure((_, container) => container.WithExplicitStart());
 
     definition.AddContainer(
             "image-pull-mapped",
             $"{retagRegistryEndpoint}/image-pull/local",
             ImageTag)
         .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}")
-        .Configure(container => container.WithExplicitStart());
+        .Configure((_, container) => container.WithExplicitStart());
 
     definition.AddProject(
             ProjectResourceName,
@@ -115,7 +115,7 @@ var extraModule = await builder.ExportModuleAsync("image-push-extra", definition
             ImageTag = ImageTag,
             WorkingDirectory = "ImageFixture"
         })
-        .Configure(container => container.WithExplicitStart());
+        .Configure((_, container) => container.WithExplicitStart());
 });
 
 await builder.AddAsync(extraModule);

@@ -168,9 +168,12 @@ public interface IDistributedApplicationModuleContainerBuilder
     /// <summary>Gets the container being configured.</summary>
     IDistributedApplicationModuleContainer Container { get; }
 
-    /// <summary>Applies Aspire container-resource configuration when the module is materialized.</summary>
+    /// <summary>
+    /// Applies Aspire container-resource configuration when the module is materialized. The context can resolve
+    /// resources declared earlier in the same module.
+    /// </summary>
     IDistributedApplicationModuleContainerBuilder Configure(
-        Action<IResourceBuilder<ContainerResource>> configureContainer);
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>> configureContainer);
 
     /// <summary>Publishes the container image with an explicit command before the container starts.</summary>
     IDistributedApplicationModuleContainerBuilder WithImagePublishCommand(

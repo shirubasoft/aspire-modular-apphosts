@@ -86,10 +86,20 @@ public static partial class AppHostAModule
                     .WithExplicitStart());
 #pragma warning restore ASPIRECSHARPAPPS001
 
-            module.AddContainer(StaticResourceName, "nginx", "alpine")
-                .Configure(container => container
-                    .WithHttpEndpoint(targetPort: 80, name: "http")
-                    .WithHttpHealthCheck("/"));
+            module.AddContainer(StaticResourceName, "busybox", "1.37")
+                .Configure((context, container) =>
+                {
+                    var message = context.GetResource<ParameterResource>(MessageResourceName);
+                    container
+                        .WithEnvironment("MODULE_MESSAGE", message)
+                        .WithEntrypoint("/bin/sh")
+                        .WithArgs(
+                            "-c",
+                            "printf '%s' \"$MODULE_MESSAGE\" > /tmp/index.html && " +
+                            "exec httpd -f -p 8080 -h /tmp")
+                        .WithHttpEndpoint(targetPort: 8080, name: "http")
+                        .WithHttpHealthCheck("/");
+                });
 
             module.AddContainer(GeneratedStaticResourceName, "modular-sample-static")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
@@ -102,7 +112,7 @@ public static partial class AppHostAModule
                         ModuleContainerExportOptions.ImageReferencePlaceholder,
                         "."
                     ]))
-                .Configure(container => container
+                .Configure((_, container) => container
                     .WithHttpEndpoint(targetPort: 80, name: "http")
                     .WithHttpHealthCheck("/"));
 

@@ -95,6 +95,34 @@ internal sealed class DistributedApplicationModule(
         _materializedResources[declaredName] = resource;
     }
 
+    internal IResourceBuilder<TResource> GetResourceForCallback<TResource>(
+        string name,
+        string requestingResourceName)
+        where TResource : IResource
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        if (!_materializedResources.TryGetValue(name, out var resource))
+        {
+            if (_resources.Any(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"Module resource '{requestingResourceName}' cannot resolve '{name}' because module resources " +
+                    "are materialized in declaration order. Declare the dependency before the consuming resource.");
+            }
+
+            throw new KeyNotFoundException($"Module '{Name}' does not declare a resource named '{name}'.");
+        }
+
+        if (resource is not TResource typedResource)
+        {
+            throw new InvalidOperationException(
+                $"Module resource '{name}' is '{resource.GetType().Name}', not '{typeof(TResource).Name}'.");
+        }
+
+        return _materializedApplicationBuilder!.CreateResourceBuilder(typedResource);
+    }
+
     internal async Task ValidateAsync(
         string gitExecutablePath,
         TimeSpan repositoryCommandTimeout,
@@ -300,7 +328,7 @@ internal sealed class DistributedApplicationModuleContainer(
 
     public string Tag { get; } = tag;
 
-    internal Action<IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
+    internal Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
 
     internal ModuleContainerExportOptions? ImagePublishOptions { get; private set; }
 
@@ -376,5 +404,5 @@ internal sealed class DistributedApplicationModuleResourceContext(
     public ModuleResourceImage? Image { get; } = image;
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
-        where TResource : IResource => module.GetResource<TResource>(name);
+        where TResource : IResource => module.GetResourceForCallback<TResource>(name, ResourceName);
 }

@@ -34,7 +34,7 @@ public static partial class SpireModule
                 BuildRepositoryRevision = options.BuildRepositoryRevision,
                 WorkingDirectory = "."
             })
-            .Configure(container => container
+            .Configure((_, container) => container
                 .WithHttpEndpoint(targetPort: 80, name: "http")
                 .WithExternalHttpEndpoints()
                 .WithHttpHealthCheck("/health.txt"));

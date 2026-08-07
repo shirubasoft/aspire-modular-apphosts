@@ -167,6 +167,117 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Declared_container_configuration_receives_earlier_resource_and_local_context()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        IDistributedApplicationModuleResourceContext? materializationContext = null;
+        IResourceBuilder<ParameterResource>? configuredDependency = null;
+        IResourceBuilder<ContainerResource>? configuredContainer = null;
+
+        var module = await builder.DefineModuleAsync("portable", "1", definition =>
+        {
+            definition.AddResource<ParameterResource>("message", context =>
+                context.ApplicationBuilder.AddParameter(
+                    context.ResourceName,
+                    "hello",
+                    publishValueAsDefault: true));
+            definition.AddContainer("api", "alpine")
+                .Configure((context, container) =>
+                {
+                    materializationContext = context;
+                    configuredDependency = context.GetResource<ParameterResource>("message");
+                    configuredContainer = container;
+                    container.WithEnvironment("MESSAGE", configuredDependency);
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.NotNull(materializationContext);
+        Assert.Equal("api", materializationContext.ResourceName);
+        Assert.Equal(repository.Path, materializationContext.RepositoryPath);
+        Assert.False(materializationContext.Imported);
+        Assert.Null(materializationContext.Image?.Registry);
+        Assert.Equal("alpine", materializationContext.Image?.Name);
+        Assert.Equal("latest", materializationContext.Image?.Tag);
+        Assert.Same(
+            module.GetResource<ParameterResource>("message").Resource,
+            configuredDependency?.Resource);
+        Assert.Same(
+            module.GetResource<ContainerResource>("api").Resource,
+            configuredContainer?.Resource);
+    }
+
+    [Fact]
+    public async Task Imported_declared_container_context_uses_effective_alias_and_import_metadata()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var digest = $"sha256:{new string('a', 64)}";
+        var imageSection =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:portable:Containers:api";
+        builder.Configuration[$"{imageSection}:ImageRegistry"] = "registry.example.test";
+        builder.Configuration[$"{imageSection}:ImageName"] = "example/api";
+        builder.Configuration[$"{imageSection}:ImageTag"] = "preview";
+        builder.Configuration[$"{imageSection}:ImageSHA256"] = digest;
+        IDistributedApplicationModuleResourceContext? materializationContext = null;
+        IResourceBuilder<ContainerResource>? configuredDependency = null;
+        await builder.DefineModuleAsync("portable", "1", definition =>
+        {
+            definition.AddContainer("dependency", "redis");
+            definition.AddContainer("api", "alpine")
+                .Configure((context, _) =>
+                {
+                    materializationContext = context;
+                    configuredDependency = context.GetResource<ContainerResource>("dependency");
+                });
+        });
+        var importOptions = new ModuleImportOptions { ResourcePrefix = "shop-" };
+        importOptions.ResourceAliases["api"] = "shared-api";
+
+        var module = await builder.ImportModuleAsync("portable", importOptions);
+
+        Assert.NotNull(materializationContext);
+        Assert.Equal("shared-api", materializationContext.ResourceName);
+        Assert.Equal(repository.Path, materializationContext.RepositoryPath);
+        Assert.True(materializationContext.Imported);
+        Assert.Equal("registry.example.test", materializationContext.Image?.Registry);
+        Assert.Equal("example/api", materializationContext.Image?.Name);
+        Assert.Equal("preview", materializationContext.Image?.Tag);
+        Assert.Equal(digest, materializationContext.Image?.Digest);
+        Assert.Equal($"registry.example.test/example/api@{digest}", materializationContext.Image?.Reference);
+        Assert.Equal("shop-dependency", configuredDependency?.Resource.Name);
+        var annotation = Assert.Single(
+            module.GetResource<ContainerResource>("api").Resource.Annotations
+                .OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.Equal("api", annotation.ResourceName);
+        Assert.Equal(repository.Path, annotation.RepositoryPath);
+        Assert.True(annotation.Imported);
+    }
+
+    [Fact]
+    public async Task Declared_container_context_rejects_a_dependency_declared_after_the_consumer()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        var module = await builder.DefineModuleAsync("portable", "1", definition =>
+        {
+            definition.AddContainer("api", "alpine")
+                .Configure((context, _) =>
+                    context.GetResource<ContainerResource>("dependency"));
+            definition.AddContainer("dependency", "redis");
+        });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => builder.AddAsync(module));
+
+        Assert.Contains("api", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("dependency", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("declaration order", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Declare the dependency before", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ImportModule_reports_unknown_duplicate_and_existing_alias_collisions()
     {
         using var repository = await TestRepository.CreateAsync();
@@ -753,7 +864,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
                 {
                     ImageTag = "dev"
                 })
-                .Configure(container => container.WithImagePullPolicy(ImagePullPolicy.Missing)));
+                .Configure((_, container) => container.WithImagePullPolicy(ImagePullPolicy.Missing)));
 
         await builder.AddAsync(module);
 
@@ -926,7 +1037,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
             definition.AddProject("mixed-api", repository.ProjectPath)
                 .ExportAsContainer("mixed-api", "dotnet", ["publish"]);
             definition.AddContainer("mixed-static", "nginx", "alpine")
-                .Configure(container => container.WithHttpEndpoint(targetPort: 80, name: "http"));
+                .Configure((_, container) => container.WithHttpEndpoint(targetPort: 80, name: "http"));
         });
 
         await builder.AddAsync(module);
