@@ -548,25 +548,39 @@ public sealed class DistributedApplicationModuleExtensionsTests
         using var repository = await TestRepository.CreateAsync();
         var builder = CreateBuilder(repository.Path);
         var projectConfigured = false;
+        IDistributedApplicationModuleResourceContext? materializationContext = null;
+        IResourceBuilder<ContainerResource>? configuredDependency = null;
         builder.Configuration[
             $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api:ProjectMode"] =
             nameof(ModuleProjectMode.Project);
 
         var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.AddContainer("orders-cache", "redis");
             definition.AddProject("orders-api", repository.ProjectPath)
-                .ConfigureProject(project =>
+                .ConfigureProject((context, project) =>
                 {
                     projectConfigured = true;
+                    materializationContext = context;
+                    configuredDependency = context.GetResource<ContainerResource>("orders-cache");
                     project.WithExplicitStart();
                 })
-                .ExportAsContainer("orders-api", "dotnet", ["publish"]));
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+        });
 
         await builder.AddAsync(module);
 
         var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        var dependency = Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Equal("orders-api", project.Name);
+        Assert.Equal("orders-cache", dependency.Name);
         Assert.True(projectConfigured);
-        Assert.Empty(builder.Resources.OfType<ContainerResource>());
+        Assert.NotNull(materializationContext);
+        Assert.Equal("orders-api", materializationContext.ResourceName);
+        Assert.Equal(repository.Path, materializationContext.RepositoryPath);
+        Assert.False(materializationContext.Imported);
+        Assert.Null(materializationContext.Image);
+        Assert.Same(dependency, configuredDependency?.Resource);
         Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         Assert.Same(project, module.GetResource<IResourceWithEndpoints>("orders-api").Resource);
 
@@ -578,6 +592,43 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Equal(
             ModuleProjectMode.Project,
             boundOptions.Value.Modules["orders"].Projects["orders-api"].ProjectMode);
+    }
+
+    [Fact]
+    public async Task Exported_project_container_configuration_receives_same_module_resources_and_image()
+    {
+        using var repository = await TestRepository.CreateAsync();
+        var builder = CreateBuilder(repository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "false";
+        IDistributedApplicationModuleResourceContext? materializationContext = null;
+        IResourceBuilder<ContainerResource>? configuredDependency = null;
+
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.AddContainer("orders-cache", "redis");
+            definition.AddProject("orders-api", repository.ProjectPath)
+                .ExportAsContainer(
+                    "orders-api",
+                    "dotnet",
+                    ["publish"],
+                    (context, _) =>
+                    {
+                        materializationContext = context;
+                        configuredDependency = context.GetResource<ContainerResource>("orders-cache");
+                    });
+        });
+
+        await builder.AddAsync(module);
+
+        var containers = builder.Resources.OfType<ContainerResource>().ToDictionary(resource => resource.Name);
+        Assert.NotNull(materializationContext);
+        Assert.Equal("orders-api", materializationContext.ResourceName);
+        Assert.Equal(repository.Path, materializationContext.RepositoryPath);
+        Assert.False(materializationContext.Imported);
+        Assert.Equal("orders-api", materializationContext.Image?.Name);
+        Assert.False(string.IsNullOrWhiteSpace(materializationContext.Image?.Tag));
+        Assert.Same(containers["orders-cache"], configuredDependency?.Resource);
+        Assert.Same(containers["orders-api"], module.GetResource<IResourceWithEndpoints>("orders-api").Resource);
     }
 
     [Fact]
@@ -2524,7 +2575,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
                     {
                         ImageTag = "dev"
                     },
-                    container => container.WithHttpEndpoint(targetPort: 8080));
+                    (_, container) => container.WithHttpEndpoint(targetPort: 8080));
         });
     }
 

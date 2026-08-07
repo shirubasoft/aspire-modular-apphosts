@@ -36,7 +36,7 @@ public static partial class AppHostAModule
             module.AddProject(
                     ApiResourceName,
                     Path.Combine(absoluteSourceRoot, "Api", "ModularSample.Api.csproj"))
-                .ConfigureProject(project => project
+                .ConfigureProject((_, project) => project
                     .WithHttpEndpoint(name: "http")
                     .WithHttpHealthCheck("/health"))
                 .ExportAsContainer(
@@ -50,7 +50,7 @@ public static partial class AppHostAModule
                             ModuleContainerExportOptions.ImageReferencePlaceholder,
                             "."
                         ]),
-                    container => container
+                    (_, container) => container
                         .WithHttpEndpoint(targetPort: 8080, name: "http")
                         .WithHttpHealthCheck("/health"));
 

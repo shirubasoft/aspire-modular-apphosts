@@ -129,7 +129,7 @@ public interface IDistributedApplicationModuleResource
     Type ResourceType { get; }
 }
 
-/// <summary>Provides state to a generic resource factory when its module is materialized.</summary>
+/// <summary>Provides state to a resource callback when its module is materialized.</summary>
 public interface IDistributedApplicationModuleResourceContext
 {
     /// <summary>Gets the AppHost builder receiving the resource.</summary>
@@ -144,7 +144,7 @@ public interface IDistributedApplicationModuleResourceContext
     /// <summary>Gets whether the module is being imported rather than added from local source.</summary>
     bool Imported { get; }
 
-    /// <summary>Gets the resolved image for a factory-created container resource, when one was declared.</summary>
+    /// <summary>Gets the resolved image for a container resource, when one is available.</summary>
     ModuleResourceImage? Image => null;
 
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
@@ -195,19 +195,19 @@ public interface IDistributedApplicationModuleProjectBuilder
 
     /// <summary>Applies Aspire project-resource configuration when the project runs directly.</summary>
     IDistributedApplicationModuleProjectBuilder ConfigureProject(
-        Action<IResourceBuilder<ProjectResource>> configureProject);
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ProjectResource>> configureProject);
 
     /// <summary>Exports the project as a container built by the supplied publish command.</summary>
     IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         string imageName,
         string publishCommand,
         IReadOnlyList<string> publishArguments,
-        Action<IResourceBuilder<ContainerResource>>? configureContainer = null);
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null);
 
     /// <summary>Exports the project as a container with explicit publish settings.</summary>
     IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         ModuleContainerExportOptions options,
-        Action<IResourceBuilder<ContainerResource>>? configureContainer = null);
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null);
 }
 
 /// <summary>Controls how a module project is converted into a container resource.</summary>

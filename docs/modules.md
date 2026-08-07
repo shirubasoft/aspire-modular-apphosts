@@ -199,8 +199,11 @@ Repository-backed generic factories run while Aspire constructs the application 
 Use the specialized `AddProject` API when the project must be represented as a portable container image. These project declarations require the exact command that produces their image:
 
 ```csharp
+module.AddContainer("orders-cache", "redis");
 module.AddProject<Projects.Orders_Api>("orders-api")
-    .ConfigureProject(project => project.WithHttpHealthCheck("/health"))
+    .ConfigureProject((context, project) => project
+        .WaitFor(context.GetResource<ContainerResource>("orders-cache"))
+        .WithHttpHealthCheck("/health"))
     .ExportAsContainer(new ModuleContainerExportOptions(
         imageName: "orders-api",
         publishCommand: "dotnet",
@@ -214,7 +217,7 @@ module.AddProject<Projects.Orders_Api>("orders-api")
         ]));
 ```
 
-`ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing `ExportAsContainer` callback applies to its container representation.
+`ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing `ExportAsContainer` callback applies to its container representation. Both callbacks receive the materialization context, so they can call `GetResource<TResource>` for resources declared earlier in the same module. This keeps project and container configuration aligned without mutable variables in the contract.
 
 Contracts distributed as packages should declare the project relative to the module repository so the receiving AppHost does not need the same source-tree layout:
 
@@ -337,7 +340,7 @@ module.AddProject("orders-api", projectPath)
             "dotnet",
             "publish",
             "-t:PublishContainer"),
-        container => container
+        (_, container) => container
             .WithContainerRegistry(registry)
             .WithRemoteImageName("api")
             .WithRemoteImageTag("preview"));

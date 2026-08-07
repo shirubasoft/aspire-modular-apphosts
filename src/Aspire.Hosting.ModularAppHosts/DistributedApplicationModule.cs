@@ -263,7 +263,7 @@ internal sealed class DistributedApplicationModuleProject(
 
     internal string? SourceRepositoryRoot { get; set; } = sourceRepositoryRoot;
 
-    internal Action<IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
+    internal Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ProjectResource>>? ConfigureProject { get; set; }
 
     internal string GetRepositoryRelativeProjectPath()
     {
@@ -285,7 +285,7 @@ internal sealed class DistributedApplicationModuleProject(
 
 internal sealed record ModuleContainerExport(
     ModuleContainerExportOptions Options,
-    Action<IResourceBuilder<ContainerResource>>? ConfigureContainer);
+    Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer);
 
 internal sealed class DistributedApplicationModuleContainer(
     string name,

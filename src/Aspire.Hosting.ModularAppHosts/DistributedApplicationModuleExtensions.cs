@@ -604,7 +604,18 @@ public static partial class DistributedApplicationModuleExtensions
 
         ApplyImageRegistry(container, publishPlan.ImageRegistry);
 
-        export.ConfigureContainer?.Invoke(container);
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            module,
+            resourceName,
+            definitionRepository.RepositoryPath,
+            imported,
+            new ModuleResourceImage(
+                publishPlan.ImageRegistry,
+                publishPlan.ImageName,
+                publishPlan.ImageTag,
+                GetConfiguredValue(projectOptions?.ImageSHA256)));
+        export.ConfigureContainer?.Invoke(context, container);
         ModuleImagePushPipeline.AddPushStep(container);
         ModuleImagePullPipeline.AddPullStep(container);
 
@@ -790,7 +801,13 @@ public static partial class DistributedApplicationModuleExtensions
                 repositoryPath,
                 imported));
 
-        project.ConfigureProject?.Invoke(resource);
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            module,
+            resourceName,
+            repositoryPath,
+            imported);
+        project.ConfigureProject?.Invoke(context, resource);
         registry.TrackResource(resource.Resource);
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }

@@ -98,7 +98,7 @@ public sealed class ModuleImagePushPipelineTests
                     {
                         ImageTag = "local"
                     },
-                    container => container
+                    (_, container) => container
                         .WithContainerRegistry(registry)
                         .WithRemoteImageName("services/orders")
                         .WithRemoteImageTag("preview"));

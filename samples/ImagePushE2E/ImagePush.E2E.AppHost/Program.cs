@@ -57,7 +57,7 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             {
                 ImageTag = ImageTag
             },
-            container => container
+            (_, container) => container
                 .WithContainerRegistry(registry)
                 .WithRemoteImageName("project")
                 .WithRemoteImageTag(ImageTag));
