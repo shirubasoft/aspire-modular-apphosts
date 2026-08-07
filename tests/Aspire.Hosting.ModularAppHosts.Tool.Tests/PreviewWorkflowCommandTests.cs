@@ -182,6 +182,10 @@ public sealed class PreviewWorkflowCommandTests
                 {
                   "name": "preview-producer",
                   "contractPackageId": "{{ContractPackageId}}"
+                },
+                {
+                  "name": "unrelated-module",
+                  "contractPackageId": null
                 }
               ],
               "images": [
@@ -225,6 +229,27 @@ public sealed class PreviewWorkflowCommandTests
                     "repository": null,
                     "revision": null,
                     "step": "build-imported-sidecar"
+                  }
+                },
+                {
+                  "module": "unrelated-module",
+                  "resource": "preview-producer-api",
+                  "effectiveResource": "unrelated-api",
+                  "resourceKind": "container",
+                  "registry": "ghcr.io",
+                  "repository": "example/unrelated",
+                  "tag": "preview",
+                  "digest": null,
+                  "reference": "ghcr.io/example/unrelated:preview",
+                  "pullReference": "ghcr.io/example/unrelated:preview",
+                  "pushReference": "ghcr.io/example/unrelated:preview",
+                  "build": {
+                    "command": "docker",
+                    "arguments": [],
+                    "workingDirectory": "{{directory.Path}}",
+                    "repository": null,
+                    "revision": null,
+                    "step": "build-unrelated-api"
                   }
                 }
               ]
@@ -288,7 +313,7 @@ public sealed class PreviewWorkflowCommandTests
         Assert.Equal(2, aspireArguments.Length);
         Assert.StartsWith("do describe-images ", aspireArguments[0], StringComparison.Ordinal);
         Assert.StartsWith(
-            "do push imported-api imported-sidecar ",
+            "do push resource:imported-api resource:imported-sidecar ",
             aspireArguments[1],
             StringComparison.Ordinal);
         var dockerArguments = await File.ReadAllLinesAsync(dockerLog, cancellationToken);

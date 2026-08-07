@@ -113,6 +113,11 @@ shell or `jq`. Registry and package authentication remain explicit producer-owne
 generated workflow contains no service, registry, feed, or organization-specific credentials. See
 the preview guide for the generator options and hook contract.
 
+Image-only producers that do not own an AppHost can configure a trusted external AppHost repository
+and ref. The workflow acquires it with `gh`, pins the module to its exact commit, and maps each
+descriptor image's build repository to the producer workspace before running one resource-scoped
+push pipeline.
+
 Generate the producer descriptor itself with `preview descriptor generate producer --apphost ...
 --module ...`, and run the same command with `--check` in CI. The command derives publisher kinds,
 image repositories, and the module contract package ID from the effective AppHost model and emits a

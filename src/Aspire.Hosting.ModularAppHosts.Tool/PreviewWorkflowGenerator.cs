@@ -34,6 +34,21 @@ internal static partial class PreviewTool
         var appHostPath = ValidateWorkflowRepositoryPath(
             options.Required("apphost"),
             "apphost");
+        var appHostRepository = options.Optional("apphost-repository") is { } configuredAppHostRepository
+            ? ValidateTargetRepository(configuredAppHostRepository, "apphost-repository")
+            : null;
+        var appHostRef = options.Optional("apphost-ref") is { } configuredAppHostRef
+            ? ValidateSimpleValue(configuredAppHostRef, "apphost-ref")
+            : null;
+        if ((appHostRepository is null) != (appHostRef is null))
+        {
+            throw new PreviewToolException(
+                "--apphost-repository and --apphost-ref must be specified together.");
+        }
+
+        var externalAppHost = appHostRepository is null
+            ? null
+            : new ExternalAppHostWorkflowOptions(appHostRepository, appHostRef!);
         var outputPath = Path.GetFullPath(options.Required("output"));
         var consumerRepository = ValidateTargetRepository(options.Required("repo"));
         var consumerWorkflow = ValidateWorkflow(options.Required("workflow"));
@@ -65,6 +80,8 @@ internal static partial class PreviewTool
             "descriptor",
             "working-directory",
             "apphost",
+            "apphost-repository",
+            "apphost-ref",
             "output",
             "repo",
             "workflow",
@@ -90,6 +107,13 @@ internal static partial class PreviewTool
         var descriptor = await ModulePreviewProducerDescriptor.LoadAsync(
             descriptorAbsolutePath,
             cancellationToken).ConfigureAwait(false);
+        if (externalAppHost is not null && descriptor.Contract is not null)
+        {
+            throw new PreviewToolException(
+                "An external AppHost can currently generate only image-only previews. " +
+                "Remove the descriptor contract or use an AppHost owned by the producer repository.");
+        }
+
         if (descriptor.Contract is null &&
             (packageAuthenticationScript is not null || contractPublishScript is not null))
         {
@@ -107,7 +131,9 @@ internal static partial class PreviewTool
         var workflow = RenderProducerWorkflow(new ProducerWorkflowOptions(
             descriptorPath,
             descriptor.Module,
+            descriptor.Images.ToArray(),
             appHostPath,
+            externalAppHost,
             consumerRepository,
             consumerWorkflow,
             consumerRef,
@@ -270,6 +296,26 @@ internal static partial class PreviewTool
         builder.AppendLine("      NUGET_PACKAGES: ${{ runner.temp }}/nuget-packages");
         builder.AppendLine("      Aspire__ModularAppHosts__PublishImages: 'true'");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      GH_TOKEN: ${{{{ secrets.{options.GitHubTokenSecret} }}}}");
+        if (options.ExternalAppHost is not null)
+        {
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      MODULE_NAME: {YamlString(options.Module)}");
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      APPHOST_REPOSITORY: {YamlString(options.ExternalAppHost.Repository)}");
+            builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      APPHOST_REF: {YamlString(options.ExternalAppHost.Ref)}");
+            builder.AppendLine("      APPHOST_CHECKOUT: ${{ runner.temp }}/module-preview-${{ github.run_id }}-${{ github.run_attempt }}/apphost");
+            foreach (var image in options.Images
+                .OrderBy(image => image.ResourceKind, StringComparer.Ordinal)
+                .ThenBy(image => image.Resource, StringComparer.Ordinal))
+            {
+                var buildRepositoryKey = GetImageConfigurationKey(
+                    options.Module,
+                    image,
+                    "BuildRepository");
+                builder.AppendLine(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"      {buildRepositoryKey}: ${{{{ github.workspace }}}}");
+            }
+        }
+
         if (options.HasContract)
         {
             builder.AppendLine("      CONTRACT_VERSION: ${{ inputs.contract-version }}");
@@ -315,7 +361,24 @@ internal static partial class PreviewTool
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            --module {ShellWord(options.Module)} \\");
         builder.AppendLine("            --output \"$PREVIEW_ARTIFACTS_DIR/producer.json\" \\");
         builder.AppendLine("            --working-directory \"$GITHUB_WORKSPACE\"");
+        if (options.ExternalAppHost is not null)
+        {
+            builder.AppendLine("          producer_commit=$(git -C \"$GITHUB_WORKSPACE\" rev-parse HEAD)");
+            foreach (var image in options.Images
+                .OrderBy(image => image.ResourceKind, StringComparer.Ordinal)
+                .ThenBy(image => image.Resource, StringComparer.Ordinal))
+            {
+                var buildRevisionKey = GetImageConfigurationKey(
+                    options.Module,
+                    image,
+                    "BuildRepositoryRevision");
+                builder.AppendLine(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"          printf '%s=%s\\n' {ShellWord(buildRevisionKey)} \"$producer_commit\" >> \"$GITHUB_ENV\"");
+            }
+        }
 
+        AppendExternalAppHostCheckout(builder, options);
         AppendScriptStep(builder, "Authenticate package feed", options.PackageAuthenticationScript);
         if (options.ContractPublishScript is not null)
         {
@@ -338,9 +401,16 @@ internal static partial class PreviewTool
         builder.AppendLine("            --descriptor \"$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR\"");
         builder.AppendLine("            --output \"$PREVIEW_ARTIFACTS_DIR/module-preview.json\"");
         builder.AppendLine("            --working-directory \"$GITHUB_WORKSPACE\"");
-        builder.AppendLine("            --apphost \"$GITHUB_WORKSPACE/$APPHOST\"");
+        builder.AppendLine(options.ExternalAppHost is null
+            ? "            --apphost \"$GITHUB_WORKSPACE/$APPHOST\""
+            : "            --apphost \"$APPHOST_CHECKOUT/$APPHOST\"");
         builder.AppendLine("            --artifacts-directory \"$PREVIEW_ARTIFACTS_DIR/images\"");
         builder.AppendLine("            --aspire-executable \"$ASPIRE_TOOL_DIR/aspire\"");
+        if (options.ExternalAppHost is not null)
+        {
+            builder.AppendLine("            --pin \"$MODULE_NAME=https://github.com/$APPHOST_REPOSITORY.git@$APPHOST_COMMIT\"");
+        }
+
         if (options.HasContract)
         {
             builder.AppendLine("            --contract-version \"$CONTRACT_VERSION\"");
@@ -478,6 +548,51 @@ internal static partial class PreviewTool
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          bash \"$GITHUB_WORKSPACE/{ShellDoubleQuoted(repositoryPath)}\"");
     }
 
+    private static void AppendExternalAppHostCheckout(
+        StringBuilder builder,
+        ProducerWorkflowOptions options)
+    {
+        if (options.ExternalAppHost is null)
+        {
+            return;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("      - name: Check out trusted AppHost");
+        builder.AppendLine("        shell: bash");
+        builder.AppendLine("        run: |");
+        builder.AppendLine("          set -euo pipefail");
+        builder.AppendLine("          if [[ -e \"$APPHOST_CHECKOUT\" ]]; then");
+        builder.AppendLine("            echo \"External AppHost checkout path already exists: $APPHOST_CHECKOUT\" >&2");
+        builder.AppendLine("            exit 1");
+        builder.AppendLine("          fi");
+        builder.AppendLine("          gh repo clone \"$APPHOST_REPOSITORY\" \"$APPHOST_CHECKOUT\" -- --no-checkout");
+        builder.AppendLine("          remote_ref=\"refs/remotes/origin/$APPHOST_REF\"");
+        builder.AppendLine("          if [[ \"$APPHOST_REF\" == refs/heads/* ]]; then");
+        builder.AppendLine("            remote_ref=\"refs/remotes/origin/${APPHOST_REF#refs/heads/}\"");
+        builder.AppendLine("          fi");
+        builder.AppendLine("          if apphost_commit=$(git -C \"$APPHOST_CHECKOUT\" rev-parse --verify \"$remote_ref^{commit}\" 2>/dev/null); then");
+        builder.AppendLine("            :");
+        builder.AppendLine("          elif apphost_commit=$(git -C \"$APPHOST_CHECKOUT\" rev-parse --verify \"$APPHOST_REF^{commit}\" 2>/dev/null); then");
+        builder.AppendLine("            :");
+        builder.AppendLine("          else");
+        builder.AppendLine("            echo \"AppHost ref '$APPHOST_REF' does not resolve in '$APPHOST_REPOSITORY'.\" >&2");
+        builder.AppendLine("            exit 1");
+        builder.AppendLine("          fi");
+        builder.AppendLine("          git -C \"$APPHOST_CHECKOUT\" checkout --detach \"$apphost_commit\"");
+        builder.AppendLine("          test -f \"$APPHOST_CHECKOUT/$APPHOST\"");
+        builder.AppendLine("          printf 'APPHOST_COMMIT=%s\\n' \"$apphost_commit\" >> \"$GITHUB_ENV\"");
+    }
+
+    private static string GetImageConfigurationKey(
+        string module,
+        ModulePreviewProducerImageDescriptor image,
+        string property)
+    {
+        var resourceGroup = image.ResourceKind == "project" ? "Projects" : "Containers";
+        return $"Aspire__ModularAppHosts__Modules__{module}__{resourceGroup}__{image.Resource}__{property}";
+    }
+
     private static string YamlString(string value) => $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
 
     private static string ShellDoubleQuoted(string value) =>
@@ -491,7 +606,9 @@ internal static partial class PreviewTool
     private sealed record ProducerWorkflowOptions(
         string DescriptorPath,
         string Module,
+        IReadOnlyList<ModulePreviewProducerImageDescriptor> Images,
         string AppHostPath,
+        ExternalAppHostWorkflowOptions? ExternalAppHost,
         string ConsumerRepository,
         string ConsumerWorkflow,
         string ConsumerRef,
@@ -505,4 +622,6 @@ internal static partial class PreviewTool
         string? DescriptorContractVersion,
         bool HasContract,
         IReadOnlyDictionary<string, string> SecretEnvironment);
+
+    private sealed record ExternalAppHostWorkflowOptions(string Repository, string Ref);
 }

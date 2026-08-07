@@ -142,6 +142,50 @@ generator reads the descriptor without changing that checked-in path, which is u
 stage repository contents elsewhere. The output is deterministic for the same descriptor and
 options, so commit it and review changes like other CI code.
 
+#### Producer without an AppHost
+
+An image producer whose module is declared by a trusted consumer-owned AppHost can point workflow
+generation at that external repository:
+
+```bash
+dotnet modular-apphosts preview workflow generate producer \
+  --descriptor module-preview.producer.json \
+  --apphost src/Consumer.AppHost/Consumer.AppHost.csproj \
+  --apphost-repository example/consumer-application \
+  --apphost-ref main \
+  --output .github/workflows/module-preview.yml \
+  --repo example/consumer-tests \
+  --workflow e2e.yml \
+  --ref main \
+  --aspire-version 13.4.6 \
+  --tool-version 5.1.0 \
+  --github-token-secret PREVIEW_AUTOMATION_TOKEN \
+  --registry-auth-script .github/scripts/login-preview-registries.sh
+```
+
+`--apphost` is repository-relative inside the external checkout in this mode. The generated workflow
+clones `--apphost-repository` with `gh` under `${{ runner.temp }}`, resolves `--apphost-ref`, and
+detaches the managed checkout at the resulting exact commit. The token named by
+`--github-token-secret` authenticates external AppHost acquisition through `gh`.
+
+For every descriptor image, the workflow sets the standard
+`Aspire:ModularAppHosts:Modules:<module>:(Containers|Projects):<resource>:BuildRepository`
+configuration key to `${{ github.workspace }}`. The consumer-owned AppHost therefore contributes the
+reviewed image identity and build command while a clean managed checkout at the verified producer
+commit supplies its build inputs. The generated workflow overrides both `BuildRepository` and
+`BuildRepositoryRevision`, so a revision declared by the external module cannot replace the
+producer commit. `preview produce` selects only the descriptor resources in its single aggregate
+`aspire do push resource:<name>...` run, and pins the descriptor module to the external AppHost's
+repository and exact checked-out commit.
+
+The external AppHost executes inside the producer workflow and can observe credentials made
+available to that job. Point this mode only at a reviewed repository and ref that the producer trusts.
+
+External AppHost mode currently requires an image-only descriptor. A producer cannot safely attest
+a contract whose module source identity is owned by the external checkout, so generation rejects
+descriptors that contain `contract`. See the runnable
+[`ExternalAppHostWorkflow`](../samples/ExternalAppHostWorkflow/README.md) sample.
+
 Generation refuses to replace an existing file; pass `--force` only when intentionally regenerating
 the checked-in workflow.
 

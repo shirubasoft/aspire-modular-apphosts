@@ -118,6 +118,13 @@ authorized producer and generates a producer GitHub Actions workflow from a desc
 image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
 strict validation without dispatching a workflow or contacting an artifact service.
 
+## External AppHost workflow sample
+
+[`ExternalAppHostWorkflow`](ExternalAppHostWorkflow/README.md) validates an image-only producer that
+owns build inputs but no AppHost. Its consumer-owned AppHost is acquired at a trusted ref, pinned by
+exact commit, and configured to build only descriptor-selected resources from the producer checkout.
+CI executes the real image build and push against a temporary registry.
+
 ## Contract dependency preview sample
 
 [`ContractDependencyPreview`](ContractDependencyPreview/README.md) restores a producer contract from

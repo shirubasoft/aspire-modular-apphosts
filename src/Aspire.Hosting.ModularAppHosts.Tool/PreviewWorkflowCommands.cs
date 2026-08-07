@@ -268,7 +268,7 @@ internal static partial class PreviewTool
         {
             Directory.CreateDirectory(pushDirectory);
             var pushSelectors = selectedImages
-                .Select(image => image.EffectiveResource)
+                .Select(image => $"resource:{image.EffectiveResource}")
                 .ToArray();
             var pushArguments = new List<string> { "do", "push" };
             pushArguments.AddRange(pushSelectors);

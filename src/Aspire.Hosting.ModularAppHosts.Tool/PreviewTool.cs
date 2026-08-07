@@ -39,6 +39,7 @@ internal static partial class PreviewTool
               [--input <name>=<value>]... [--wait] [--github-output <path>]
           dotnet modular-apphosts preview workflow generate producer --descriptor <path>
               --apphost <path> --output <path> --repo <owner/repo>
+              [--apphost-repository <owner/repo> --apphost-ref <trusted-ref>]
               --workflow <file-or-id> --ref <trusted-ref>
               --aspire-version <exact-version> --tool-version <exact-version>
               --github-token-secret <name>
@@ -380,7 +381,7 @@ internal static partial class PreviewTool
     private static string EnsureGitSuffix(string path) =>
         path.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? path : $"{path}.git";
 
-    private static string ValidateTargetRepository(string value)
+    private static string ValidateTargetRepository(string value, string option = "repo")
     {
         var segments = value.Split('/');
         if (segments.Length != 2 || segments.Any(segment =>
@@ -388,7 +389,7 @@ internal static partial class PreviewTool
                 segment is "." or ".." ||
                 segment.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))))
         {
-            throw new PreviewToolException("--repo must use the GitHub owner/repository form.");
+            throw new PreviewToolException($"--{option} must use the GitHub owner/repository form.");
         }
 
         return value;
