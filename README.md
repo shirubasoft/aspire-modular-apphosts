@@ -105,6 +105,13 @@ dotnet modular-apphosts preview trigger \
   --github-output "$GITHUB_OUTPUT"
 ```
 
+For CI, `preview workflow generate producer` writes a reviewable GitHub Actions workflow that uses
+an attached checkout, isolated tool installs, `aspire do describe-images` plus `aspire do push`,
+registry-reported digests, the exact contract version, and `preview trigger --wait`. Registry and
+package authentication remain explicit producer-owned script hooks; the generated workflow contains
+no service, registry, feed, or organization-specific credentials. See the preview guide for the
+generator options and hook contract.
+
 The request carries full commits and OCI digests rather than mutable branch names and image tags.
 The producer descriptor may omit the contract for an image-only preview, or omit only its version
 and receive the exact CI-computed version through `--contract-version`. The consumer policy decides

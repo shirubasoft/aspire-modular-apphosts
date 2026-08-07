@@ -67,6 +67,73 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
 `resourceKind` is `project` when the module contract declares `AddProject(...).ExportAsContainer(...)`
 and `container` when it declares `AddContainer(...)`.
 
+### Generate the producer workflow
+
+The tool can generate the producer-owned GitHub Actions workflow that builds and pushes the images,
+turns their registry digests into a preview request, and waits for the trusted consumer workflow:
+
+```bash
+dotnet modular-apphosts preview workflow generate producer \
+  --descriptor module-preview.producer.json \
+  --apphost src/Producer.AppHost/Producer.AppHost.csproj \
+  --output .github/workflows/module-preview.yml \
+  --repo example/consumer-tests \
+  --workflow module-preview-e2e.yml \
+  --ref main \
+  --aspire-version 13.4.6 \
+  --tool-version 4.4.0 \
+  --github-token-secret PREVIEW_AUTOMATION_TOKEN \
+  --registry-auth-script .github/scripts/login-preview-registries.sh \
+  --package-auth-script .github/scripts/login-package-feed.sh \
+  --contract-publish-script .github/scripts/publish-preview-contract.sh \
+  --secret REGISTRY_TOKEN=PREVIEW_REGISTRY_TOKEN \
+  --secret PACKAGE_TOKEN=PREVIEW_PACKAGE_TOKEN
+```
+
+All paths embedded in the workflow are repository-relative. `--working-directory` changes where the
+generator reads the descriptor without changing that checked-in path, which is useful to tools that
+stage repository contents elsewhere. The output is deterministic for the same descriptor and
+options, so commit it and review changes like other CI code.
+
+Generation refuses to replace an existing file; pass `--force` only when intentionally regenerating
+the checked-in workflow.
+
+The generated workflow deliberately keeps authentication in producer-owned scripts. Secret
+mappings have the form `<environment-name>=<GitHub-secret-name>` and are declared for
+`workflow_call` as well as read during manual dispatch. `--github-token-secret` identifies the token
+used by `gh` to dispatch and watch the consumer workflow; a normal repository `GITHUB_TOKEN`
+generally cannot dispatch a different repository. When the configured registry explicitly accepts
+anonymous writes, replace `--registry-auth-script` with `--anonymous-registry`. Public image reads
+alone are not sufficient because this workflow pushes. Omit the package or publish script only when
+the feed is public/already authenticated or the exact contract package has already been published.
+Scripts receive the mapped secret environment variables plus `PREVIEW_ARTIFACTS_DIR`. Contract
+scripts additionally receive `CONTRACT_VERSION`, and the publish script receives the same exact
+version as its first argument.
+
+At run time the workflow:
+
+1. Checks out an explicit `source-ref` branch (or the current branch name), with full history, then
+   verifies that `HEAD` is its pushed `origin` tip before publishing anything. Tags and commit IDs
+   are rejected because `preview produce` requires an attached, pushed branch.
+2. Writes every generated manifest and tool configuration below `${{ runner.temp }}`, keeping the
+   producer worktree clean.
+3. Installs Aspire CLI and Modular AppHosts into separate tool paths using a NuGet.org-only
+   configuration and an isolated package cache. It does not use a multi-tool manifest.
+4. Runs `aspire do describe-images`, selects the descriptor-owned effective resources, then runs
+   `aspire do push`. The push pipeline builds each declared module image before pushing it.
+5. Reads `module-images.json`, requires one build publisher and push target for every descriptor
+   image, asks the registry for each pushed manifest digest, and derives the repository from the
+   effective `pushReference` (including registry mappings). It passes that pushed repository and
+   immutable digest to `preview produce` together with the exact contract version.
+6. Runs `preview trigger --wait --github-output "$GITHUB_OUTPUT"`, exposes the consumer run ID and
+   URL as reusable-workflow outputs, links the consumer run in the job summary, and uploads the
+   generated preview documents for diagnosis.
+
+The authentication and contract publishing scripts are intentionally application-specific. For
+example, the registry script may use `docker login`, while the contract script may pack to
+`$PREVIEW_ARTIFACTS_DIR` and publish to a private feed. The generator does not put registry hosts,
+package feed URLs, credentials, or organization-specific actions into the workflow.
+
 Build and push images in Repo C. Capture the registry-reported digest, not a tag. If the origin
 workflow already built the image, pass that digest directly to the tool; Repo D does not rebuild it:
 

@@ -34,6 +34,15 @@ internal static partial class PreviewTool
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]... [--wait] [--github-output <path>]
+          dotnet modular-apphosts preview workflow generate producer --descriptor <path>
+              --apphost <path> --output <path> --repo <owner/repo>
+              --workflow <file-or-id> --ref <trusted-ref>
+              --aspire-version <exact-version> --tool-version <exact-version>
+              --github-token-secret <name>
+              (--registry-auth-script <path> | --anonymous-registry)
+              [--package-auth-script <path>] [--contract-publish-script <path>]
+              [--secret <environment-name>=<secret-name>]...
+              [--working-directory <path>] [--force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         --dependency is accepted as an alias for --pin.
@@ -55,7 +64,7 @@ internal static partial class PreviewTool
             {
                 throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', or 'preview trigger' command.");
+                    "'preview materialize', 'preview trigger', or 'preview workflow' command.");
             }
 
             return arguments[1] switch
@@ -65,9 +74,10 @@ internal static partial class PreviewTool
                 "verify" => await VerifyAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "materialize" => await MaterializeAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "trigger" => await TriggerAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "workflow" => await WorkflowAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 _ => throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', or 'preview trigger' command.")
+                    "'preview materialize', 'preview trigger', or 'preview workflow' command.")
             };
         }
         catch (Exception exception) when (
