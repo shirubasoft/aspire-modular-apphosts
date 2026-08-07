@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Aspire.Hosting.ModularAppHosts;
+using NuGet.Versioning;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
@@ -112,6 +113,10 @@ internal static partial class PreviewTool
                 PackageId = descriptor.Contract.PackageId,
                 Version = contractVersion
             });
+            foreach (var dependency in descriptor.Contract.Dependencies)
+            {
+                manifest.Contracts[^1].Dependencies.Add(CopyContractDependency(dependency));
+            }
         }
         else if (options.Optional("contract-version") is not null)
         {
@@ -497,6 +502,10 @@ internal static partial class PreviewTool
                     commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
+            VerifyPackageContractDependencies(
+                package.Path,
+                contract.Module,
+                contract.Dependencies);
             resolution.Contracts.Add(new ModulePreviewResolvedContract
             {
                 Module = contract.Module,
@@ -506,6 +515,10 @@ internal static partial class PreviewTool
                 Source = package.Source,
                 PackagePath = package.Path
             });
+            foreach (var dependency in contract.Dependencies)
+            {
+                resolution.Contracts[^1].Dependencies.Add(CopyContractDependency(dependency));
+            }
         }
 
         foreach (var image in manifest.Images)
@@ -781,6 +794,12 @@ internal static partial class PreviewTool
         var packagesDirectory = Path.Combine(resolutionDirectory, "packages");
         Directory.CreateDirectory(resolutionDirectory);
         var projectPath = Path.Combine(resolutionDirectory, "ContractResolver.csproj");
+        var lockedDependencyReferences = string.Join(
+            Environment.NewLine,
+            contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase)
+                .Select(dependency =>
+                    $"    <PackageReference Include=\"{dependency.PackageId}\" Version=\"[{dependency.Version}]\" />"));
         var project = $$"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
@@ -788,6 +807,7 @@ internal static partial class PreviewTool
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="{{contract.PackageId}}" Version="[{{contract.Version}}]" />
+            {{lockedDependencyReferences}}
               </ItemGroup>
             </Project>
             """;
@@ -985,6 +1005,12 @@ internal static partial class PreviewTool
             $"restore contract '{contract.PackageId}'",
             commandTimeout,
             cancellationToken).ConfigureAwait(false);
+        await VerifyRestoredContractDependenciesAsync(
+            projectPath,
+            contract.Dependencies,
+            dotnetExecutable,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
 
         var packArguments = new List<string>
         {
@@ -1046,10 +1072,151 @@ internal static partial class PreviewTool
             return string.Equals(actualId, packageId, StringComparison.Ordinal) &&
                 string.Equals(actualVersion, version, StringComparison.OrdinalIgnoreCase);
         }
-        catch (Exception exception) when (exception is InvalidDataException or XmlException)
+        catch (Exception exception) when (exception is InvalidDataException or XmlException or InvalidOperationException)
         {
             return false;
         }
+    }
+
+    private static void VerifyPackageContractDependencies(
+        string packagePath,
+        string module,
+        IList<ModulePreviewContractDependency> dependencies)
+    {
+        if (dependencies.Count == 0)
+        {
+            return;
+        }
+
+        List<NuspecDependencyConstraint> constraints;
+        try
+        {
+            using var archive = ZipFile.OpenRead(packagePath);
+            var nuspecs = archive.Entries
+                .Where(entry => entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (nuspecs.Length != 1)
+            {
+                throw new PreviewToolException(
+                    $"Contract package for module '{module}' must contain exactly one nuspec.");
+            }
+
+            using var stream = nuspecs[0].Open();
+            var document = XDocument.Load(stream, LoadOptions.None);
+            var metadata = document.Root?.Elements()
+                .SingleOrDefault(element => element.Name.LocalName == "metadata")
+                ?? throw new PreviewToolException(
+                    $"Contract package for module '{module}' has no nuspec metadata.");
+            constraints = ReadNuspecDependencyConstraints(metadata);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or XmlException or InvalidOperationException)
+        {
+            throw new PreviewToolException(
+                $"Contract package for module '{module}' has an invalid nuspec.",
+                exception);
+        }
+
+        foreach (var dependency in dependencies.OrderBy(
+                     dependency => dependency.PackageId,
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            var matches = constraints
+                .Where(constraint => string.Equals(
+                    constraint.PackageId,
+                    dependency.PackageId,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(constraint => constraint.Framework, StringComparer.Ordinal)
+                .ThenBy(constraint => constraint.Range, StringComparer.Ordinal)
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new PreviewToolException(
+                    $"Contract package for module '{module}' does not declare attested direct dependency " +
+                    $"'{dependency.PackageId}' version '{dependency.Version}' in its nuspec.");
+            }
+
+            foreach (var constraint in matches)
+            {
+                if (!NuGetVersionRangePinsExact(constraint.Range, dependency.Version, out var error))
+                {
+                    throw new PreviewToolException(
+                        $"Contract package for module '{module}' declares dependency '{dependency.PackageId}' " +
+                        $"range '{constraint.Range}' for framework '{constraint.Framework}', which does not pin " +
+                        $"the attested exact version '{dependency.Version}'.{error}");
+                }
+            }
+        }
+    }
+
+    private static List<NuspecDependencyConstraint> ReadNuspecDependencyConstraints(
+        XElement metadata)
+    {
+        var dependencies = metadata.Elements()
+            .SingleOrDefault(element => element.Name.LocalName == "dependencies");
+        if (dependencies is null)
+        {
+            return [];
+        }
+
+        var constraints = new List<NuspecDependencyConstraint>();
+        AddDependencyConstraints(constraints, dependencies, "all");
+        foreach (var group in dependencies.Elements()
+                     .Where(element => element.Name.LocalName == "group")
+                     .OrderBy(
+                         element => (string?)element.Attribute("targetFramework") ?? string.Empty,
+                         StringComparer.Ordinal))
+        {
+            AddDependencyConstraints(
+                constraints,
+                group,
+                (string?)group.Attribute("targetFramework") ?? "unspecified");
+        }
+
+        return constraints;
+    }
+
+    private static void AddDependencyConstraints(
+        ICollection<NuspecDependencyConstraint> constraints,
+        XElement parent,
+        string framework)
+    {
+        foreach (var dependency in parent.Elements()
+                     .Where(element => element.Name.LocalName == "dependency")
+                     .OrderBy(element => (string?)element.Attribute("id"), StringComparer.OrdinalIgnoreCase))
+        {
+            var packageId = (string?)dependency.Attribute("id");
+            var range = (string?)dependency.Attribute("version");
+            if (!string.IsNullOrWhiteSpace(packageId))
+            {
+                constraints.Add(new NuspecDependencyConstraint(
+                    packageId,
+                    string.IsNullOrWhiteSpace(range) ? "(,)" : range,
+                    framework));
+            }
+        }
+    }
+
+    private static bool NuGetVersionRangePinsExact(
+        string range,
+        string exactVersion,
+        out string error)
+    {
+        if (!NuGetVersion.TryParse(exactVersion, out var version))
+        {
+            error = $" Exact version '{exactVersion}' is not a valid NuGet version.";
+            return false;
+        }
+        if (!VersionRange.TryParse(range, out var versionRange))
+        {
+            error = $" Dependency range '{range}' is not a valid NuGet version range.";
+            return false;
+        }
+
+        error = string.Empty;
+        return versionRange.IsMinInclusive &&
+            versionRange.IsMaxInclusive &&
+            versionRange.MinVersion == version &&
+            versionRange.MaxVersion == version;
     }
 
     private static async Task<string> ComputeFileSha256Async(
@@ -1140,6 +1307,11 @@ internal static partial class PreviewTool
 
     private static void SortResolution(ModulePreviewResolution resolution)
     {
+        foreach (var contract in resolution.Contracts)
+        {
+            ReplaceContents(contract.Dependencies, contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase));
+        }
         ReplaceContents(resolution.Modules, resolution.Modules
             .OrderBy(module => module.Name, StringComparer.OrdinalIgnoreCase));
         ReplaceContents(resolution.Contracts, resolution.Contracts
@@ -1212,6 +1384,11 @@ internal static partial class PreviewTool
 
     private static void SortManifest(ModulePreviewManifest manifest)
     {
+        foreach (var contract in manifest.Contracts)
+        {
+            ReplaceContents(contract.Dependencies, contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase));
+        }
         ReplaceContents(manifest.Modules, manifest.Modules
             .OrderBy(module => module.Name, StringComparer.OrdinalIgnoreCase));
         ReplaceContents(manifest.Contracts, manifest.Contracts
@@ -1234,4 +1411,7 @@ internal static partial class PreviewTool
     private sealed record ProducedImage(string Resource, string Repository, string Sha256);
 
     private sealed record MaterializedContractPackage(string Path, string Sha256, string? Source);
+
+    private sealed record NuspecDependencyConstraint(string PackageId, string Range, string Framework);
+
 }

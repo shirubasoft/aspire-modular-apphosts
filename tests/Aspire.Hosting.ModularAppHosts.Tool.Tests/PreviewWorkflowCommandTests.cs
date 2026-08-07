@@ -15,6 +15,8 @@ public sealed class PreviewWorkflowCommandTests
     private const string ExternalModuleRepository = "https://github.com/shirubasoft/module-owner.git";
     private const string ContractPackageId = "Shirubasoft.PreviewProducer.Contract";
     private const string ContractVersion = "2.0.0-preview.1";
+    private const string ContractDependencyPackageId = "Shirubasoft.Shared.Contract";
+    private const string ContractDependencyVersion = "1.7.3";
     private const string ApiImageRepository = "ghcr.io/shirubasoft/preview-producer/api";
     private const string SidecarImageRepository = "docker.io/library/nginx";
     private const string ApiImageDigest =
@@ -58,6 +60,9 @@ public sealed class PreviewWorkflowCommandTests
         Assert.Equal("preview-producer", contract.Module);
         Assert.Equal(ContractPackageId, contract.PackageId);
         Assert.Equal(ContractVersion, contract.Version);
+        var dependency = Assert.Single(contract.Dependencies);
+        Assert.Equal(ContractDependencyPackageId, dependency.PackageId);
+        Assert.Equal(ContractDependencyVersion, dependency.Version);
 
         Assert.Collection(
             manifest.Images,
@@ -334,6 +339,16 @@ public sealed class PreviewWorkflowCommandTests
             #!/usr/bin/env bash
             set -euo pipefail
             printf '%s\n' "$*" >> '{{dotnetLog}}'
+            if [[ "$1" == "restore" ]]; then
+              project="$2"
+              assets="$(dirname "$project")/obj/project.assets.json"
+              mkdir -p "$(dirname "$assets")"
+              printf '{ "project": { "restore": { "projectPath": "%s" }, "frameworks": { "net10.0": { "dependencies": { "{{ContractDependencyPackageId}}": { "target": "Package", "version": "[{{ContractDependencyVersion}}]" } } } } }, "libraries": { "{{ContractDependencyPackageId}}/{{ContractDependencyVersion}}": { "type": "package" } } }\n' \
+                "$project" > "$assets"
+            fi
+            if [[ "$1" == "msbuild" ]]; then
+              printf '%s/obj/project.assets.json\n' "$(dirname "$2")"
+            fi
             if [[ "$1" == "pack" ]]; then
               output=''
               while (( $# > 0 )); do
@@ -402,6 +417,9 @@ public sealed class PreviewWorkflowCommandTests
         Assert.Equal(ContractVersion, resolvedContract.Version);
         Assert.Equal(expectedPackageSha256, resolvedContract.Sha256);
         Assert.Equal(Path.GetFullPath(packagePath), resolvedContract.PackagePath);
+        Assert.Equal(
+            ContractDependencyVersion,
+            Assert.Single(resolvedContract.Dependencies).Version);
         Assert.Equal(2, resolution.Images.Count);
 
         var gitArguments = await File.ReadAllLinesAsync(
@@ -425,6 +443,11 @@ public sealed class PreviewWorkflowCommandTests
             {
                 Assert.StartsWith("restore ", restore, StringComparison.Ordinal);
                 Assert.Contains("-p:ModularAppHostsVersion=1.2.3", restore, StringComparison.Ordinal);
+            },
+            msbuild =>
+            {
+                Assert.StartsWith("msbuild ", msbuild, StringComparison.Ordinal);
+                Assert.Contains("-getProperty:ProjectAssetsFile", msbuild, StringComparison.Ordinal);
             },
             pack =>
             {
@@ -451,6 +474,32 @@ public sealed class PreviewWorkflowCommandTests
                 $"PreviewContractVersion={ContractVersion}"
             ],
             environment);
+
+        await CreateContractPackageAsync(
+            packageTemplate,
+            cancellationToken,
+            dependencyRange: "[1.0.0,2.0.0)");
+        var rejectedResolution = Path.Combine(directory.Path, "rejected-preview.json");
+        var rejectedExitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "materialize",
+                "--manifest", manifestPath,
+                "--policy", policyPath,
+                "--work-directory", Path.Combine(directory.Path, "rejected-materialization-work"),
+                "--package-feed", Path.Combine(directory.Path, "rejected-preview-feed"),
+                "--resolution", rejectedResolution,
+                "--consumer-repository", "https://github.com/shirubasoft/preview-consumer.git",
+                "--consumer-commit", BaseCommit,
+                "--git-executable", git,
+                "--gh-executable", githubCli,
+                "--dotnet-executable", dotnet,
+                "--docker-executable", docker,
+                "--property", "ModularAppHostsVersion=1.2.3"
+            ],
+            cancellationToken);
+
+        Assert.Equal(1, rejectedExitCode);
+        Assert.False(File.Exists(rejectedResolution));
     }
 
     [Fact]
@@ -763,6 +812,10 @@ public sealed class PreviewWorkflowCommandTests
             $"Version=\"[{ContractVersion}]\"",
             await File.ReadAllTextAsync(resolverProject, cancellationToken),
             StringComparison.Ordinal);
+        Assert.Contains(
+            $"Include=\"{ContractDependencyPackageId}\" Version=\"[{ContractDependencyVersion}]\"",
+            await File.ReadAllTextAsync(resolverProject, cancellationToken),
+            StringComparison.Ordinal);
     }
 
     private static async Task<string> WriteProducerDescriptorAsync(
@@ -774,11 +827,17 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "contract": {
                 "packageId": "{{ContractPackageId}}",
-                "version": "{{ContractVersion}}"
+                "version": "{{ContractVersion}}",
+                "dependencies": [
+                  {
+                    "packageId": "{{ContractDependencyPackageId}}",
+                    "version": "{{ContractDependencyVersion}}"
+                  }
+                ]
               },
               "images": [
                 {
@@ -819,7 +878,13 @@ public sealed class PreviewWorkflowCommandTests
         var contract = includeContract
             ? $$"""
                 "contract": {
-                  "packageId": "{{ContractPackageId}}"
+                  "packageId": "{{ContractPackageId}}",
+                  "dependencies": [
+                    {
+                      "packageId": "{{ContractDependencyPackageId}}",
+                      "version": "{{ContractDependencyVersion}}"
+                    }
+                  ]
                 },
                 """
             : string.Empty;
@@ -827,7 +892,7 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               {{contract}}
               "images": [
@@ -859,7 +924,7 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -871,7 +936,13 @@ public sealed class PreviewWorkflowCommandTests
                       "enabled": true,
                       "project": "src/PreviewProducer.Contract/PreviewProducer.Contract.csproj"
                     },
-                    "allowedPackProperties": ["ModularAppHostsVersion"]
+                    "allowedPackProperties": ["ModularAppHostsVersion"],
+                    "dependencies": [
+                      {
+                        "packageId": "{{ContractDependencyPackageId}}",
+                        "version": "{{ContractDependencyVersion}}"
+                      }
+                    ]
                   },
                   "images": [
                     {
@@ -920,7 +991,7 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -934,7 +1005,13 @@ public sealed class PreviewWorkflowCommandTests
                     },
                     "sourceFallback": {
                       "enabled": false
-                    }
+                    },
+                    "dependencies": [
+                      {
+                        "packageId": "{{ContractDependencyPackageId}}",
+                        "version": "{{ContractDependencyVersion}}"
+                      }
+                    ]
                   },
                   "images": [
                     {
@@ -1004,11 +1081,12 @@ public sealed class PreviewWorkflowCommandTests
 
     private static async Task CreateContractPackageAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string dependencyRange = "[1.7.3]")
     {
         var stream = new FileStream(
             path,
-            FileMode.CreateNew,
+            FileMode.Create,
             FileAccess.Write,
             FileShare.None,
             bufferSize: 4096,
@@ -1019,7 +1097,11 @@ public sealed class PreviewWorkflowCommandTests
             var entry = archive.CreateEntry($"{ContractPackageId}.nuspec");
             await using var entryStream = entry.Open();
             var nuspec = Encoding.UTF8.GetBytes(
-                $"<package><metadata><id>{ContractPackageId}</id><version>{ContractVersion}</version></metadata></package>");
+                $"<package><metadata><id>{ContractPackageId}</id><version>{ContractVersion}</version>" +
+                $"<dependencies><group targetFramework=\"net8.0\"><dependency id=\"{ContractDependencyPackageId}\" " +
+                $"version=\"[{ContractDependencyVersion}]\" /></group><group targetFramework=\"net10.0\">" +
+                $"<dependency id=\"{ContractDependencyPackageId}\" version=\"{dependencyRange}\" />" +
+                "</group></dependencies></metadata></package>");
             await entryStream.WriteAsync(nuspec, cancellationToken);
         }
         finally

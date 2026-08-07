@@ -14,7 +14,7 @@
       "const": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json"
     },
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "module": {
       "$ref": "#/$defs/name"
@@ -31,6 +31,12 @@
         },
         "version": {
           "$ref": "#/$defs/packageVersion"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contractDependency"
+          }
         }
       }
     },
@@ -86,6 +92,22 @@
       "minLength": 1,
       "maxLength": 256,
       "pattern": "^[A-Za-z0-9.+-]+$"
+    },
+    "contractDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "packageId",
+        "version"
+      ],
+      "properties": {
+        "packageId": {
+          "$ref": "#/$defs/packageId"
+        },
+        "version": {
+          "$ref": "#/$defs/packageVersion"
+        }
+      }
     }
   }
 }

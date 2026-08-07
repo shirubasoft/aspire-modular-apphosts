@@ -49,10 +49,16 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "module": "module-c",
   "contract": {
-    "packageId": "Acme.ModuleC.Contract"
+    "packageId": "Acme.ModuleC.Contract",
+    "dependencies": [
+      {
+        "packageId": "Acme.Shared.Contract",
+        "version": "4.2.1"
+      }
+    ]
   },
   "images": [
     {
@@ -83,6 +89,8 @@ public static partial class ModuleC
 dotnet modular-apphosts preview descriptor generate producer \
   --apphost src/Producer.AppHost/Producer.AppHost.csproj \
   --module module-c \
+  --contract-project src/ModuleC.Contract/ModuleC.Contract.csproj \
+  --contract-dependency Acme.Shared.Contract \
   --output module-preview.producer.json
 ```
 
@@ -96,6 +104,15 @@ when the committed descriptor no longer matches the module contract or effective
 configuration. Contract-only modules are supported: when a materialized module declares a package
 identity but no image publisher, the generated descriptor contains the contract and an empty
 `images` array.
+
+Repeat `--contract-dependency <package-id>` for each direct contract dependency that the consumer
+must lock. `--contract-project` and at least one dependency selector are required together. The
+generator runs a fresh `dotnet restore --force-evaluate`, verifies every selected package is a
+direct dependency in `project.assets.json`, and records the single exact version resolved across
+the project's target frameworks. Pass `--nuget-config` when that restore needs a repository-specific
+configuration. Declare every locked dependency as an exact NuGet range such as `[4.2.1]`.
+Generation fails when a selected dependency is not direct, uses a broad or floating range, or
+resolves different versions for different targets; it never substitutes a mutable "latest" version.
 
 ### Generate the producer workflow
 
@@ -203,7 +220,7 @@ Omit `contract` entirely when the preview needs only already-built images:
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "module": "module-c",
   "images": [
     {
@@ -245,7 +262,7 @@ absent because Repo C is not allowed to choose them for Repo D:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "producer": {
     "repository": "https://github.com/acme/repo-c.git",
     "commit": "89abcdef0123456789abcdef0123456789abcdef",
@@ -268,7 +285,13 @@ absent because Repo C is not allowed to choose them for Repo D:
     {
       "module": "module-c",
       "packageId": "Acme.ModuleC.Contract",
-      "version": "2.3.0-preview.7"
+      "version": "2.3.0-preview.7",
+      "dependencies": [
+        {
+          "packageId": "Acme.Shared.Contract",
+          "version": "4.2.1"
+        }
+      ]
     }
   ],
   "images": [
@@ -331,7 +354,7 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "modules": [
     {
       "module": "module-c",
@@ -345,7 +368,13 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
         },
         "sourceFallback": {
           "enabled": false
-        }
+        },
+        "dependencies": [
+          {
+            "packageId": "Acme.Shared.Contract",
+            "version": "4.2.1"
+          }
+        ]
       },
       "images": [
         {
@@ -362,7 +391,8 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
 }
 ```
 
-Consumer policies use schema version 2. Requirements are scoped to the producer making the request.
+Consumer policies use schema version 3. Requirements are scoped to the producer making the request,
+and contract policies attest exact direct dependency versions.
 The repository and exact commit selected for a module own that module: its producer owes the required
 contract and every required image. An external producer can never request the contract and owes only
 the required images whose `producerRepositories` explicitly authorize that producer. Required
@@ -398,9 +428,11 @@ This fragment represents the corresponding fields inside `contract`. Source fall
 `dotnet restore` and `dotnet pack` commands to execute MSBuild from the producer commit, so run it in
 a no-secrets job. `allowedPackProperties` applies only to fallback mode and must be empty or omitted
 in published mode. Every declared contract policy must enable exactly one materialization mode.
-All transitive package dependencies of a published or fallback-built contract must already be
-resolvable from consumer-approved NuGet sources. The preview protocol does not publish dependencies
-or infer release order between independently owned packages.
+Every policy-owned contract dependency is an exact package ID/version allowlist. `preview verify`
+requires the producer attestation and consumer policy to have exactly the same dependency set and
+prints both actual and expected versions on a mismatch. All dependencies must already be resolvable
+from consumer-approved NuGet sources. The protocol verifies exact agreement; it still does not
+publish dependencies or infer release order between independently owned packages.
 
 ## Verify and materialize in Repo D
 
@@ -441,9 +473,13 @@ Materialization performs these operations:
    does not fetch the producer repository or run `dotnet pack`.
 3. In source fallback mode, fetches only the exact producer commit and runs fixed `dotnet restore`
    and `dotnet pack` commands against only the policy-owned project path.
-4. Opens the resolved `.nupkg`, verifies its nuspec ID and version, records its SHA-256, and copies it
-   into the package feed. Published contracts record both `source` and `packagePath` in the trusted
-   resolution; fallback contracts record `packagePath` and a null `source`.
+4. Adds every attested dependency to the published-contract resolver as an exact NuGet
+   `PackageReference`, then opens the resolved `.nupkg` and verifies its nuspec ID and version. Each
+   attested dependency must appear in the nuspec and its exact version must be accepted by every
+   framework group/range in which that package is declared. The resolution records those verified
+   locks plus the package SHA-256. Published contracts record both `source` and `packagePath`;
+   fallback contracts additionally verify the freshly restored project assets resolved every lock
+   exactly, then record `packagePath` and a null `source`.
 5. Verifies every `repository@sha256:...` with `docker buildx imagetools inspect`.
 6. Writes the resolution and, when `--github-env` is used, exports `ModulePreview__Resolution`,
    `ModulePreview__PackageFeed`, and each policy-owned contract version environment variable.
@@ -475,6 +511,12 @@ exceeded the limit.
 than its normal configuration hierarchy. Include every required package source, source mapping, and
 credential in that file. Omit `--nuget-config` to use NuGet's normal machine, user, and repository
 configuration chain.
+
+The assets-derived exact version is the producer's attestation of the version restored while the
+descriptor was generated. Nuspec inspection proves that the published package declares a compatible
+direct dependency, and consumer materialization locks restoration to the attested version. This does
+not independently prove the historical compiler inputs of an already-published binary beyond that
+producer attestation; use package provenance or reproducible-build controls for that stronger claim.
 When source fallback fetches a private GitHub HTTPS repository, `materialize` uses the configured
 `gh` executable as a process-scoped Git credential helper. Set `GH_TOKEN` or `GITHUB_TOKEN` for that
 process, and use `--gh-executable <path>` only when `gh` is not on `PATH`. No global Git configuration

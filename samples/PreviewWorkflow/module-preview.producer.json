@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "module": "image-push-e2e",
   "contract": {
     "packageId": "Sample.ImagePush.Contract"

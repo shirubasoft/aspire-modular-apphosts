@@ -14,6 +14,8 @@ public sealed class PreviewPolicyTests
     private const string ExternalRepository = "https://github.com/shirubasoft/image-builder.git";
     private const string ImageRepository = "ghcr.io/shirubasoft/preview-producer";
     private const string OwnerOnlyImageRepository = "ghcr.io/shirubasoft/preview-producer/worker";
+    private const string DependencyPackageId = "Shirubasoft.Shared.Contract";
+    private const string DependencyVersion = "1.7.3";
     private const string ImageDigest =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -22,11 +24,12 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "contract": {
                 "packageId": "Shirubasoft.PreviewProducer.Contract",
-                "version": "2.0.0-preview.1"
+                "version": "2.0.0-preview.1",
+                "dependencies": []
               },
               "images": [
                 {
@@ -65,6 +68,14 @@ public sealed class PreviewPolicyTests
         Assert.DoesNotContain(
             "$schema",
             root.GetProperty("required").EnumerateArray().Select(element => element.GetString()));
+        Assert.DoesNotContain(
+            "dependencies",
+            root
+                .GetProperty("properties")
+                .GetProperty("contract")
+                .GetProperty("required")
+                .EnumerateArray()
+                .Select(element => element.GetString()));
         var pattern = root
             .GetProperty("properties")
             .GetProperty("images")
@@ -119,7 +130,7 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "images": [
                 {
@@ -146,7 +157,7 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -184,7 +195,7 @@ public sealed class PreviewPolicyTests
         var exception = Assert.Throws<InvalidDataException>(policy.Validate);
 
         Assert.Contains("schema version '1'", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Expected '2'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Expected '3'", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -192,11 +203,12 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "contract": {
                 "packageId": "Shirubasoft.PreviewProducer.Contract",
                 "version": "2.0.0-preview.1",
+                "dependencies": [],
                 "project": "producer-controlled.csproj"
               },
               "images": []
@@ -527,6 +539,37 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Evaluator_rejects_contract_dependency_version_mismatch_with_actual_and_expected_values()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Contracts[0].Dependencies[0].Version = "1.8.0";
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, CreatePolicy()));
+
+        Assert.Contains(DependencyPackageId, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'1.8.0'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"'{DependencyVersion}'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_missing_and_unapproved_contract_dependencies()
+    {
+        var missing = CreateManifest(includeImage: true);
+        missing.Contracts[0].Dependencies.Clear();
+        var missingException = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(missing, CreatePolicy()));
+        Assert.Contains("but it is missing", missingException.Message, StringComparison.Ordinal);
+
+        var unapproved = CreateManifest(includeImage: true);
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Dependencies.Clear();
+        var unapprovedException = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(unapproved, policy));
+        Assert.Contains("not allowed by consumer policy", unapprovedException.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Image_digest_validation_requires_lowercase_sha256()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -562,6 +605,11 @@ public sealed class PreviewPolicyTests
             PackageId = "Shirubasoft.PreviewProducer.Contract",
             Version = "2.0.0-preview.1"
         });
+        manifest.Contracts[0].Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = DependencyPackageId,
+            Version = DependencyVersion
+        });
         if (includeImage)
         {
             manifest.Images.Add(new ModulePreviewImageArtifact
@@ -596,6 +644,11 @@ public sealed class PreviewPolicyTests
             }
         };
         module.Contract.AllowedPackProperties.Add("ModularAppHostsVersion");
+        module.Contract.Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = DependencyPackageId,
+            Version = DependencyVersion
+        });
         var image = new ModulePreviewConsumerImagePolicy
         {
             Resource = "preview-producer-api",

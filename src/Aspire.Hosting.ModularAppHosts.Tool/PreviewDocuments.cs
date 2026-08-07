@@ -1,11 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aspire.Hosting.ModularAppHosts;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
 internal sealed class ModulePreviewProducerDescriptor : IPreviewDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const string SchemaUri =
         "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json";
 
@@ -48,6 +49,9 @@ internal sealed class ModulePreviewProducerContractDescriptor
 
     [JsonPropertyOrder(1)]
     public string? Version { get; set; }
+
+    [JsonPropertyOrder(2)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
 }
 
 internal sealed class ModulePreviewProducerImageDescriptor
@@ -67,7 +71,7 @@ internal sealed class ModulePreviewProducerImageDescriptor
 
 internal sealed class ModulePreviewConsumerPolicy : IPreviewDocument
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     [JsonPropertyOrder(0)]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -122,6 +126,9 @@ internal sealed class ModulePreviewConsumerContractPolicy
 
     [JsonPropertyOrder(5)]
     public IList<string> AllowedPackProperties { get; } = [];
+
+    [JsonPropertyOrder(6)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
 }
 
 internal sealed class ModulePreviewPublishedContractPolicy

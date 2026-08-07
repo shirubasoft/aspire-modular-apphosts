@@ -49,7 +49,10 @@ internal static partial class PreviewTool
           dotnet modular-apphosts preview descriptor generate producer --apphost <path>
               --module <name> --output <path> [--resource <name>]...
               [--contract-version <exact-version>] [--artifacts-directory <path>]
-              [--aspire-executable <path>] [--working-directory <path>] [--check | --force]
+              [--contract-project <path>
+               --contract-dependency <package-id>... [--nuget-config <path>]]
+              [--aspire-executable <path>] [--dotnet-executable <path>]
+              [--working-directory <path>] [--check | --force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         Materialize command timeouts default to 120 seconds per external process.

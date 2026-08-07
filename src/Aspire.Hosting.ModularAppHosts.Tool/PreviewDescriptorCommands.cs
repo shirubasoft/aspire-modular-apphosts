@@ -25,14 +25,25 @@ internal static partial class PreviewTool
         string[] arguments,
         CancellationToken cancellationToken)
     {
-        var options = CommandOptions.Parse(arguments, ["resource"], ["check", "force"]);
+        var options = CommandOptions.Parse(
+            arguments,
+            ["resource", "contract-dependency"],
+            ["check", "force"]);
         var workingDirectory = Path.GetFullPath(
             options.Optional("working-directory") ?? Environment.CurrentDirectory);
         var appHost = Path.GetFullPath(options.Required("apphost"), workingDirectory);
         var module = options.Required("module");
         var output = Path.GetFullPath(options.Required("output"), workingDirectory);
         var aspireExecutable = options.Optional("aspire-executable") ?? "aspire";
+        var dotnetExecutable = options.Optional("dotnet-executable") ?? "dotnet";
         var contractVersion = options.Optional("contract-version");
+        var contractProject = options.Optional("contract-project") is { } contractProjectPath
+            ? Path.GetFullPath(contractProjectPath, workingDirectory)
+            : null;
+        var nugetConfig = options.Optional("nuget-config") is { } nugetConfigPath
+            ? Path.GetFullPath(nugetConfigPath, workingDirectory)
+            : null;
+        var contractDependencyIds = options.Many("contract-dependency");
         var configuredArtifactsDirectory = options.Optional("artifacts-directory") is { } artifacts
             ? Path.GetFullPath(artifacts, workingDirectory)
             : null;
@@ -44,8 +55,12 @@ internal static partial class PreviewTool
             "output",
             "working-directory",
             "aspire-executable",
+            "dotnet-executable",
             "artifacts-directory",
             "contract-version",
+            "contract-project",
+            "contract-dependency",
+            "nuget-config",
             "resource",
             "check",
             "force");
@@ -71,6 +86,27 @@ internal static partial class PreviewTool
         {
             PreviewPolicyValidation.ValidatePackageVersion(contractVersion, "--contract-version");
         }
+
+        if ((contractProject is null) != (contractDependencyIds.Count == 0))
+        {
+            throw new PreviewToolException(
+                "--contract-project and at least one --contract-dependency must be specified together.");
+        }
+
+        if (nugetConfig is not null && contractProject is null)
+        {
+            throw new PreviewToolException(
+                "--nuget-config can only be used with --contract-project.");
+        }
+
+        var contractDependencies = contractProject is null
+            ? []
+            : await ResolveContractDependenciesAsync(
+                contractProject,
+                contractDependencyIds,
+                nugetConfig,
+                dotnetExecutable,
+                cancellationToken).ConfigureAwait(false);
 
         var ownsArtifactsDirectory = configuredArtifactsDirectory is null;
         var artifactsDirectory = configuredArtifactsDirectory ?? Path.Combine(
@@ -100,7 +136,8 @@ internal static partial class PreviewTool
                 description,
                 module,
                 options.Many("resource"),
-                contractVersion);
+                contractVersion,
+                contractDependencies);
 
             if (check)
             {
@@ -135,7 +172,8 @@ internal static partial class PreviewTool
         ModuleImageDescriptionDocument description,
         string module,
         List<string> resourceSelectors,
-        string? contractVersion)
+        string? contractVersion,
+        IReadOnlyList<ModulePreviewContractDependency> contractDependencies)
     {
         var moduleDescription = description.Modules.SingleOrDefault(candidate =>
             string.Equals(candidate.Name, module, StringComparison.OrdinalIgnoreCase))
@@ -192,6 +230,12 @@ internal static partial class PreviewTool
                 $"--contract-version cannot be used because module '{module}' does not declare a contract package ID.");
         }
 
+        if (contractDependencies.Count > 0 && moduleDescription.ContractPackageId is null)
+        {
+            throw new PreviewToolException(
+                $"Contract dependencies cannot be generated because module '{module}' does not declare a contract package ID.");
+        }
+
         var descriptor = new ModulePreviewProducerDescriptor
         {
             Schema = ModulePreviewProducerDescriptor.SchemaUri,
@@ -204,6 +248,15 @@ internal static partial class PreviewTool
                     Version = contractVersion
                 }
         };
+        if (descriptor.Contract is not null)
+        {
+            foreach (var dependency in contractDependencies.OrderBy(
+                         dependency => dependency.PackageId,
+                         StringComparer.OrdinalIgnoreCase))
+            {
+                descriptor.Contract.Dependencies.Add(CopyContractDependency(dependency));
+            }
+        }
         foreach (var image in moduleImages.OrderBy(image => image.Resource, StringComparer.OrdinalIgnoreCase))
         {
             descriptor.Images.Add(new ModulePreviewProducerImageDescriptor
@@ -238,7 +291,8 @@ internal static partial class PreviewTool
             left.SchemaVersion != right.SchemaVersion ||
             !string.Equals(left.Module, right.Module, StringComparison.Ordinal) ||
             !string.Equals(left.Contract?.PackageId, right.Contract?.PackageId, StringComparison.Ordinal) ||
-            !string.Equals(left.Contract?.Version, right.Contract?.Version, StringComparison.OrdinalIgnoreCase))
+            !string.Equals(left.Contract?.Version, right.Contract?.Version, StringComparison.OrdinalIgnoreCase) ||
+            !ContractDependenciesEqual(left.Contract?.Dependencies, right.Contract?.Dependencies))
         {
             return false;
         }
@@ -250,5 +304,21 @@ internal static partial class PreviewTool
             string.Equals(pair.First.ResourceKind, pair.Second.ResourceKind, StringComparison.Ordinal) &&
             string.Equals(pair.First.Repository, pair.Second.Repository, StringComparison.Ordinal) &&
             pair.First.Required == pair.Second.Required);
+    }
+
+    private static bool ContractDependenciesEqual(
+        IEnumerable<ModulePreviewContractDependency>? left,
+        IEnumerable<ModulePreviewContractDependency>? right)
+    {
+        var leftDependencies = (left ?? [])
+            .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var rightDependencies = (right ?? [])
+            .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return leftDependencies.Length == rightDependencies.Length &&
+            leftDependencies.Zip(rightDependencies).All(pair =>
+                string.Equals(pair.First.PackageId, pair.Second.PackageId, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(pair.First.Version, pair.Second.Version, StringComparison.OrdinalIgnoreCase));
     }
 }

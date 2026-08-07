@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Runtime.Versioning;
+using System.Diagnostics;
 using Aspire.Hosting.ModularAppHosts;
 using Xunit;
 
@@ -40,7 +41,7 @@ public sealed class PreviewDescriptorCommandTests
         using var json = JsonDocument.Parse(await File.ReadAllTextAsync(output, cancellationToken));
         var root = json.RootElement;
         Assert.Equal(ModulePreviewProducerDescriptor.SchemaUri, root.GetProperty("$schema").GetString());
-        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(2, root.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("sample", root.GetProperty("module").GetString());
         Assert.Equal(ContractPackageId, root.GetProperty("contract").GetProperty("packageId").GetString());
         Assert.Equal("2.1.0-preview.4", root.GetProperty("contract").GetProperty("version").GetString());
@@ -156,6 +157,111 @@ public sealed class PreviewDescriptorCommandTests
         Assert.Equal(1, emptyExitCode);
     }
 
+    [Fact]
+    public async Task Generate_producer_restores_contract_project_and_attests_exact_direct_dependency_version()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = TemporaryDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var feed = Path.Combine(directory.Path, "packages");
+        var sharedProject = Path.Combine(directory.Path, "Shared.Contract", "Shared.Contract.csproj");
+        var producerProject = Path.Combine(directory.Path, "Producer.Contract", "Producer.Contract.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sharedProject)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(producerProject)!);
+        Directory.CreateDirectory(feed);
+        await File.WriteAllTextAsync(
+            sharedProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <PackageId>Shirubasoft.Shared.Contract</PackageId>
+                <Version>1.7.3</Version>
+              </PropertyGroup>
+            </Project>
+            """,
+            cancellationToken);
+        await RunProcessAsync(
+            "dotnet",
+            ["pack", sharedProject, "--output", feed, "--nologo"],
+            directory.Path,
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            producerProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Shirubasoft.Shared.Contract" Version="[1.7.3]" />
+              </ItemGroup>
+            </Project>
+            """,
+            cancellationToken);
+        var nugetConfig = Path.Combine(directory.Path, "nuget.config");
+        await File.WriteAllTextAsync(
+            nugetConfig,
+            $$"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="sample" value="{{feed}}" />
+              </packageSources>
+            </configuration>
+            """,
+            cancellationToken);
+
+        var imageDocument = await WriteImageDocumentAsync(directory, cancellationToken);
+        var aspire = await WriteAspireExecutableAsync(directory, imageDocument, cancellationToken);
+        var output = Path.Combine(directory.Path, "module-preview.producer.json");
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "descriptor", "generate", "producer",
+                "--apphost", Path.Combine(directory.Path, "Sample.AppHost.csproj"),
+                "--module", "sample",
+                "--output", output,
+                "--working-directory", directory.Path,
+                "--aspire-executable", aspire,
+                "--contract-project", producerProject,
+                "--contract-dependency", "Shirubasoft.Shared.Contract",
+                "--nuget-config", nugetConfig
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        var descriptor = await ModulePreviewProducerDescriptor.LoadAsync(output, cancellationToken);
+        var dependency = Assert.Single(descriptor.Contract!.Dependencies);
+        Assert.Equal("Shirubasoft.Shared.Contract", dependency.PackageId);
+        Assert.Equal("1.7.3", dependency.Version);
+
+        await File.WriteAllTextAsync(
+            producerProject,
+            (await File.ReadAllTextAsync(producerProject, cancellationToken))
+                .Replace("Version=\"[1.7.3]\"", "Version=\"[1.0.0,2.0.0)\"", StringComparison.Ordinal),
+            cancellationToken);
+        Assert.Equal(
+            1,
+            await PreviewTool.RunAsync(
+                [
+                    "preview", "descriptor", "generate", "producer",
+                    "--apphost", Path.Combine(directory.Path, "Sample.AppHost.csproj"),
+                    "--module", "sample",
+                    "--output", Path.Combine(directory.Path, "broad-range.producer.json"),
+                    "--working-directory", directory.Path,
+                    "--aspire-executable", aspire,
+                    "--contract-project", producerProject,
+                    "--contract-dependency", "Shirubasoft.Shared.Contract",
+                    "--nuget-config", nugetConfig
+                ],
+                cancellationToken));
+    }
+
     private static Task<int> RunGenerateAsync(
         TemporaryDirectory directory,
         string aspire,
@@ -172,6 +278,37 @@ public sealed class PreviewDescriptorCommandTests
                 .. extraArguments
             ],
             cancellationToken);
+
+    private static async Task RunProcessAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo(executable)
+            {
+                WorkingDirectory = workingDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+        };
+        foreach (var argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+        Assert.True(process.Start());
+        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        var output = await standardOutput;
+        var error = await standardError;
+        Assert.True(
+            process.ExitCode == 0,
+            $"{executable} failed with exit code {process.ExitCode}:{Environment.NewLine}{output}{Environment.NewLine}{error}");
+    }
 
     private static async Task<string> WriteImageDocumentAsync(
         TemporaryDirectory directory,

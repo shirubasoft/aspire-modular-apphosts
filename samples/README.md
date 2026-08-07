@@ -118,6 +118,12 @@ authorized producer and generates a producer GitHub Actions workflow from a desc
 image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
 strict validation without dispatching a workflow or contacting an artifact service.
 
+## Contract dependency preview sample
+
+[`ContractDependencyPreview`](ContractDependencyPreview/README.md) restores a producer contract from
+a tiny local package feed, generates the exact direct dependency lock from NuGet assets, and tests
+both the accepted and rejected policy paths in CI. Its AppHost also runs directly with `aspire`.
+
 ## Multi-repository E2E sample
 
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's

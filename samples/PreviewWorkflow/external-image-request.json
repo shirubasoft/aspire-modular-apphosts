@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "producer": {
     "repository": "https://github.com/example/sample-image-builder.git",
     "commit": "89abcdef0123456789abcdef0123456789abcdef",

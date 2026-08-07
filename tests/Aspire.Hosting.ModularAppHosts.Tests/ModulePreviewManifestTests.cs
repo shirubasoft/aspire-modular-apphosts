@@ -34,7 +34,9 @@ public sealed class ModulePreviewManifestTests
         var module = Assert.Single(loaded.Modules);
         Assert.Equal("orders", module.Name);
         Assert.Equal(Commit, module.Commit);
-        Assert.Equal("Acme.Orders.Contract", Assert.Single(loaded.Contracts).PackageId);
+        var contract = Assert.Single(loaded.Contracts);
+        Assert.Equal("Acme.Orders.Contract", contract.PackageId);
+        Assert.Equal("1.4.2", Assert.Single(contract.Dependencies).Version);
         Assert.Equal(ModulePreviewResourceKind.Container, Assert.Single(loaded.Images).ResourceKind);
     }
 
@@ -42,7 +44,7 @@ public sealed class ModulePreviewManifestTests
     public void Validate_rejects_unknown_schema_duplicates_secrets_and_non_immutable_content()
     {
         var schema = CreateManifest();
-        schema.SchemaVersion = 2;
+        schema.SchemaVersion = 1;
         Assert.Contains("schema version", Assert.Throws<InvalidDataException>(schema.Validate).Message);
 
         var duplicate = CreateManifest();
@@ -104,7 +106,7 @@ public sealed class ModulePreviewManifestTests
         var firstPath = Path.Combine(directory.Path, "first-resolution.json");
         var secondPath = Path.Combine(directory.Path, "second-resolution.json");
         var resolution = CreateResolution();
-        resolution.Contracts.Add(new ModulePreviewResolvedContract
+        var resolvedContract = new ModulePreviewResolvedContract
         {
             Module = "orders",
             PackageId = "Acme.Orders.Contract",
@@ -112,7 +114,13 @@ public sealed class ModulePreviewManifestTests
             Sha256 = PackageSha256,
             Source = "https://api.nuget.org/v3/index.json",
             PackagePath = Path.Combine(directory.Path, "Acme.Orders.Contract.nupkg")
+        };
+        resolvedContract.Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = "Acme.Shared.Contract",
+            Version = "1.4.2"
         });
+        resolution.Contracts.Add(resolvedContract);
 
         await resolution.SaveAsync(firstPath, TestContext.Current.CancellationToken);
         var loaded = await ModulePreviewResolution.LoadAsync(
@@ -467,6 +475,11 @@ public sealed class ModulePreviewManifestTests
             Module = "orders",
             PackageId = "Acme.Orders.Contract",
             Version = "1.2.3-preview.1"
+        });
+        manifest.Contracts[0].Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = "Acme.Shared.Contract",
+            Version = "1.4.2"
         });
         manifest.Images.Add(CreateImage(ModulePreviewResourceKind.Container));
         return manifest;

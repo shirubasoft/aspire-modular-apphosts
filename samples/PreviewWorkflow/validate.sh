@@ -40,7 +40,7 @@ jq --exit-status '
 ' "$verified_request" >/dev/null
 
 jq --exit-status '
-    .schemaVersion == 2 and
+    .schemaVersion == 3 and
     .modules[0].contract.required == true and
     ([.modules[0].images[] | select(.required == true)] | length) == 2 and
     ([.modules[0].images[] | select(.producerRepositories | length > 0)] | length) == 1

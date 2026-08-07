@@ -105,6 +105,7 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.ModulePreviewConsum
 Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Repository.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewConsumerIdentity.Repository.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Dependencies.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency!>!
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Module.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Module.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.ModulePreviewContractRequest() -> void
@@ -112,6 +113,12 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.PackageId.get -> str
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.PackageId.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Version.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewContractRequest.Version.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency.ModulePreviewContractDependency() -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency.PackageId.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency.PackageId.set -> void
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency.Version.get -> string!
+Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency.Version.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions
 Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact
 Aspire.Hosting.ModularAppHosts.ModulePreviewImageArtifact.Module.get -> string!
@@ -164,6 +171,7 @@ Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.SchemaVersion.get -> int
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.SchemaVersion.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.Validate() -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract
+Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Dependencies.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModulePreviewContractDependency!>!
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Module.get -> string!
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.Module.set -> void
 Aspire.Hosting.ModularAppHosts.ModulePreviewResolvedContract.ModulePreviewResolvedContract() -> void
@@ -214,8 +222,8 @@ Aspire.Hosting.ModularAppHosts.ModuleResourceImage.Tag.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
 Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase.AppHost = 0 -> Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
 Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase.Repository = 1 -> Aspire.Hosting.ModularAppHosts.ModuleProjectPathBase
-const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 1 -> int
-const Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.CurrentSchemaVersion = 1 -> int
+const Aspire.Hosting.ModularAppHosts.ModulePreviewManifest.CurrentSchemaVersion = 2 -> int
+const Aspire.Hosting.ModularAppHosts.ModulePreviewResolution.CurrentSchemaVersion = 2 -> int
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRegistryPlaceholder = "{image-registry}" -> string!
 const Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions.ImageRepositoryPlaceholder = "{image-repository}" -> string!
 static Aspire.Hosting.ModularAppHosts.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!

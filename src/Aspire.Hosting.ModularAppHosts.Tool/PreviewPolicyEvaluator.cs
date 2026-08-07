@@ -123,6 +123,49 @@ internal static class PreviewPolicyEvaluator
         PreviewPolicyValidation.ValidatePackageVersion(
             request.Version,
             $"Contract request for module '{selection.Name}'.Version");
+        ValidateContractDependencies(selection.Name, request.Dependencies, policy.Dependencies);
+    }
+
+    private static void ValidateContractDependencies(
+        string module,
+        IEnumerable<ModulePreviewContractDependency> requestedDependencies,
+        IEnumerable<ModulePreviewContractDependency> policyDependencies)
+    {
+        var requested = requestedDependencies.ToDictionary(
+            dependency => dependency.PackageId,
+            StringComparer.OrdinalIgnoreCase);
+        var expected = policyDependencies.ToDictionary(
+            dependency => dependency.PackageId,
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dependency in expected.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!requested.TryGetValue(dependency.Key, out var actual))
+            {
+                throw new InvalidDataException(
+                    $"Contract for module '{module}' must attest direct dependency " +
+                    $"'{dependency.Value.PackageId}' at exact version '{dependency.Value.Version}', but it is missing.");
+            }
+
+            if (!string.Equals(actual.Version, dependency.Value.Version, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Contract dependency '{actual.PackageId}' for module '{module}' resolved exact version " +
+                    $"'{actual.Version}', but consumer policy requires '{dependency.Value.Version}'.");
+            }
+        }
+
+        var undeclared = requested
+            .Where(item => !expected.ContainsKey(item.Key))
+            .OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(item => $"'{item.Value.PackageId}' at '{item.Value.Version}'")
+            .ToArray();
+        if (undeclared.Length > 0)
+        {
+            throw new InvalidDataException(
+                $"Contract for module '{module}' attests dependencies not allowed by consumer policy: " +
+                $"{string.Join(", ", undeclared)}.");
+        }
     }
 
     private static void ValidateImageProducer(
@@ -245,6 +288,9 @@ internal static class PreviewPolicyValidation
             {
                 ValidatePackageVersion(descriptor.Contract.Version, "Producer descriptor.Contract.Version");
             }
+            ModulePreviewValidation.ValidateContractDependencies(
+                descriptor.Contract.Dependencies,
+                "Producer descriptor.Contract.Dependencies");
         }
 
         var images = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -343,6 +389,9 @@ internal static class PreviewPolicyValidation
         }
 
         ValidatePackageId(contract.PackageId, $"Contract policy for module '{module}'.PackageId");
+        ModulePreviewValidation.ValidateContractDependencies(
+            contract.Dependencies,
+            $"Contract policy for module '{module}'.Dependencies");
         ValidateEnvironmentName(
             contract.VersionEnvironment,
             $"Contract policy for module '{module}'.VersionEnvironment");

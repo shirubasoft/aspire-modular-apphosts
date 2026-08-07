@@ -267,9 +267,13 @@ jobs:
           dotnet tool restore
           dotnet restore src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj
           dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
+          dotnet restore samples/ContractDependencyPreview/ContractDependencyPreview.AppHost/ContractDependencyPreview.AppHost.csproj
 
       - name: Validate preview policy and producer workflow generation
         run: bash samples/PreviewWorkflow/validate.sh
+
+      - name: Validate exact preview contract dependency locks
+        run: bash samples/ContractDependencyPreview/validate.sh
 
   e2e-multi-repo:
     runs-on: ubuntu-latest

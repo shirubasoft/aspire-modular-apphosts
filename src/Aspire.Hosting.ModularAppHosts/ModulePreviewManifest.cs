@@ -7,7 +7,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 public sealed class ModulePreviewManifest
 {
     /// <summary>The schema version understood by this release.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>Gets or sets the manifest schema version.</summary>
     [JsonPropertyOrder(0)]
@@ -296,12 +296,31 @@ public sealed class ModulePreviewContractRequest
     [JsonPropertyOrder(2)]
     public string Version { get; set; } = string.Empty;
 
+    /// <summary>Gets the exact direct package dependencies attested by the producer.</summary>
+    [JsonPropertyOrder(3)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
+
     internal void Validate(IReadOnlySet<string> selectedModules)
     {
         ModulePreviewValidation.ValidateSelectedModule(Module, selectedModules, "Contract request");
         ModulePreviewValidation.ValidatePackageId(PackageId, $"Contract for module '{Module}'.{nameof(PackageId)}");
         ModulePreviewValidation.ValidatePackageVersion(Version, $"Contract for module '{Module}'.{nameof(Version)}");
+        ModulePreviewValidation.ValidateContractDependencies(
+            Dependencies,
+            $"Contract for module '{Module}'.{nameof(Dependencies)}");
     }
+}
+
+/// <summary>Attests the exact version of one direct contract package dependency.</summary>
+public sealed class ModulePreviewContractDependency
+{
+    /// <summary>Gets or sets the dependency's NuGet package identifier.</summary>
+    [JsonPropertyOrder(0)]
+    public string PackageId { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the exact resolved NuGet package version.</summary>
+    [JsonPropertyOrder(1)]
+    public string Version { get; set; } = string.Empty;
 }
 
 /// <summary>Identifies the kind of exported module resource replaced by a preview image.</summary>
@@ -371,6 +390,30 @@ internal static class ModulePreviewJson
 
 internal static class ModulePreviewValidation
 {
+    public static void ValidateContractDependencies(
+        IEnumerable<ModulePreviewContractDependency> dependencies,
+        string location)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+
+        var packageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var dependency in dependencies)
+        {
+            if (dependency is null)
+            {
+                throw new InvalidDataException($"{location} cannot contain a null dependency.");
+            }
+
+            ValidatePackageId(dependency.PackageId, $"{location}.{nameof(dependency.PackageId)}");
+            ValidatePackageVersion(dependency.Version, $"{location}.{nameof(dependency.Version)}");
+            if (!packageIds.Add(dependency.PackageId))
+            {
+                throw new InvalidDataException(
+                    $"{location} contains duplicate package ID '{dependency.PackageId}'.");
+            }
+        }
+    }
+
     public static void ValidateRepository(string repository, string location)
     {
         if (string.IsNullOrWhiteSpace(repository) ||
