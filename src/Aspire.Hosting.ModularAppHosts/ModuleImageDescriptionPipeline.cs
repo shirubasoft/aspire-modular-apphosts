@@ -58,28 +58,12 @@ internal static class ModuleImageDescriptionPipeline
             .OrderBy(item => item.Resource.Name, StringComparer.Ordinal)
             .ToArray();
 
-        if (selection.IsScoped)
-        {
-            var unknown = selection.Resources
-                .Where(name => !images.Any(item => Matches(item.Resource, item.Module!, name)))
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (unknown.Length > 0)
-            {
-                var available = images
-                    .SelectMany(item => GetNames(item.Resource, item.Module!))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Order(StringComparer.OrdinalIgnoreCase);
-                throw new InvalidOperationException(
-                    $"The following resources do not describe module images: {string.Join(", ", unknown)}. " +
-                    $"Available image resources: {string.Join(", ", available)}.");
-            }
-        }
+        var selectedResources = selection.ResolveResources(
+            images.Select(item => item.Resource),
+            "described module images");
 
         var document = new ModuleImageDescriptionDocument();
-        foreach (var item in images.Where(item =>
-                     !selection.IsScoped ||
-                     selection.Resources.Any(name => Matches(item.Resource, item.Module!, name))))
+        foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var module = item.Module!;
@@ -147,17 +131,4 @@ internal static class ModuleImageDescriptionPipeline
         LogOutput(context.Logger, path, null);
     }
 
-    private static bool Matches(
-        IResource resource,
-        DistributedApplicationModuleResourceAnnotation module,
-        string name) =>
-        GetNames(resource, module).Contains(name, StringComparer.OrdinalIgnoreCase);
-
-    private static IEnumerable<string> GetNames(
-        IResource resource,
-        DistributedApplicationModuleResourceAnnotation module)
-    {
-        yield return resource.Name;
-        yield return module.ResourceName;
-    }
 }

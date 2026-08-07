@@ -360,14 +360,25 @@ module.AddProject("orders-api", projectPath)
 #pragma warning restore ASPIRECOMPUTE003, ASPIREPIPELINES003
 ```
 
-Push every eligible image or scope the operation to effective Aspire resource names by adding positional arguments:
+Push every eligible image, one or more resources, one or more modules, or a mixture by adding
+positional selectors:
 
 ```bash
 aspire do push
 aspire do push orders-api orders-worker
+aspire do push module:orders module:catalog
+aspire do push module:orders catalog-worker
 ```
 
-When resource arguments are present, non-selected image push steps are detached from the `push` aggregate, including ordinary Aspire project and Dockerfile steps. Only matching module build dependencies run. An unknown name fails with the available image resources instead of silently doing no work. Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
+Plain selectors always match a declared or effective resource name. Module selection deliberately
+requires `module:<name>` so a typo cannot broaden a state-changing push from one resource to every
+publisher in a module; `resource:<name>` is the corresponding explicit resource form. Mixed
+selectors are unioned and deduplicated. Unknown selectors fail with both the available resources
+and modules.
+
+When selectors are present, non-selected image push steps are detached from the `push` aggregate,
+including ordinary Aspire project and Dockerfile steps. Only matching module build dependencies run.
+Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
 
 ### Describe module images
 

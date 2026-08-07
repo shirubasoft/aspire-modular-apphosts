@@ -542,6 +542,7 @@ public static partial class DistributedApplicationModuleExtensions
             ? publishImage
             : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
                 Environment.GetCommandLineArgs(),
+                module.Name,
                 project.Name,
                 resourceName);
         var acquisition = await TryAcquireImageBeforeBuildRepositoryAsync(
@@ -684,6 +685,7 @@ public static partial class DistributedApplicationModuleExtensions
             ? publishImage
             : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
                 Environment.GetCommandLineArgs(),
+                module.Name,
                 definition.Name,
                 resourceName);
         var acquisition = definition.ImagePublishOptions is null
@@ -874,6 +876,7 @@ public static partial class DistributedApplicationModuleExtensions
             ? publishImage
             : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
                 Environment.GetCommandLineArgs(),
+                module.Name,
                 definition.Name,
                 resourceName);
         var acquisition = definition.ImagePublishOptions is null

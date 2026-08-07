@@ -95,11 +95,11 @@ CI does and verify that the project and container callbacks resolve the module-o
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. The pull fixture also maps an image from one temporary
-registry to a local reference in a second registry. Each test first scopes the operation to the exported
-project and verifies the other images are untouched, then operates on every image and verifies all
-results. `test-image-describe.sh` separately verifies the structured run, pull, push, and build
-identities consumed by CI tooling. See the [sample README](ImagePushE2E/README.md) for commands.
+and a factory-created container publisher. A second module proves module and multi-module push
+selection while verifying that unselected publishers are not built. The pull fixture also maps an
+image from one temporary registry to a local reference in a second registry. `test-image-describe.sh`
+separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
+the [sample README](ImagePushE2E/README.md) for commands.
 
 ## Preview workflow sample
 

@@ -120,8 +120,8 @@ At run time the workflow:
 3. Uses `dotnet new nugetconfig`, then installs Aspire CLI and Modular AppHosts into separate tool
    paths with a NuGet.org-only configuration and isolated package cache.
 4. Runs `preview produce --apphost`. The tool invokes `aspire do describe-images`, joins the typed
-   image description to the producer descriptor, and invokes the exact named
-   `push-<effective-resource>` steps in one Aspire pipeline run. Push dependencies build each image.
+   image description to the producer descriptor, then invokes one aggregate
+   `aspire do push <effective-resource>...` pipeline. Push dependencies build each selected image.
 5. Uses `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` for each pushed reference.
    The tool validates the digest and effective repository (including registry mappings) while it
    writes the immutable preview request. The generated shell does not parse JSON with `jq`.
@@ -158,8 +158,11 @@ dotnet modular-apphosts preview produce \
   --output "$RUNNER_TEMP/module-preview/module-preview.json"
 ```
 
-This mode invokes the exact `push-<effective-resource>` Aspire steps and obtains each immutable
-digest through Docker's direct manifest-digest format. Do not combine `--apphost` with `--image`.
+This mode selects all descriptor images in one `aspire do push` invocation and obtains each immutable
+digest through Docker's direct manifest-digest format. The descriptor remains deliberately scoped to
+one module; use `aspire do push module:<name> [module:<name>...]` directly when a producer workflow
+needs to publish complete modules outside preview production. Do not combine `--apphost` with
+`--image`.
 
 The contract version may instead be committed as `contract.version` in the descriptor. Supplying
 `--contract-version` overrides that value, which lets CI pass the exact version it just published.

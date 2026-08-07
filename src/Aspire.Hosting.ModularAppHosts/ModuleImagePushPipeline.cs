@@ -98,24 +98,11 @@ internal static class ModuleImagePushPipeline
                 step.Tags.Contains(WellKnownPipelineTags.PushContainerImage) &&
                 step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
             .ToArray();
-        var availableResources = pushSteps
-            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unknownResources = selection.Resources
-            .Where(resource => !pushSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (unknownResources.Length > 0)
-        {
-            var available = availableResources.Count == 0
-                ? "none"
-                : string.Join(", ", availableResources.Order(StringComparer.OrdinalIgnoreCase));
-            throw new InvalidOperationException(
-                $"The following resources do not contribute image push steps: {string.Join(", ", unknownResources)}. " +
-                $"Available image resources: {available}.");
-        }
+        var selectedResources = selection.ResolveResources(
+            pushSteps.Select(step => step.Resource!),
+            "image push steps");
 
-        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!)))
+        foreach (var step in pushSteps.Where(step => !selectedResources.Contains(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));

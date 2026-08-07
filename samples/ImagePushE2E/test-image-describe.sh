@@ -26,6 +26,7 @@ jq --exit-status '
     ([.images[].effectiveResource] == [
         "image-pull-mapped",
         "image-push-declared",
+        "image-push-extra",
         "image-push-factory",
         "image-push-project"
     ]) and
@@ -44,6 +45,12 @@ jq --exit-status '
         .pullReference == .reference and
         .pushReference == .reference and
         .build.step == "build-image-push-factory") and
+    (.images[] | select(.resource == "image-push-extra") |
+        .module == "image-push-extra" and
+        .reference == "registry.example.test/image-push/extra:push-test" and
+        .pullReference == .reference and
+        .pushReference == .reference and
+        .build.step == "build-image-push-extra") and
     (.images[] | select(.resource == "image-push-project") |
         .reference == "image-push-project:push-test" and
         .pullReference == "registry.example.test/image-push/project:push-test" and

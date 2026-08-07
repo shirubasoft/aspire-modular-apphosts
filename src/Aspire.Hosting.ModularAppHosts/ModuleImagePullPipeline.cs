@@ -130,24 +130,11 @@ internal static class ModuleImagePullPipeline
                 step.Tags.Contains(PullContainerImageTag) &&
                 step.RequiredBySteps.Contains(PullStepName))
             .ToArray();
-        var availableResources = pullSteps
-            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unknownResources = selection.Resources
-            .Where(resource => !pullSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (unknownResources.Length > 0)
-        {
-            var available = availableResources.Count == 0
-                ? "none"
-                : string.Join(", ", availableResources.Order(StringComparer.OrdinalIgnoreCase));
-            throw new InvalidOperationException(
-                $"The following resources do not contribute image pull steps: {string.Join(", ", unknownResources)}. " +
-                $"Available image resources: {available}.");
-        }
+        var selectedResources = selection.ResolveResources(
+            pullSteps.Select(step => step.Resource!),
+            "image pull steps");
 
-        foreach (var step in pullSteps.Where(step => !selection.Includes(step.Resource!)))
+        foreach (var step in pullSteps.Where(step => !selectedResources.Contains(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, PullStepName, StringComparison.Ordinal));

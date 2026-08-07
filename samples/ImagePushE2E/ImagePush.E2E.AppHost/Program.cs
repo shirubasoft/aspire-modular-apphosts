@@ -95,4 +95,28 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
 });
 
 await builder.AddAsync(module);
+
+var extraModule = await builder.ExportModuleAsync("image-push-extra", definition =>
+{
+    definition.WithRepository(builder.AppHostDirectory);
+    definition.AddContainer(
+            "image-push-extra",
+            $"{registryEndpoint}/image-push/extra",
+            ImageTag)
+        .WithImagePublishCommand(new ModuleContainerExportOptions(
+            "image-push/extra",
+            containerRuntime,
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
+        {
+            ImageRegistry = registryEndpoint,
+            ImageTag = ImageTag,
+            WorkingDirectory = "ImageFixture"
+        })
+        .Configure(container => container.WithExplicitStart());
+});
+
+await builder.AddAsync(extraModule);
 await builder.Build().RunAsync();

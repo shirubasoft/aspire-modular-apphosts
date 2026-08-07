@@ -77,6 +77,7 @@ public sealed class ModuleImageBuildPipelineTests
     {
         Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
             ["--operation", "publish", "--step", step],
+            "images",
             "api",
             "imported-api"));
     }
@@ -99,6 +100,23 @@ public sealed class ModuleImageBuildPipelineTests
             : ["--operation", "publish", "--step", step, positionalResource];
         Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
             arguments,
+            "images",
+            "api",
+            "imported-api"));
+    }
+
+    [Theory]
+    [InlineData("module:images", true)]
+    [InlineData("images", false)]
+    [InlineData("api", true)]
+    [InlineData("module:catalog", false)]
+    public void Module_selectors_control_build_repository_preparation(
+        string selector,
+        bool expected)
+    {
+        Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
+            ["--operation", "publish", "--step", "push", selector],
+            "images",
             "api",
             "imported-api"));
     }

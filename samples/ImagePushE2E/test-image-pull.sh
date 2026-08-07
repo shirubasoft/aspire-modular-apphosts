@@ -32,6 +32,7 @@ cleanup() {
         "${registry_endpoint:+$registry_endpoint/image-push/project:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/extra:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-pull/source:$image_tag}" \
         "${retag_registry_endpoint:+$retag_registry_endpoint/image-pull/local:$image_tag}" \
         >/dev/null 2>&1 || true
@@ -98,6 +99,7 @@ curl --fail --silent --output /dev/null "http://$retag_registry_endpoint/v2/"
 remote_project_image="$registry_endpoint/image-push/project:$image_tag"
 remote_declared_image="$registry_endpoint/image-push/declared:$image_tag"
 remote_factory_image="$registry_endpoint/image-push/factory:$image_tag"
+remote_extra_image="$registry_endpoint/image-push/extra:$image_tag"
 mapped_remote_image="$registry_endpoint/image-pull/source:$image_tag"
 mapped_local_image="$retag_registry_endpoint/image-pull/local:$image_tag"
 
@@ -105,15 +107,18 @@ mapped_local_image="$retag_registry_endpoint/image-pull/local:$image_tag"
 "$container_runtime" tag "$fixture_image" "$remote_project_image"
 "$container_runtime" tag "$fixture_image" "$remote_declared_image"
 "$container_runtime" tag "$fixture_image" "$remote_factory_image"
+"$container_runtime" tag "$fixture_image" "$remote_extra_image"
 "$container_runtime" tag "$fixture_image" "$mapped_remote_image"
 "$container_runtime" push "$remote_project_image"
 "$container_runtime" push "$remote_declared_image"
 "$container_runtime" push "$remote_factory_image"
+"$container_runtime" push "$remote_extra_image"
 "$container_runtime" push "$mapped_remote_image"
 "$container_runtime" image rm --force \
     "$remote_project_image" \
     "$remote_declared_image" \
     "$remote_factory_image" \
+    "$remote_extra_image" \
     "$mapped_remote_image"
 
 assert_image_present() {
@@ -168,6 +173,7 @@ dotnet tool run aspire -- do pull image-push-project \
 assert_image_present "$project_image"
 assert_image_absent "$remote_declared_image"
 assert_image_absent "$remote_factory_image"
+assert_image_absent "$remote_extra_image"
 assert_image_absent "$mapped_local_image"
 assert_output_absent "$scoped_pull_output" "$retag_started_message"
 
@@ -179,6 +185,7 @@ dotnet tool run aspire -- do pull \
 assert_image_present "$project_image"
 assert_image_present "$remote_declared_image"
 assert_image_present "$remote_factory_image"
+assert_image_present "$remote_extra_image"
 assert_image_present "$mapped_local_image"
 assert_output_contains "$complete_pull_output" "$retag_started_message"
 assert_output_contains "$complete_pull_output" "$retag_completed_message"

@@ -277,7 +277,7 @@ public sealed class PreviewWorkflowCommandTests
         Assert.Equal(2, aspireArguments.Length);
         Assert.StartsWith("do describe-images ", aspireArguments[0], StringComparison.Ordinal);
         Assert.StartsWith(
-            "do push-imported-api push-imported-sidecar ",
+            "do push imported-api imported-sidecar ",
             aspireArguments[1],
             StringComparison.Ordinal);
         var dockerArguments = await File.ReadAllLinesAsync(dockerLog, cancellationToken);

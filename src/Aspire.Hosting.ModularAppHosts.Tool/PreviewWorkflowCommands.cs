@@ -262,11 +262,11 @@ internal static partial class PreviewTool
         if (selectedImages.Count > 0)
         {
             Directory.CreateDirectory(pushDirectory);
-            var pushSteps = selectedImages
-                .Select(image => $"push-{image.EffectiveResource}")
+            var pushSelectors = selectedImages
+                .Select(image => image.EffectiveResource)
                 .ToArray();
-            var pushArguments = new List<string> { "do" };
-            pushArguments.AddRange(pushSteps);
+            var pushArguments = new List<string> { "do", "push" };
+            pushArguments.AddRange(pushSelectors);
             pushArguments.AddRange(
                 [
                     "--apphost", appHost,
@@ -282,7 +282,7 @@ internal static partial class PreviewTool
                 applyTimeout: false).ConfigureAwait(false);
             EnsureSuccess(
                 pushResult,
-                $"Aspire pipeline steps '{string.Join("', '", pushSteps)}'");
+                $"Aspire image push for '{string.Join("', '", pushSelectors)}'");
         }
 
         var producedImages = new List<ProducedImage>(selectedImages.Count);
