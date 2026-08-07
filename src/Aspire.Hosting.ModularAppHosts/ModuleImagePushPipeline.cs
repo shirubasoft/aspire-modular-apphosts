@@ -52,7 +52,7 @@ internal static class ModuleImagePushPipeline
             var resource = factoryContext.Resource;
             if (resource.IsExcludedFromPublish() ||
                 resource.RequiresImageBuildAndPush() ||
-                !HasPushTarget(resource))
+                !ModuleEffectiveImageResolver.HasPushTarget(resource))
             {
                 return [];
             }
@@ -127,23 +127,11 @@ internal static class ModuleImagePushPipeline
         }
     }
 
-    private static bool HasPushTarget(IResource resource)
-    {
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        if (image is { SHA256.Length: > 0 })
-        {
-            return false;
-        }
-
-        return image is { Registry.Length: > 0 } ||
-            resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
-            resource.Annotations.OfType<DeploymentTargetAnnotation>().Any(annotation =>
-                annotation.ContainerRegistry is not null) ||
-            resource.Annotations.OfType<RegistryTargetAnnotation>().Any();
-    }
-
     private static async Task PushAsync(IResource resource, PipelineStepContext context)
     {
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            context.CancellationToken).ConfigureAwait(false);
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
         var hasExplicitAspireRegistry =
             resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
@@ -151,15 +139,9 @@ internal static class ModuleImagePushPipeline
                 annotation.ContainerRegistry is not null);
         if (!hasExplicitAspireRegistry && image is { Registry.Length: > 0 })
         {
-            if (!resource.TryGetContainerImageName(out var imageReference))
-            {
-                throw new InvalidOperationException(
-                    $"Resource '{resource.Name}' does not have a container image reference to push.");
-            }
-
             var runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
             await CliCommand.Wrap(runtime)
-                .WithArguments(["push", imageReference])
+                .WithArguments(["push", resolved.PushReference!])
                 .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
                     LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
                 .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>

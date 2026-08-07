@@ -1,4 +1,52 @@
 #nullable enable
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Arguments.get -> System.Collections.Generic.IList<string!>!
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Command.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Command.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.ModuleImageBuildDescription() -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Repository.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Revision.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Revision.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Step.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Step.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.WorkingDirectory.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.WorkingDirectory.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Build.get -> Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Build.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Digest.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Digest.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.EffectiveResource.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.EffectiveResource.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Module.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Module.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.ModuleImageDescription() -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PullReference.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PullReference.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PushReference.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PushReference.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Reference.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Reference.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Registry.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Registry.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Resource.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Resource.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.ResourceKind.get -> Aspire.Hosting.ModularAppHosts.ModulePreviewResourceKind
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.ResourceKind.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Tag.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Tag.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Images.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModuleImageDescription!>!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.ModuleImageDescriptionDocument() -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.get -> int
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Validate() -> void
+const Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.CurrentSchemaVersion = 1 -> int
+static Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument!>!
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.ModuleImagePullMappingAnnotation(string! remoteImageReference) -> void
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.RemoteImageReference.get -> string!

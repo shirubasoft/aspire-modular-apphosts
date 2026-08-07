@@ -358,9 +358,20 @@ aspire do push orders-api orders-worker
 
 When resource arguments are present, non-selected image push steps are detached from the `push` aggregate, including ordinary Aspire project and Dockerfile steps. An unknown name fails with the available image resources instead of silently doing no work. Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
 
+### Describe module images
+
+Generate a machine-readable inventory from the same effective identity resolver used by the pull and push pipelines:
+
+```bash
+aspire do describe-images --output-path artifacts
+aspire do describe-images orders-api orders-worker --output-path artifacts
+```
+
+The command writes deterministic schema-versioned JSON to `artifacts/module-images.json` and logs a concise reference summary. Each entry contains the module's declared resource name, its effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run/pull/push references, and the resolved build command and source. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need image identities without duplicating module configuration.
+
 ### Pull module images
 
-The same registry-backed modular project exports, declared containers, and factory-created containers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource.
+The same registry-backed modular project exports, declared containers, and factory-created containers contribute a `pull-<resource>` step to the module-provided `pull` pipeline. An explicit `ImageRegistry` pulls the effective image reference directly. A resource associated with an Aspire registry resolves its remote image name and tag, pulls that reference, and tags it back to the local image reference used by the container resource. Resolution starts from the configured module image name and tag, so an owner-qualified repository such as `example/orders-api` is never replaced by an inferred `<resource>:latest` identity.
 
 Use `WithImagePullMapping` when the pull source must be declared independently of the resource image. The pipeline pulls the supplied complete remote reference and tags it as the resource's effective local image, even when the two references use different registries:
 

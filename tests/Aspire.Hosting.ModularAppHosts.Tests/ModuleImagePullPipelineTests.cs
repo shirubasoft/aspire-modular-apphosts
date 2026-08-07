@@ -354,6 +354,40 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Module_publisher_identity_wins_over_a_colliding_resource_name_default()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "mirror");
+        var module = await builder.ExportModuleAsync("database", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("postgres", "owner/database", "ci")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "owner/database",
+                    "docker",
+                    "build")
+                {
+                    ImageTag = "ci"
+                });
+        });
+        await builder.AddAsync(module);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        container.Annotations.Add(new RegistryTargetAnnotation(registry.Resource));
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("registry.example.test/mirror/owner/database:ci", references.RemoteImage);
+        Assert.Equal("owner/database:ci", references.LocalImage);
+        Assert.DoesNotContain("postgres:latest", references.RemoteImage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pull_reference_resolution_rejects_a_resource_without_an_image()
     {
         var resource = new ContainerResource("orders-api");

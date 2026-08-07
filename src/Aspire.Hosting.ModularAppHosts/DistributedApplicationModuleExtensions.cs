@@ -620,6 +620,15 @@ public static partial class DistributedApplicationModuleExtensions
                 publishPlan.ImageTag,
                 GetConfiguredValue(projectOptions?.ImageSHA256)));
         export.ConfigureContainer?.Invoke(context, container);
+        container.WithAnnotation(new ModuleImagePublisherAnnotation(
+            module.Name,
+            project.Name,
+            ModulePreviewResourceKind.Project,
+            effectiveExportOptions,
+            publishPlan,
+            publishWorkingDirectory,
+            buildRepository.Repository ?? buildRepository.RepositoryPath,
+            buildRepository.RepositoryRevision));
         ModuleImagePushPipeline.AddPushStep(container);
         ModuleImagePullPipeline.AddPullStep(container);
 
@@ -705,10 +714,16 @@ public static partial class DistributedApplicationModuleExtensions
                 ? acquisition!.Plan
                 : await CreateImagePublishPlanAsync(
                     builder,
-                    publishOptions,
+                    publishOptions!,
                     buildRepository.RepositoryDirty && publishImage,
                     inspectExistingImage: publishImage && acquisition is null,
                     cancellationToken).ConfigureAwait(false);
+        var publishWorkingDirectory = publishOptions is null
+            ? null
+            : PathSafety.GetContainedPath(
+                buildRepository.RepositoryPath,
+                publishOptions.WorkingDirectory ?? ".",
+                nameof(ModuleContainerExportOptions.WorkingDirectory));
         var container = builder
             .AddContainer(
                 resourceName,
@@ -728,6 +743,15 @@ public static partial class DistributedApplicationModuleExtensions
 
         if (publishPlan is not null)
         {
+            container.WithAnnotation(new ModuleImagePublisherAnnotation(
+                module.Name,
+                definition.Name,
+                ModulePreviewResourceKind.Container,
+                publishOptions!,
+                publishPlan,
+                publishWorkingDirectory!,
+                buildRepository.Repository ?? buildRepository.RepositoryPath,
+                buildRepository.RepositoryRevision));
             ModuleImagePushPipeline.AddPushStep(container);
         }
 
@@ -740,17 +764,13 @@ public static partial class DistributedApplicationModuleExtensions
 
         if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan is { ShouldPublish: true })
         {
-            var publishWorkingDirectory = PathSafety.GetContainedPath(
-                buildRepository.RepositoryPath,
-                publishOptions!.WorkingDirectory ?? ".",
-                nameof(ModuleContainerExportOptions.WorkingDirectory));
             await AddImagePublishInstallerAsync(
                 builder,
                 resourceName,
-                publishOptions,
+                publishOptions!,
                 publishPlan,
                 buildRepository.RepositoryPath,
-                publishWorkingDirectory,
+                publishWorkingDirectory!,
                 buildRepository.Repository,
                 buildRepository.UpdateRepository,
                 container,
@@ -877,10 +897,16 @@ public static partial class DistributedApplicationModuleExtensions
                 ? acquisition!.Plan
                 : await CreateImagePublishPlanAsync(
                     builder,
-                    publishOptions,
+                    publishOptions!,
                     buildRepository.RepositoryDirty && publishImage,
                     inspectExistingImage: publishImage && acquisition is null,
                     cancellationToken).ConfigureAwait(false);
+        var publishWorkingDirectory = publishOptions is null
+            ? null
+            : PathSafety.GetContainedPath(
+                buildRepository.RepositoryPath,
+                publishOptions.WorkingDirectory ?? ".",
+                nameof(ModuleContainerExportOptions.WorkingDirectory));
         var image = publishPlan is null
             ? null
             : new ModuleResourceImage(
@@ -913,6 +939,15 @@ public static partial class DistributedApplicationModuleExtensions
                 ApplyImagePullPolicy(
                     container,
                     configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
+                container.WithAnnotation(new ModuleImagePublisherAnnotation(
+                    module.Name,
+                    definition.Name,
+                    ModulePreviewResourceKind.Container,
+                    publishOptions!,
+                    publishPlan,
+                    publishWorkingDirectory!,
+                    buildRepository.Repository ?? buildRepository.RepositoryPath,
+                    buildRepository.RepositoryRevision));
                 ModuleImagePushPipeline.AddPushStep(container);
             }
 
@@ -920,17 +955,13 @@ public static partial class DistributedApplicationModuleExtensions
 
             if (builder.ExecutionContext.IsRunMode && publishImage && publishPlan is { ShouldPublish: true })
             {
-                var publishWorkingDirectory = PathSafety.GetContainedPath(
-                    buildRepository.RepositoryPath,
-                    publishOptions!.WorkingDirectory ?? ".",
-                    nameof(ModuleContainerExportOptions.WorkingDirectory));
                 await AddImagePublishInstallerAsync(
                     builder,
                     resourceName,
-                    publishOptions,
+                    publishOptions!,
                     publishPlan,
                     buildRepository.RepositoryPath,
-                    publishWorkingDirectory,
+                    publishWorkingDirectory!,
                     buildRepository.Repository,
                     buildRepository.UpdateRepository,
                     container,
@@ -1542,6 +1573,7 @@ public static partial class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(options, builder.Configuration);
         ModuleImagePushPipeline.ConfigureResourceSelection(builder);
         ModuleImagePullPipeline.Configure(builder);
+        ModuleImageDescriptionPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
         builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
