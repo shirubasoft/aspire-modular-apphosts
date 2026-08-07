@@ -66,6 +66,7 @@ internal static class ModuleImagePushPipeline
                     Action = context => PushAsync(resource, context),
                     DependsOnSteps =
                     [
+                        ModuleImageBuildPipeline.GetStepName(resource),
                         WellKnownPipelineSteps.PushPrereq,
                         WellKnownPipelineSteps.CheckContainerRuntime
                     ],
@@ -98,10 +99,10 @@ internal static class ModuleImagePushPipeline
                 step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
             .ToArray();
         var availableResources = pushSteps
-            .Select(step => step.Resource!.Name)
+            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unknownResources = selection.Resources
-            .Where(resource => !availableResources.Contains(resource))
+            .Where(resource => !pushSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (unknownResources.Length > 0)
@@ -114,7 +115,7 @@ internal static class ModuleImagePushPipeline
                 $"Available image resources: {available}.");
         }
 
-        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!.Name)))
+        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));

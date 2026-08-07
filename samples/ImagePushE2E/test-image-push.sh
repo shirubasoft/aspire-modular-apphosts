@@ -7,11 +7,15 @@ apphost_project="$script_directory/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.c
 fixture_directory="$script_directory/ImageFixture"
 container_runtime="${ASPIRE_CONTAINER_RUNTIME:-docker}"
 image_tag="push-test"
+module_image_tag="$image_tag"
 fixture_image="image-push-fixture:$image_tag"
-project_image="image-push-project:$image_tag"
 registry_container_id=""
 registry_endpoint=""
 container_registries_configuration=""
+
+if [[ -n "$(git -C "$repository_root" status --porcelain --untracked-files=normal)" ]]; then
+    module_image_tag="$image_tag-dirty"
+fi
 
 cleanup() {
     if [[ -n "$registry_container_id" ]]; then
@@ -20,10 +24,13 @@ cleanup() {
 
     "$container_runtime" image rm --force \
         "$fixture_image" \
-        "$project_image" \
+        "image-push-project:$image_tag" \
+        "image-push-project:$module_image_tag" \
         "${registry_endpoint:+$registry_endpoint/image-push/project:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/declared:$module_image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/factory:$module_image_tag}" \
         >/dev/null 2>&1 || true
 
     if [[ -n "$container_registries_configuration" ]]; then
@@ -58,16 +65,14 @@ done
 curl --fail --silent --output /dev/null "http://$registry_endpoint/v2/"
 
 "$container_runtime" build --tag "$fixture_image" "$fixture_directory"
-"$container_runtime" tag "$fixture_image" "$project_image"
-"$container_runtime" tag "$fixture_image" "$registry_endpoint/image-push/declared:$image_tag"
-"$container_runtime" tag "$fixture_image" "$registry_endpoint/image-push/factory:$image_tag"
 
 assert_repository_has_tag() {
     local repository="$1"
+    local expected_tag="${2:-$image_tag}"
     local response
     response="$(curl --fail --silent "http://$registry_endpoint/v2/$repository/tags/list")"
-    if [[ "$response" != *"\"$image_tag\""* ]]; then
-        echo "Registry repository '$repository' did not contain tag '$image_tag': $response" >&2
+    if [[ "$response" != *"\"$expected_tag\""* ]]; then
+        echo "Registry repository '$repository' did not contain tag '$expected_tag': $response" >&2
         return 1
     fi
 }
@@ -102,7 +107,7 @@ dotnet tool run aspire -- do push \
     --non-interactive
 
 assert_repository_has_tag "image-push/project"
-assert_repository_has_tag "image-push/declared"
-assert_repository_has_tag "image-push/factory"
+assert_repository_has_tag "image-push/declared" "$module_image_tag"
+assert_repository_has_tag "image-push/factory" "$module_image_tag"
 
 echo "Verified scoped and complete Aspire image pushes against $registry_endpoint."

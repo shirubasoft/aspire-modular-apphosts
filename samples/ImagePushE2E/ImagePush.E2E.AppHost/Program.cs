@@ -9,6 +9,7 @@ const string ProjectResourceName = "image-push-project";
 
 var builder = DistributedApplication.CreateBuilder(args);
 builder.UseModuleContainers();
+var containerRuntime = await ContainerRuntimeResolver.ResolveAsync();
 
 var registryEndpoint = builder.Configuration["ImagePush:RegistryEndpoint"];
 if (string.IsNullOrWhiteSpace(registryEndpoint))
@@ -33,11 +34,15 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             ImageTag)
         .WithImagePublishCommand(new ModuleContainerExportOptions(
             "image-push/declared",
-            "dotnet",
-            "--info")
+            containerRuntime,
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
         {
             ImageRegistry = registryEndpoint,
-            ImageTag = ImageTag
+            ImageTag = ImageTag,
+            WorkingDirectory = "ImageFixture"
         });
 
     definition.AddContainer(
@@ -52,10 +57,14 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
         .ExportAsContainer(
             new ModuleContainerExportOptions(
                 ProjectResourceName,
-                "dotnet",
-                "--info")
+                containerRuntime,
+                "build",
+                "--tag",
+                ModuleContainerExportOptions.ImageReferencePlaceholder,
+                ".")
             {
-                ImageTag = ImageTag
+                ImageTag = ImageTag,
+                WorkingDirectory = "ImageFixture"
             },
             (_, container) => container
                 .WithContainerRegistry(registry)
@@ -67,11 +76,15 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
         context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
         new ModuleContainerExportOptions(
             "image-push/factory",
-            "dotnet",
-            "--info")
+            containerRuntime,
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
         {
             ImageRegistry = registryEndpoint,
-            ImageTag = ImageTag
+            ImageTag = ImageTag,
+            WorkingDirectory = "ImageFixture"
         });
 });
 

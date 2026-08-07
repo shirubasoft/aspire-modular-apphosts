@@ -1201,6 +1201,72 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Publishing_disabled_resolves_build_repository_when_it_defines_the_image_tag()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var buildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        var branch = Assert.IsType<string>(await RepositoryInspector.TryGetBranchAsync(
+            buildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var commit = Assert.IsType<string>(await RepositoryInspector.TryGetCommitAsync(
+            buildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(definitionRepository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "false";
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            definition.AddContainer("database", "acme/database")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "acme/database",
+                    "docker",
+                    "build")
+                {
+                    BuildRepository = buildRepository.Path
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var image = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal(ModuleImageTag.FromRepository(branch, commit), image.Tag);
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+    }
+
+    [Fact]
+    public async Task Publishing_disabled_with_explicit_tag_skips_missing_build_repository()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        var missingBuildRepository = Path.Combine(definitionRepository.Path, "missing-build");
+        var builder = CreateBuilder(definitionRepository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "false";
+        var module = await builder.ExportModuleAsync("static", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            definition.AddContainer("database", "acme/database", "preview")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "acme/database",
+                    "docker",
+                    "build")
+                {
+                    BuildRepository = missingBuildRepository,
+                    ImageTag = "preview"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var image = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("preview", image.Tag);
+        Assert.False(Directory.Exists(missingBuildRepository));
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+    }
+
+    [Fact]
     public async Task Imported_same_identity_build_repository_is_cloned_before_selecting_its_image_tag()
     {
         using var appHost = TemporaryDirectory.Create();

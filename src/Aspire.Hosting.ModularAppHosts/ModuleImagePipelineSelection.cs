@@ -16,6 +16,31 @@ internal sealed class ModuleImageSelection
 
     public bool Includes(string resourceName) =>
         !IsScoped || Resources.Contains(resourceName);
+
+    public bool Includes(Aspire.Hosting.ApplicationModel.IResource resource) =>
+        !IsScoped || Resources.Any(name => NameMatches(resource, name));
+
+    public static bool NameMatches(Aspire.Hosting.ApplicationModel.IResource resource, string name) =>
+        GetNames(resource).Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    public static IEnumerable<string> GetNames(Aspire.Hosting.ApplicationModel.IResource resource)
+    {
+        yield return resource.Name;
+        var moduleResource = resource.Annotations
+            .OfType<DistributedApplicationModuleResourceAnnotation>()
+            .LastOrDefault();
+        if (moduleResource is not null)
+        {
+            yield return moduleResource.ResourceName;
+            yield break;
+        }
+
+        var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
+        if (publisher is not null)
+        {
+            yield return publisher.ResourceName;
+        }
+    }
 }
 
 internal static class ModuleImagePipelineSelectionParser
@@ -113,5 +138,25 @@ internal static class ModuleImagePipelineSelectionParser
         return resources.Count == 0
             ? ModuleImageSelection.All
             : new ModuleImageSelection(resources);
+    }
+
+    public static string? GetRequestedStep(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (string.Equals(arguments[index], "--step", StringComparison.Ordinal) && index + 1 < arguments.Count)
+            {
+                return arguments[index + 1];
+            }
+
+            const string prefix = "--step=";
+            if (arguments[index].StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return arguments[index][prefix.Length..];
+            }
+        }
+
+        return null;
     }
 }

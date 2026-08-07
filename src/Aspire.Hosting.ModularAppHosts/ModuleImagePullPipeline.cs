@@ -131,10 +131,10 @@ internal static class ModuleImagePullPipeline
                 step.RequiredBySteps.Contains(PullStepName))
             .ToArray();
         var availableResources = pullSteps
-            .Select(step => step.Resource!.Name)
+            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unknownResources = selection.Resources
-            .Where(resource => !availableResources.Contains(resource))
+            .Where(resource => !pullSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (unknownResources.Length > 0)
@@ -147,7 +147,7 @@ internal static class ModuleImagePullPipeline
                 $"Available image resources: {available}.");
         }
 
-        foreach (var step in pullSteps.Where(step => !selection.Includes(step.Resource!.Name)))
+        foreach (var step in pullSteps.Where(step => !selection.Includes(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, PullStepName, StringComparison.Ordinal));

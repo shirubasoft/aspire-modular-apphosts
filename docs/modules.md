@@ -327,7 +327,16 @@ In run mode, a one-shot installer invokes the configured executable before the c
 
 ### Push module images
 
-In publish mode, every project, declared container, or factory-created container that has an image publisher and a registry contributes a `push-<resource>` step to Aspire's `push` pipeline. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
+In publish mode, every project, declared container, or factory-created container that has an image publisher contributes a `build-<resource>` step to Aspire's `build` pipeline. The step executes the effective `ModuleContainerExportOptions` command and arguments in its resolved build working directory with `ASPIRE_MODULE_IMAGE` set. `PullBeforeBuild` first attempts to reuse or pull a clean image, dirty repositories always build, and `ProducedImageReference` is retagged after a successful command. Failures and cancellation stop the pipeline.
+
+Build every publisher or scope the operation by declared or effective resource name:
+
+```bash
+aspire do build
+aspire do build orders-api orders-worker
+```
+
+Every registry-backed module image also contributes a `push-<resource>` step. That push depends on its matching build step, so `aspire do push` now builds a missing image from the module-owned command before pushing it. Producers no longer need to repeat that command in workflow YAML or prebuild the image locally. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
 
 Project exports retain the `ImageRegistry` from `ModuleContainerExportOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
 
@@ -356,7 +365,7 @@ aspire do push
 aspire do push orders-api orders-worker
 ```
 
-When resource arguments are present, non-selected image push steps are detached from the `push` aggregate, including ordinary Aspire project and Dockerfile steps. An unknown name fails with the available image resources instead of silently doing no work. Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
+When resource arguments are present, non-selected image push steps are detached from the `push` aggregate, including ordinary Aspire project and Dockerfile steps. Only matching module build dependencies run. An unknown name fails with the available image resources instead of silently doing no work. Directly invoking a resource step such as `aspire do push-orders-api` remains supported by Aspire.
 
 ### Describe module images
 
@@ -367,7 +376,7 @@ aspire do describe-images --output-path artifacts
 aspire do describe-images orders-api orders-worker --output-path artifacts
 ```
 
-The command writes deterministic schema-versioned JSON to `artifacts/module-images.json` and logs a concise reference summary. Each entry contains the module's declared resource name, its effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run/pull/push references, and the resolved build command and source. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need image identities without duplicating module configuration.
+The command writes deterministic schema-versioned JSON to `artifacts/module-images.json` and logs a concise reference summary. Each entry contains the module's declared resource name, its effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need image identities without duplicating module configuration.
 
 ### Pull module images
 
@@ -392,6 +401,8 @@ aspire do pull orders-api orders-worker
 ```
 
 When resource arguments are present, only the selected pull steps run. An unknown name fails with the available image resources. A resource step can also be invoked directly, for example `aspire do pull-orders-api`. Registry authentication for every referenced registry is supplied by the selected Docker or Podman runtime in the same way as push authentication.
+
+Pull and describe-only commands skip a separate image build repository whenever a configured tag or immutable digest makes the image identity independent of that checkout. When neither is present, the repository is still resolved because its branch and commit determine the effective default tag. Build and push commands resolve only the repositories selected by declared or effective resource name.
 
 Legacy commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the module adds a second one-shot resource that invokes the selected container runtime as `tag <produced> <effective>`, and the target container waits for that retag step. The value can be a fixed reference or use the same image placeholders. No shell wrapper is required:
 
