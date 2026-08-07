@@ -172,7 +172,13 @@ public sealed class PreviewWorkflowCommandTests
             imageDescriptionPath,
             $$"""
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
+              "modules": [
+                {
+                  "name": "preview-producer",
+                  "contractPackageId": "{{ContractPackageId}}"
+                }
+              ],
               "images": [
                 {
                   "module": "preview-producer",

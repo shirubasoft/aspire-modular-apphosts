@@ -48,6 +48,7 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json",
   "schemaVersion": 1,
   "module": "module-c",
   "contract": {
@@ -66,6 +67,35 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
 
 `resourceKind` is `project` when the module contract declares `AddProject(...).ExportAsContainer(...)`
 and `container` when it declares `AddContainer(...)`.
+
+Do not maintain the image portion by hand. Declare the contract package identity with the module,
+then generate the descriptor from the AppHost's effective publishers:
+
+```csharp
+[GenerateDistributedApplicationModule("module-c", PackageId = "Acme.ModuleC.Contract")]
+public static partial class ModuleC
+{
+    // Define(...)
+}
+```
+
+```bash
+dotnet modular-apphosts preview descriptor generate producer \
+  --apphost src/Producer.AppHost/Producer.AppHost.csproj \
+  --module module-c \
+  --output module-preview.producer.json
+```
+
+The command invokes `aspire do describe-images` once, keeps only buildable images with push targets,
+and derives `module`, contract package ID, resource name, resource kind, and registry-qualified image
+repository. Repeat `--resource <declared-or-effective-name>` to generate a subset, and pass
+`--contract-version` only when the exact version should be committed. Output is deterministic,
+includes the repository's [`module-preview-producer` JSON Schema](../schemas/module-preview-producer.schema.json),
+and refuses to overwrite an existing file unless `--force` is supplied. Use `--check` in CI to fail
+when the committed descriptor no longer matches the module contract or effective AppHost image
+configuration. Contract-only modules are supported: when a materialized module declares a package
+identity but no image publisher, the generated descriptor contains the contract and an empty
+`images` array.
 
 ### Generate the producer workflow
 
@@ -172,6 +202,7 @@ Omit `contract` entirely when the preview needs only already-built images:
 
 ```json
 {
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json",
   "schemaVersion": 1,
   "module": "module-c",
   "images": [

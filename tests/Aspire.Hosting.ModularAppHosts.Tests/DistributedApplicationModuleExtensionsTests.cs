@@ -77,22 +77,51 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
-    public async Task DefineModule_tracks_contract_version_and_rejects_a_conflicting_definition()
+    public async Task DefineModule_tracks_contract_identity_and_rejects_a_conflicting_definition()
     {
         using var repository = await TestRepository.CreateAsync();
         var builder = CreateBuilder(repository.Path);
 
-        var module = await builder.DefineModuleAsync("orders", "2", definition =>
-            definition.AddContainer("cache", "redis"));
-        var duplicate = await builder.DefineModuleAsync("orders", "2", _ =>
-            throw new InvalidOperationException("The idempotent callback must not run."));
+        var module = await builder.DefineModuleAsync(
+            "orders",
+            "2",
+            "Sample.Orders.Contract",
+            definition => definition.AddContainer("cache", "redis"),
+            TestContext.Current.CancellationToken);
+        var duplicate = await builder.DefineModuleAsync("orders", "2", "Sample.Orders.Contract", _ =>
+            throw new InvalidOperationException("The idempotent callback must not run."),
+            TestContext.Current.CancellationToken);
 
         Assert.Equal("2", module.Version);
+        Assert.Equal("Sample.Orders.Contract", module.PackageId);
         Assert.Same(module, duplicate);
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            builder.DefineModuleAsync("orders", "3", _ => { }));
+            builder.DefineModuleAsync(
+                "orders",
+                "3",
+                "Sample.Orders.Contract",
+                _ => { },
+                TestContext.Current.CancellationToken));
         Assert.Contains("version '2'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("version '3'", exception.Message, StringComparison.Ordinal);
+
+        exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.DefineModuleAsync(
+                "orders",
+                "2",
+                "Sample.Other.Contract",
+                _ => { },
+                TestContext.Current.CancellationToken));
+        Assert.Contains("Sample.Orders.Contract", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Sample.Other.Contract", exception.Message, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            builder.DefineModuleAsync(
+                "invalid",
+                "1",
+                "invalid/package",
+                _ => { },
+                TestContext.Current.CancellationToken));
     }
 
     [Fact]

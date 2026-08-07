@@ -44,7 +44,7 @@ using Aspire.Hosting.ModularAppHosts;
 
 namespace Catalog.Modules;
 
-[GenerateDistributedApplicationModule(Name, Version = "1")]
+[GenerateDistributedApplicationModule(Name, Version = "1", PackageId = "Catalog.Modules")]
 public static partial class CatalogModule
 {
     public const string Name = "catalog";
@@ -112,6 +112,11 @@ Docker's registry-reported digest formatter, the exact contract version, `gh wor
 shell or `jq`. Registry and package authentication remain explicit producer-owned script hooks; the
 generated workflow contains no service, registry, feed, or organization-specific credentials. See
 the preview guide for the generator options and hook contract.
+
+Generate the producer descriptor itself with `preview descriptor generate producer --apphost ...
+--module ...`, and run the same command with `--check` in CI. The command derives publisher kinds,
+image repositories, and the module contract package ID from the effective AppHost model and emits a
+descriptor linked to the shipped JSON Schema.
 
 The request carries full commits and OCI digests rather than mutable branch names and image tags.
 The producer descriptor may omit the contract for an image-only preview, or omit only its version

@@ -231,11 +231,17 @@ internal static class PreviewPolicyValidation
             ModulePreviewProducerDescriptor.CurrentSchemaVersion,
             "producer descriptor");
         ValidateName(descriptor.Module, "Producer descriptor.Module");
+        if (descriptor.Schema is not null &&
+            !string.Equals(descriptor.Schema, ModulePreviewProducerDescriptor.SchemaUri, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Producer descriptor.$schema must be '{ModulePreviewProducerDescriptor.SchemaUri}'.");
+        }
 
         if (descriptor.Contract is not null)
         {
             ValidatePackageId(descriptor.Contract.PackageId, "Producer descriptor.Contract.PackageId");
-            if (!string.IsNullOrWhiteSpace(descriptor.Contract.Version))
+            if (descriptor.Contract.Version is not null)
             {
                 ValidatePackageVersion(descriptor.Contract.Version, "Producer descriptor.Contract.Version");
             }

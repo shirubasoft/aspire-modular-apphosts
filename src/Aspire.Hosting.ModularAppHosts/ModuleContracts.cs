@@ -15,6 +15,9 @@ public interface IDistributedApplicationModule
     /// <summary>Gets the module contract version.</summary>
     string Version { get; }
 
+    /// <summary>Gets the NuGet package ID that publishes the module contract, when the module declares one.</summary>
+    string? PackageId { get; }
+
     /// <summary>
     /// Gets every resource exported by the module in declaration order, including container resources created by
     /// <see cref="IDistributedApplicationModuleBuilder.AddResource{TResource}(string, Func{IDistributedApplicationModuleResourceContext, IResourceBuilder{TResource}}, ModuleContainerExportOptions)"/>.

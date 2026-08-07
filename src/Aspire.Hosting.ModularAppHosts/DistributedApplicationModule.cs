@@ -5,7 +5,8 @@ namespace Aspire.Hosting.ModularAppHosts;
 internal sealed class DistributedApplicationModule(
     IDistributedApplicationBuilder definitionApplicationBuilder,
     string name,
-    string version) : IDistributedApplicationModule
+    string version,
+    string? packageId) : IDistributedApplicationModule
 {
     private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
@@ -17,6 +18,8 @@ internal sealed class DistributedApplicationModule(
     public string Name { get; } = name;
 
     public string Version { get; } = version;
+
+    public string? PackageId { get; } = packageId;
 
     public IReadOnlyList<IDistributedApplicationModuleResource> Resources => _resources;
 

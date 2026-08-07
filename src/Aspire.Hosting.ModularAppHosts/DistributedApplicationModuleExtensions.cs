@@ -89,7 +89,18 @@ public static partial class DistributedApplicationModuleExtensions
         Action<IDistributedApplicationModuleBuilder> moduleBuilder,
         CancellationToken cancellationToken = default)
     {
-        return DefineModuleAsync(builder, name, "1", moduleBuilder, cancellationToken);
+        return DefineModuleAsync(builder, name, "1", packageId: null, moduleBuilder, cancellationToken);
+    }
+
+    /// <summary>Exports a named module definition with its NuGet contract package identity.</summary>
+    public static Task<IDistributedApplicationModule> ExportModuleAsync(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        CancellationToken cancellationToken = default)
+    {
+        return DefineModuleAsync(builder, name, "1", packageId, moduleBuilder, cancellationToken);
     }
 
     /// <summary>Defines a versioned module contract without adding its resources to the application model.</summary>
@@ -100,9 +111,38 @@ public static partial class DistributedApplicationModuleExtensions
         Action<IDistributedApplicationModuleBuilder> moduleBuilder,
         CancellationToken cancellationToken = default)
     {
+        return await DefineModuleAsync(
+            builder,
+            name,
+            version,
+            packageId: null,
+            moduleBuilder,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Defines a versioned module contract with its NuGet package identity.</summary>
+    public static async Task<IDistributedApplicationModule> DefineModuleAsync(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        if (packageId is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+            if (packageId.Length > 100 || packageId.Any(character =>
+                !(char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_')))
+            {
+                throw new ArgumentException(
+                    $"'{packageId}' is not a valid NuGet package ID.",
+                    nameof(packageId));
+            }
+        }
         ArgumentNullException.ThrowIfNull(moduleBuilder);
 
         var registry = GetOrCreateRegistry(builder);
@@ -119,11 +159,18 @@ public static partial class DistributedApplicationModuleExtensions
                         $"not requested version '{version}'.");
                 }
 
+                if (!string.Equals(existingModule.PackageId, packageId, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Module '{name}' is already defined with contract package ID " +
+                        $"'{existingModule.PackageId ?? "none"}', not requested package ID '{packageId ?? "none"}'.");
+                }
+
                 return existingModule;
             }
 
             var gitExecutablePath = GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git";
-            var module = new DistributedApplicationModule(builder, name, version);
+            var module = new DistributedApplicationModule(builder, name, version, packageId);
             moduleBuilder(new DistributedApplicationModuleBuilder(builder, module, registry));
             await module.ValidateAsync(
                 gitExecutablePath,
@@ -611,7 +658,8 @@ public static partial class DistributedApplicationModuleExtensions
                 module.Name,
                 project.Name,
                 definitionRepository.RepositoryPath,
-                imported));
+                imported,
+                module.PackageId));
 
         ApplyImageRegistry(container, publishPlan.ImageRegistry);
 
@@ -748,7 +796,8 @@ public static partial class DistributedApplicationModuleExtensions
                 module.Name,
                 definition.Name,
                 definitionRepository.RepositoryPath,
-                imported));
+                imported,
+                module.PackageId));
 
         ApplyImageRegistry(
             container,
@@ -850,7 +899,8 @@ public static partial class DistributedApplicationModuleExtensions
                 module.Name,
                 project.Name,
                 repositoryPath,
-                imported));
+                imported,
+                module.PackageId));
 
         var context = new DistributedApplicationModuleResourceContext(
             builder,
@@ -961,7 +1011,8 @@ public static partial class DistributedApplicationModuleExtensions
                 module.Name,
                 definition.Name,
                 definitionRepository.RepositoryPath,
-                imported));
+                imported,
+                module.PackageId));
 
         if (resource is ContainerResource containerResource)
         {

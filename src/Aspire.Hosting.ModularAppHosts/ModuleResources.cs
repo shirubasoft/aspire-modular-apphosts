@@ -55,7 +55,8 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
     string moduleName,
     string resourceName,
     string repositoryPath,
-    bool imported) : IResourceAnnotation
+    bool imported,
+    string? packageId = null) : IResourceAnnotation
 {
     /// <summary>Gets the module name.</summary>
     public string ModuleName { get; } = moduleName;
@@ -72,6 +73,9 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
 
     /// <summary>Gets whether the resource came from <c>ImportModuleAsync</c>.</summary>
     public bool Imported { get; } = imported;
+
+    /// <summary>Gets the NuGet package ID that publishes the owning module contract, when declared.</summary>
+    public string? PackageId { get; } = packageId;
 }
 
 /// <summary>Links a module service to the one-shot installer that prepares its repository.</summary>

@@ -11,4 +11,10 @@ public sealed class GenerateDistributedApplicationModuleAttribute(string name) :
 
     /// <summary>Gets or sets the module contract version.</summary>
     public string Version { get; set; } = "1";
+
+    /// <summary>
+    /// Gets or sets the NuGet package ID that publishes this module contract. Descriptor generation uses this
+    /// identity instead of requiring producer workflows to repeat it.
+    /// </summary>
+    public string? PackageId { get; set; }
 }

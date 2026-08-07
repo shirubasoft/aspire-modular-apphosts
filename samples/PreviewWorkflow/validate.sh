@@ -7,9 +7,11 @@ tool_project="$repository_root/src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Ho
 temporary_directory="$(mktemp -d)"
 verified_request="$temporary_directory/module-preview.verified.json"
 generated_workflow="$temporary_directory/module-preview.yml"
+contract_only_descriptor="$temporary_directory/contract-only.producer.json"
 image_descriptions="$temporary_directory/images"
 materialization_work="$temporary_directory/materialization-work"
 resolution="$temporary_directory/module-preview.resolution.json"
+aspire_tool_directory="$temporary_directory/aspire-tool"
 
 cleanup() {
     rm -r -- "$temporary_directory"
@@ -17,6 +19,11 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$repository_root"
+
+aspire_version="$(jq --raw-output '.tools["aspire.cli"].version' .config/dotnet-tools.json)"
+dotnet tool install aspire.cli \
+    --tool-path "$aspire_tool_directory" \
+    --version "$aspire_version"
 
 dotnet run --project "$tool_project" --configuration Release -- \
     preview verify \
@@ -68,7 +75,12 @@ ImagePush__RegistryEndpoint=registry.example.test \
     --non-interactive
 
 jq --exit-status --slurpfile descriptor samples/PreviewWorkflow/module-preview.producer.json '
-    [
+    any(
+        .modules[];
+        .name == $descriptor[0].module and
+        .contractPackageId == $descriptor[0].contract.packageId
+    ) and
+    ([
         .images[]
         | select(
             .module == $descriptor[0].module and
@@ -76,10 +88,35 @@ jq --exit-status --slurpfile descriptor samples/PreviewWorkflow/module-preview.p
             .resourceKind == $descriptor[0].images[0].resourceKind and
             .build != null and
             .pushReference == ($descriptor[0].images[0].repository + ":push-test"))
-    ] | length == 1
+    ] | length == 1)
 ' "$image_descriptions/module-images.json" >/dev/null
 
-aspire_version="$(jq --raw-output '.tools["aspire.cli"].version' .config/dotnet-tools.json)"
+ImagePush__RegistryEndpoint=registry.example.test \
+    dotnet run --project "$tool_project" --configuration Release -- \
+    preview descriptor generate producer \
+    --apphost samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj \
+    --module image-push-e2e \
+    --resource image-push-declared \
+    --output samples/PreviewWorkflow/module-preview.producer.json \
+    --aspire-executable "$aspire_tool_directory/aspire" \
+    --check
+
+ImagePush__RegistryEndpoint=registry.example.test \
+    dotnet run --project "$tool_project" --configuration Release -- \
+    preview descriptor generate producer \
+    --apphost samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj \
+    --module contract-only \
+    --contract-version 1.2.3 \
+    --output "$contract_only_descriptor" \
+    --aspire-executable "$aspire_tool_directory/aspire"
+
+jq --exit-status '
+    .module == "contract-only" and
+    .contract.packageId == "Sample.ContractOnly" and
+    .contract.version == "1.2.3" and
+    (.images | length) == 0
+' "$contract_only_descriptor" >/dev/null
+
 dotnet run --project "$tool_project" --configuration Release -- \
     preview workflow generate producer \
     --descriptor samples/PreviewWorkflow/module-preview.producer.json \

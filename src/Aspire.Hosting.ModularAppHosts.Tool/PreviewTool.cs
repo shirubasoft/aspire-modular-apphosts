@@ -46,6 +46,10 @@ internal static partial class PreviewTool
               [--package-auth-script <path>] [--contract-publish-script <path>]
               [--secret <environment-name>=<secret-name>]...
               [--working-directory <path>] [--force]
+          dotnet modular-apphosts preview descriptor generate producer --apphost <path>
+              --module <name> --output <path> [--resource <name>]...
+              [--contract-version <exact-version>] [--artifacts-directory <path>]
+              [--aspire-executable <path>] [--working-directory <path>] [--check | --force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         Materialize command timeouts default to 120 seconds per external process.
@@ -80,9 +84,10 @@ internal static partial class PreviewTool
                 "materialize" => await MaterializeAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "trigger" => await TriggerAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "workflow" => await WorkflowAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "descriptor" => await DescriptorAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 _ => throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', 'preview trigger', or 'preview workflow' command.")
+                    "'preview materialize', 'preview trigger', 'preview workflow', or 'preview descriptor' command.")
             };
         }
         catch (Exception exception) when (

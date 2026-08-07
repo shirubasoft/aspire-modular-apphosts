@@ -22,7 +22,21 @@ dotnet tool run aspire -- do describe-images \
     --non-interactive
 
 jq --exit-status '
-    .schemaVersion == 1 and
+    .schemaVersion == 2 and
+    ([.modules[] | {name, contractPackageId}] == [
+        {
+          "name": "contract-only",
+          "contractPackageId": "Sample.ContractOnly"
+        },
+        {
+          "name": "image-push-e2e",
+          "contractPackageId": "Sample.ImagePush.Contract"
+        },
+        {
+          "name": "image-push-extra",
+          "contractPackageId": null
+        }
+    ]) and
     ([.images[].effectiveResource] == [
         "image-pull-mapped",
         "image-push-declared",

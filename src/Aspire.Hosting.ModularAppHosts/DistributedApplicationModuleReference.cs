@@ -24,6 +24,9 @@ public abstract class DistributedApplicationModuleReference : IDistributedApplic
     public string Version => _module.Version;
 
     /// <inheritdoc />
+    public string? PackageId => _module.PackageId;
+
+    /// <inheritdoc />
     public IReadOnlyList<IDistributedApplicationModuleResource> Resources => _module.Resources;
 
     /// <inheritdoc />

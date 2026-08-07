@@ -15,12 +15,13 @@ Run the validation from the repository root:
 bash samples/PreviewWorkflow/validate.sh
 ```
 
-The script performs offline policy verification, asks the AppHost for its effective image document,
-confirms that schema-v2 requirements are scoped to the external producer's authority, checks that the
-request materializes with an explicit per-command timeout, checks that the descriptor selects exactly
-one buildable push target, and generates a producer GitHub Actions workflow in a temporary directory.
-It also checks the producer-owned registry login hook, the high-level AppHost production command,
-native GitHub CLI dispatch and watch commands, and the absence of generated `jq` parsing.
+The script performs offline policy verification, confirms that schema-v2 requirements are scoped to
+the external producer's authority, and materializes the request with an explicit per-command timeout.
+It asks the AppHost for its effective image document and uses
+`preview descriptor generate producer --check` to prove the committed descriptor matches that real
+publisher before generating a producer GitHub Actions workflow in a temporary directory. It also
+checks the producer-owned registry login hook, the high-level AppHost production command, native
+GitHub CLI dispatch and watch commands, and the absence of generated `jq` parsing.
 
 The `example` GitHub owners, registry host, consumer workflow, and secret names are deliberately
 non-operational placeholders. Replace them with repository-owned values before committing a generated

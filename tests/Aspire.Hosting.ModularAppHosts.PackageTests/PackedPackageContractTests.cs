@@ -70,6 +70,9 @@ public sealed class PackedPackageContractTests
         Assert.True(ContainsEntry(
             packages.ToolPackagePath,
             "tools/net10.0/any/CliWrap.dll"));
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "schemas/module-preview-producer.schema.json"));
         Assert.False(ContainsEntry(
             packages.ToolPackagePath,
             "tools/net10.0/any/Aspire.Hosting.dll"));
@@ -110,6 +113,10 @@ public sealed class PackedPackageContractTests
         Assert.Contains("dotnet modular-apphosts preview verify", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("dotnet modular-apphosts preview materialize", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("dotnet modular-apphosts preview trigger", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet modular-apphosts preview descriptor generate producer",
+            result.StandardOutput,
+            StringComparison.Ordinal);
     }
 
     [Fact]

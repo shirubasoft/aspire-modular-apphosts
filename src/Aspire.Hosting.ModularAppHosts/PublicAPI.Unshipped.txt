@@ -40,13 +40,29 @@ Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Tag.get -> string?
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Tag.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Images.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModuleImageDescription!>!
+Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Modules.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription!>!
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.ModuleImageDescriptionDocument() -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.get -> int
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Validate() -> void
-const Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.CurrentSchemaVersion = 1 -> int
+const Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.CurrentSchemaVersion = 2 -> int
 static Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument!>!
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ContractPackageId.get -> string?
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ContractPackageId.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ModuleImageModuleDescription() -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.Name.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.Name.set -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.PackageId.get -> string?
+Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute.PackageId.get -> string?
+Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute.PackageId.set -> void
+Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule.PackageId.get -> string?
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleResourceAnnotation.DistributedApplicationModuleResourceAnnotation(string! moduleName, string! resourceName, string! repositoryPath, bool imported, string? packageId = null) -> void
+Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleResourceAnnotation.PackageId.get -> string?
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModuleAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! name, string! version, string? packageId, System.Action<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!>! moduleBuilder, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!>!
+static Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ExportModuleAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! name, string! packageId, System.Action<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder!>! moduleBuilder, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule!>!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleResourceAnnotation.DistributedApplicationModuleResourceAnnotation(string! moduleName, string! resourceName, string! repositoryPath, bool imported) -> void
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.ModuleImagePullMappingAnnotation(string! remoteImageReference) -> void
 Aspire.Hosting.ModularAppHosts.ModuleImagePullMappingAnnotation.RemoteImageReference.get -> string!

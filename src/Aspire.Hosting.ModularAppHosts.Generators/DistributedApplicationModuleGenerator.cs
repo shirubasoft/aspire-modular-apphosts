@@ -91,10 +91,19 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor InvalidPackageId = new(
+        "SAMHSG009",
+        "Invalid module package ID",
+        "The PackageId supplied to GenerateDistributedApplicationModule must be a valid NuGet package ID",
+        "Shirubasoft.Aspire.ModularAppHosts",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     private static readonly HashSet<string> ReservedResourcePropertyNames = new(StringComparer.Ordinal)
     {
         "Name",
         "Version",
+        "PackageId",
         "Resources",
         "Projects",
         "Containers",
@@ -151,6 +160,14 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         if (string.IsNullOrWhiteSpace(moduleVersion))
         {
             diagnostics.Add(new DiagnosticInfo(InvalidModuleVersion, moduleLocation));
+            canGenerate = false;
+        }
+
+        var packageId = attribute.NamedArguments
+            .FirstOrDefault(argument => argument.Key == "PackageId").Value.Value as string;
+        if (packageId is not null && !IsValidPackageId(packageId))
+        {
+            diagnostics.Add(new DiagnosticInfo(InvalidPackageId, moduleLocation));
             canGenerate = false;
         }
 
@@ -221,11 +238,18 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             symbol.DeclaredAccessibility == Accessibility.Public ? "public" : "internal",
             moduleName ?? string.Empty,
             moduleVersion,
+            packageId,
             conventionalDefineMethods.Length > 0,
             resources,
             diagnostics.ToImmutable(),
             canGenerate);
     }
+
+    private static bool IsValidPackageId(string packageId) =>
+        !string.IsNullOrWhiteSpace(packageId) &&
+        packageId.Length <= 100 &&
+        packageId.All(character =>
+            character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '-' or '_');
 
     private static ImmutableArray<ResourceModel> CollectResources(
         INamedTypeSymbol moduleSymbol,
@@ -548,6 +572,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .Append(", ")
+                .Append(module.PackageId is null
+                    ? "null"
+                    : SymbolDisplay.FormatLiteral(module.PackageId, quote: true))
                 .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
             source.Append("        return await ")
                 .Append(module.AddExtensionMethodName)
@@ -571,11 +599,17 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .AppendLine(", global::System.StringComparison.Ordinal) ||");
         source.Append("            !global::System.String.Equals(module.Version, ")
             .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+            .AppendLine(", global::System.StringComparison.Ordinal) ||");
+        source.Append("            !global::System.String.Equals(module.PackageId, ")
+            .Append(module.PackageId is null
+                ? "null"
+                : SymbolDisplay.FormatLiteral(module.PackageId, quote: true))
             .AppendLine(", global::System.StringComparison.Ordinal))");
         source.AppendLine("        {");
         source.Append("            throw new global::System.ArgumentException(")
             .Append(SymbolDisplay.FormatLiteral(
-                $"Expected module '{module.ModuleName}' with contract version '{module.ModuleVersion}'.",
+                $"Expected module '{module.ModuleName}' with contract version '{module.ModuleVersion}' " +
+                $"and package ID '{module.PackageId ?? "none"}'.",
                 quote: true))
             .AppendLine(", nameof(module));");
         source.AppendLine("        }");
@@ -613,6 +647,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .Append(", ")
+                .Append(module.PackageId is null
+                    ? "null"
+                    : SymbolDisplay.FormatLiteral(module.PackageId, quote: true))
                 .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
         }
 
@@ -689,6 +727,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             string accessibility,
             string moduleName,
             string moduleVersion,
+            string? packageId,
             bool hasConventionalDefineMethod,
             ImmutableArray<ResourceModel> resources,
             ImmutableArray<DiagnosticInfo> diagnostics,
@@ -701,6 +740,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             Accessibility = accessibility;
             ModuleName = moduleName;
             ModuleVersion = moduleVersion;
+            PackageId = packageId;
             HasConventionalDefineMethod = hasConventionalDefineMethod;
             Resources = resources;
             Diagnostics = diagnostics;
@@ -720,6 +760,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public string ModuleName { get; }
 
         public string ModuleVersion { get; }
+
+        public string? PackageId { get; }
 
         public bool HasConventionalDefineMethod { get; }
 

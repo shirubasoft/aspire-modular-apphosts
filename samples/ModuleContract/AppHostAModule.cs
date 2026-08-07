@@ -4,10 +4,11 @@ using Aspire.Hosting.ModularAppHosts;
 
 namespace ModularSample.ModuleContract;
 
-[GenerateDistributedApplicationModule(Name)]
+[GenerateDistributedApplicationModule(Name, PackageId = PackageId)]
 public static partial class AppHostAModule
 {
     public const string Name = "AppHostA";
+    public const string PackageId = "ModularSample.ModuleContract";
     public const string ApiResourceName = "sample-api";
     public const string ProjectResourceName = "sample-project";
     public const string CSharpAppResourceName = "sample-csharp-app";
@@ -29,7 +30,7 @@ public static partial class AppHostAModule
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
         var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
-        return await builder.ExportModuleAsync(Name, module =>
+        return await builder.ExportModuleAsync(Name, PackageId, module =>
         {
             module.WithRepository(absoluteSourceRoot);
 

@@ -43,11 +43,24 @@ internal static class ModuleImageDescriptionPipeline
     internal static async Task<ModuleImageDescriptionDocument> CreateDocumentAsync(
         IEnumerable<IResource> resources,
         ModuleImageSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IEnumerable<IDistributedApplicationModule>? modules = null)
     {
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(selection);
-        var images = resources
+        var materializedResources = resources.ToArray();
+        var moduleAnnotations = materializedResources
+            .Select(resource => resource.Annotations
+                .OfType<DistributedApplicationModuleResourceAnnotation>()
+                .LastOrDefault())
+            .OfType<DistributedApplicationModuleResourceAnnotation>();
+        var moduleIdentities = (modules ?? [])
+            .Select(module => (module.Name, module.PackageId))
+            .Concat(moduleAnnotations.Select(module => (module.ModuleName, module.PackageId)))
+            .GroupBy(module => module.Item1, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToArray();
+        var images = materializedResources
             .Select(resource => (
                 Resource: resource,
                 Module: resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>().LastOrDefault(),
@@ -63,6 +76,26 @@ internal static class ModuleImageDescriptionPipeline
             "described module images");
 
         var document = new ModuleImageDescriptionDocument();
+        foreach (var moduleGroup in moduleIdentities)
+        {
+            var packageIds = moduleGroup
+                .Select(module => module.Item2)
+                .OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (packageIds.Length > 1)
+            {
+                throw new InvalidDataException(
+                    $"Module '{moduleGroup.Key}' has conflicting contract package identities in the AppHost model.");
+            }
+
+            document.Modules.Add(new ModuleImageModuleDescription
+            {
+                Name = moduleGroup.Key,
+                ContractPackageId = packageIds.SingleOrDefault()
+            });
+        }
+
         foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -114,7 +147,10 @@ internal static class ModuleImageDescriptionPipeline
         var document = await CreateDocumentAsync(
             context.Model.Resources,
             selection,
-            context.CancellationToken).ConfigureAwait(false);
+            context.CancellationToken,
+            context.Services.GetService<IDistributedApplicationModuleCatalog>() is ModuleApplicationRegistry registry
+                ? registry.GetMaterializedModules()
+                : []).ConfigureAwait(false);
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
         var path = Path.Combine(output, FileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);

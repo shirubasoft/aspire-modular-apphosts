@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.ModularAppHosts;
 using Xunit;
 
@@ -46,6 +48,70 @@ public sealed class PreviewPolicyTests
         Assert.Equal("Shirubasoft.PreviewProducer.Contract", descriptor.Contract?.PackageId);
         var image = Assert.Single(descriptor.Images);
         Assert.True(image.Required);
+    }
+
+    [Fact]
+    public async Task Producer_descriptor_schema_matches_runtime_repository_validation()
+    {
+        var schemaPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "module-preview-producer.schema.json");
+        await using var stream = File.OpenRead(schemaPath);
+        using var schema = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var root = schema.RootElement;
+        Assert.DoesNotContain(
+            "$schema",
+            root.GetProperty("required").EnumerateArray().Select(element => element.GetString()));
+        var pattern = root
+            .GetProperty("properties")
+            .GetProperty("images")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("repository")
+            .GetProperty("pattern")
+            .GetString()!;
+        var regex = new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        var packageIdPattern = root
+            .GetProperty("$defs")
+            .GetProperty("packageId")
+            .GetProperty("pattern")
+            .GetString()!;
+        var packageIdRegex = new Regex(
+            packageIdPattern,
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+
+        Assert.Matches(packageIdRegex, "Sample.Module-Contract_2");
+        Assert.DoesNotMatch(packageIdRegex, ".Sample.Module");
+        Assert.Throws<InvalidDataException>(() =>
+            CreateContractOnlyDescriptor(".Sample.Module").Validate());
+        Assert.Throws<InvalidDataException>(() =>
+            CreateContractOnlyDescriptor("Sample.Module", string.Empty).Validate());
+
+        foreach (var repository in new[]
+                 {
+                     "ghcr.io/example/api",
+                     "registry.example.test:5000/a.b/image_name-v2"
+                 })
+        {
+            Assert.True(regex.IsMatch(repository), repository);
+            CreateImageOnlyDescriptor(repository).Validate();
+        }
+
+        foreach (var repository in new[]
+                 {
+                     "registry.example.test/a//b",
+                     "registry.example.test/a-/b",
+                     "-registry.example.test/a/b",
+                     "registry.example.test/a/b-"
+                 })
+        {
+            Assert.False(regex.IsMatch(repository), repository);
+            Assert.Throws<InvalidDataException>(() => CreateImageOnlyDescriptor(repository).Validate());
+        }
     }
 
     [Fact]
@@ -541,6 +607,35 @@ public sealed class PreviewPolicyTests
         policy.Modules.Add(module);
         return policy;
     }
+
+    private static ModulePreviewProducerDescriptor CreateImageOnlyDescriptor(string repository)
+    {
+        var descriptor = new ModulePreviewProducerDescriptor
+        {
+            Module = "preview-producer"
+        };
+        descriptor.Images.Add(new ModulePreviewProducerImageDescriptor
+        {
+            Resource = "preview-producer-api",
+            ResourceKind = "container",
+            Repository = repository,
+            Required = true
+        });
+        return descriptor;
+    }
+
+    private static ModulePreviewProducerDescriptor CreateContractOnlyDescriptor(
+        string packageId,
+        string? version = null) =>
+        new()
+        {
+            Module = "preview-producer",
+            Contract = new ModulePreviewProducerContractDescriptor
+            {
+                PackageId = packageId,
+                Version = version
+            }
+        };
 
     private static void AddProducerAsUnrelatedSelectedModule(
         ModulePreviewManifest manifest,
