@@ -12,6 +12,7 @@ public sealed class PreviewWorkflowCommandTests
     private const string Commit = "0123456789abcdef0123456789abcdef01234567";
     private const string BaseCommit = "89abcdef0123456789abcdef0123456789abcdef";
     private const string Repository = "https://github.com/shirubasoft/preview-producer.git";
+    private const string ExternalModuleRepository = "https://github.com/shirubasoft/module-owner.git";
     private const string ContractPackageId = "Shirubasoft.PreviewProducer.Contract";
     private const string ContractVersion = "2.0.0-preview.1";
     private const string ApiImageRepository = "ghcr.io/shirubasoft/preview-producer/api";
@@ -360,6 +361,75 @@ public sealed class PreviewWorkflowCommandTests
         Assert.Equal(
             [$"ModulePreview__Resolution={Path.GetFullPath(resolutionPath)}"],
             await File.ReadAllLinesAsync(githubEnvironmentPath, cancellationToken));
+    }
+
+    [Fact]
+    public async Task External_image_producer_can_override_the_owning_module_selection()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteImageOnlyProducerDescriptorAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "external-preview.json");
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--pin", $"preview-producer={ExternalModuleRepository}@{BaseCommit}",
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken);
+        Assert.Equal(Repository, manifest.Producer.Repository);
+        Assert.Equal(Commit, manifest.Producer.Commit);
+        var module = Assert.Single(manifest.Modules);
+        Assert.Equal("preview-producer", module.Name);
+        Assert.Equal(ExternalModuleRepository, module.Repository);
+        Assert.Equal(BaseCommit, module.Commit);
+        Assert.Empty(manifest.Contracts);
+        Assert.Equal(2, manifest.Images.Count);
+    }
+
+    [Fact]
+    public async Task External_image_producer_cannot_offer_a_contract()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteProducerDescriptorAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", Path.Combine(directory.Path, "invalid-external-preview.json"),
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--pin", $"preview-producer={ExternalModuleRepository}@{BaseCommit}",
+                "--pin", $"build-support={Repository}@{Commit}",
+                "--image", $"preview-producer-api={ApiImageRepository}@{ApiImageDigest}",
+                "--image", $"preview-producer-sidecar={SidecarImageRepository}@{SidecarImageDigest}"
+            ],
+            cancellationToken);
+
+        Assert.Equal(1, exitCode);
     }
 
     [Fact]

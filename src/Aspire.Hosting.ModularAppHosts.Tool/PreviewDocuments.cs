@@ -142,6 +142,9 @@ internal sealed class ModulePreviewConsumerImagePolicy
     public IList<string> Repositories { get; } = [];
 
     [JsonPropertyOrder(3)]
+    public IList<string> ProducerRepositories { get; } = [];
+
+    [JsonPropertyOrder(4)]
     public bool Required { get; set; }
 }
 

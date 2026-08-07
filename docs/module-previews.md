@@ -21,7 +21,8 @@ The distinction between request and resolution is intentional:
 - Repo C controls requested module commits, optional contract versions, and immutable OCI digests.
 - Repo D controls whether a contract is required, allowed repositories and package IDs, the
   published package source or source fallback project, MSBuild properties, emitted environment
-  variable names, and allowed image repositories.
+  variable names, allowed image repositories, and any additional repositories allowed to produce
+  each image.
 - `preview verify` is pure and offline. It does not clone repositories, run producer code, or contact
   a registry.
 - `preview materialize` revalidates the request, performs only policy-approved work, hashes the
@@ -106,6 +107,11 @@ is the pushed tip of that branch on `origin`. It rejects undeclared images, tags
 abbreviated digests, missing required images, and mismatches between a supplied image repository
 and the committed descriptor.
 
+In GitHub Actions, check out an explicit branch ref so `HEAD` is attached, calculate the exact
+contract version before packing, and write packages plus the generated manifest outside the Git
+worktree, such as under `RUNNER_TEMP`. The exact version published by the job is the value passed to
+`--contract-version`; a later or independently calculated version makes the request irreproducible.
+
 Add changed dependencies explicitly; a branch name is never inferred across repositories:
 
 ```bash
@@ -162,6 +168,45 @@ absent because Repo C is not allowed to choose them for Repo D:
 
 The producer branch and base ref are audit metadata. Consumers use only full immutable commits and
 digests as artifact identities.
+
+### Images built outside the module repository
+
+An image-only producer may build a resource owned by a module in another repository. In that case,
+use a pin with the same name as the descriptor's `module`; it replaces the default module selection
+without changing the producer identity:
+
+```bash
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --pin module-c=https://github.com/acme/module-owner.git@0123456789abcdef0123456789abcdef01234567 \
+  --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output "$RUNNER_TEMP/module-preview.json"
+```
+
+Authorization is artifact-specific. A contract may be requested only when the producer repository
+and commit match that contract module's selected repository and commit. When an image's selected
+module does not match the producer, that image must independently authorize the producer's canonical
+Git repository in the consumer policy:
+
+```json
+{
+  "resource": "module-c-api",
+  "resourceKind": "container",
+  "repositories": [
+    "ghcr.io/acme/module-c/api"
+  ],
+  "producerRepositories": [
+    "https://github.com/acme/image-builder.git"
+  ],
+  "required": true
+}
+```
+
+`producerRepositories` authorizes who may request that image override; it does not assert OCI build
+provenance. Leave it empty or omit it when only the selected module repository may produce the
+image. Selecting the producer repository as some other dependency grants no authority over the
+contract or images of this module. A descriptor whose own module selection is overridden as above
+is therefore image-only and must offer at least one immutable image.
 
 ## Consumer policy
 
@@ -229,6 +274,9 @@ This fragment represents the corresponding fields inside `contract`. Source fall
 `dotnet restore` and `dotnet pack` commands to execute MSBuild from the producer commit, so run it in
 a no-secrets job. `allowedPackProperties` applies only to fallback mode and must be empty or omitted
 in published mode. Every declared contract policy must enable exactly one materialization mode.
+All transitive package dependencies of a published or fallback-built contract must already be
+resolvable from consumer-approved NuGet sources. The preview protocol does not publish dependencies
+or infer release order between independently owned packages.
 
 ## Verify and materialize in Repo D
 
@@ -294,6 +342,10 @@ The image-only GitHub environment contains `ModulePreview__Resolution`; it does 
 
 The work directory must be empty. Authentication for Git, NuGet, and OCI registries is configured by
 the workflow and never appears in the request, descriptor, policy, or resolution.
+`--nuget-config` is passed to `dotnet restore` as `--configfile`, so NuGet uses only that file rather
+than its normal configuration hierarchy. Include every required package source, source mapping, and
+credential in that file. Omit `--nuget-config` to use NuGet's normal machine, user, and repository
+configuration chain.
 When source fallback fetches a private GitHub HTTPS repository, `materialize` uses the configured
 `gh` executable as a process-scoped Git credential helper. Set `GH_TOKEN` or `GITHUB_TOKEN` for that
 process, and use `--gh-executable <path>` only when `gh` is not on `PATH`. No global Git configuration
@@ -390,6 +442,7 @@ and uploads the trusted resolution and diagnostics.
 | Required contract omitted | Repo D does not allow an image-only request for that module | Include the contract or review the policy and set contract `required` to `false` |
 | Missing required image | The request could fall back to building source | Publish the image and pass its immutable digest |
 | Unauthorized repository or resource | Repo C attempted to widen Repo D's trust boundary | Review and update Repo D's policy, not the request |
+| Unauthorized external image producer | An image's policy does not allow the request producer repository | Add the canonical repository to that image's reviewed `producerRepositories`, or produce it from the selected module repository |
 | Contract identity mismatch | The restored or packed nuspec differs from the request | Fix the published package or producer package ID/version |
 | Published contract resolution fails | The exact version is absent, inaccessible, or NuGet authentication is missing | Publish or grant access to the exact version, then retry |
 | Image inspect failure | The digest is absent, inaccessible, or authentication is missing | Publish/grant access, then retry the same digest |

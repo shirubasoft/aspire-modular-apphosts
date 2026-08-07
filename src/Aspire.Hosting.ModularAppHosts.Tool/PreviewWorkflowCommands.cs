@@ -39,7 +39,7 @@ internal static partial class PreviewTool
         {
             Producer = producer
         };
-        manifest.Modules.Add(new ModulePreviewSelection
+        var moduleSelection = new ModulePreviewSelection
         {
             Name = descriptor.Module,
             Repository = producer.Repository,
@@ -47,12 +47,29 @@ internal static partial class PreviewTool
             Branch = producer.Branch,
             BaseRef = producer.BaseRef,
             BaseCommit = producer.BaseCommit
-        });
+        };
+        var moduleSelectionOverridden = false;
 
         foreach (var pin in options.Many("pin").Concat(options.Many("dependency")))
         {
-            manifest.Modules.Add(ParsePin(pin));
+            var selection = ParsePin(pin);
+            if (string.Equals(selection.Name, descriptor.Module, StringComparison.OrdinalIgnoreCase))
+            {
+                if (moduleSelectionOverridden)
+                {
+                    throw new PreviewToolException(
+                        $"Module selection '{descriptor.Module}' was specified more than once.");
+                }
+
+                moduleSelection = selection;
+                moduleSelectionOverridden = true;
+            }
+            else
+            {
+                manifest.Modules.Add(selection);
+            }
         }
+        manifest.Modules.Add(moduleSelection);
 
         if (descriptor.Contract is not null)
         {
@@ -125,6 +142,22 @@ internal static partial class PreviewTool
             throw new PreviewToolException(
                 $"Image resource '{suppliedImages.Keys.Order(StringComparer.OrdinalIgnoreCase).First()}' " +
                 "is not declared by the producer descriptor.");
+        }
+
+        if (manifest.Contracts.Count == 0 && manifest.Images.Count == 0)
+        {
+            throw new PreviewToolException(
+                "A producer descriptor must offer at least one contract package or immutable image.");
+        }
+
+        var producerOwnsDescriptorModule =
+            string.Equals(moduleSelection.Repository, producer.Repository, StringComparison.Ordinal) &&
+            string.Equals(moduleSelection.Commit, producer.Commit, StringComparison.OrdinalIgnoreCase);
+        if (manifest.Contracts.Count > 0 && !producerOwnsDescriptorModule)
+        {
+            throw new PreviewToolException(
+                $"The preview producer repository and commit do not match module '{descriptor.Module}', " +
+                "so the producer cannot request its contract package. Use an image-only descriptor.");
         }
 
         SortManifest(manifest);
