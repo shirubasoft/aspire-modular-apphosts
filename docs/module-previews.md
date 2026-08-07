@@ -113,19 +113,19 @@ version as its first argument.
 At run time the workflow:
 
 1. Checks out an explicit `source-ref` branch (or the current branch name), with full history, then
-   verifies that `HEAD` is its pushed `origin` tip before publishing anything. Tags and commit IDs
-   are rejected because `preview produce` requires an attached, pushed branch.
+   uses `preview export` to verify that `HEAD` is its pushed `origin` tip before publishing anything.
+   Tags and commit IDs are rejected because preview production requires an attached, pushed branch.
 2. Writes every generated manifest and tool configuration below `${{ runner.temp }}`, keeping the
    producer worktree clean.
-3. Installs Aspire CLI and Modular AppHosts into separate tool paths using a NuGet.org-only
-   configuration and an isolated package cache. It does not use a multi-tool manifest.
-4. Runs `aspire do describe-images`, selects the descriptor-owned effective resources, then runs
-   `aspire do push`. The push pipeline builds each declared module image before pushing it.
-5. Reads `module-images.json`, requires one build publisher and push target for every descriptor
-   image, asks the registry for each pushed manifest digest, and derives the repository from the
-   effective `pushReference` (including registry mappings). It passes that pushed repository and
-   immutable digest to `preview produce` together with the exact contract version.
-6. Runs `preview trigger --wait --github-output "$GITHUB_OUTPUT"`, exposes the consumer run ID and
+3. Uses `dotnet new nugetconfig`, then installs Aspire CLI and Modular AppHosts into separate tool
+   paths with a NuGet.org-only configuration and isolated package cache.
+4. Runs `preview produce --apphost`. The tool invokes `aspire do describe-images`, joins the typed
+   image description to the producer descriptor, and invokes the exact named
+   `push-<effective-resource>` steps in one Aspire pipeline run. Push dependencies build each image.
+5. Uses `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` for each pushed reference.
+   The tool validates the digest and effective repository (including registry mappings) while it
+   writes the immutable preview request. The generated shell does not parse JSON with `jq`.
+6. Runs `gh workflow run` and `gh run watch --exit-status` directly, exposes the consumer run ID and
    URL as reusable-workflow outputs, links the consumer run in the job summary, and uploads the
    generated preview documents for diagnosis.
 
@@ -144,6 +144,22 @@ dotnet modular-apphosts preview produce \
   --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --output module-preview.json
 ```
+
+Alternatively, let `produce` discover, build, push, and inspect every image declared by the
+descriptor from an AppHost. The artifacts directory receives `module-images.json` and Aspire
+pipeline diagnostics:
+
+```bash
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
+  --apphost src/RepoC.AppHost/RepoC.AppHost.csproj \
+  --artifacts-directory "$RUNNER_TEMP/module-preview/images" \
+  --output "$RUNNER_TEMP/module-preview/module-preview.json"
+```
+
+This mode invokes the exact `push-<effective-resource>` Aspire steps and obtains each immutable
+digest through Docker's direct manifest-digest format. Do not combine `--apphost` with `--image`.
 
 The contract version may instead be committed as `contract.version` in the descriptor. Supplying
 `--contract-version` overrides that value, which lets CI pass the exact version it just published.

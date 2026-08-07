@@ -19,15 +19,39 @@ internal static partial class PreviewTool
         var output = options.Required("output");
         var workingDirectory = Path.GetFullPath(options.Optional("working-directory") ?? Environment.CurrentDirectory);
         var gitExecutable = options.Optional("git-executable") ?? "git";
+        var appHost = options.Optional("apphost") is { } appHostPath
+            ? Path.GetFullPath(appHostPath, workingDirectory)
+            : null;
+        var artifactsDirectory = options.Optional("artifacts-directory") is { } artifactsPath
+            ? Path.GetFullPath(artifactsPath, workingDirectory)
+            : null;
+        var aspireExecutable = options.Optional("aspire-executable") ?? "aspire";
+        var dockerExecutable = options.Optional("docker-executable") ?? "docker";
         options.EnsureOnly(
             "descriptor",
             "output",
             "working-directory",
             "git-executable",
+            "apphost",
+            "artifacts-directory",
+            "aspire-executable",
+            "docker-executable",
             "contract-version",
             "image",
             "pin",
             "dependency");
+
+        if ((appHost is null) != (artifactsDirectory is null))
+        {
+            throw new PreviewToolException(
+                "--apphost and --artifacts-directory must be specified together.");
+        }
+
+        if (appHost is not null && options.Many("image").Count > 0)
+        {
+            throw new PreviewToolException(
+                "--image cannot be combined with --apphost; AppHost image outputs are discovered automatically.");
+        }
 
         var descriptor = await ModulePreviewProducerDescriptor.LoadAsync(
             Path.GetFullPath(descriptorPath, workingDirectory),
@@ -95,10 +119,18 @@ internal static partial class PreviewTool
                 "--contract-version cannot be used when the producer descriptor does not declare a contract.");
         }
 
+        var producedImages = appHost is null
+            ? options.Many("image").Select(ParseProducedImage)
+            : await PublishAppHostImagesAsync(
+                descriptor,
+                appHost,
+                artifactsDirectory!,
+                aspireExecutable,
+                dockerExecutable,
+                cancellationToken).ConfigureAwait(false);
         var suppliedImages = new Dictionary<string, ProducedImage>(StringComparer.OrdinalIgnoreCase);
-        foreach (var value in options.Many("image"))
+        foreach (var image in producedImages)
         {
-            var image = ParseProducedImage(value);
             if (!suppliedImages.TryAdd(image.Resource, image))
             {
                 throw new PreviewToolException(
@@ -164,6 +196,132 @@ internal static partial class PreviewTool
         await manifest.SaveAsync(output, cancellationToken).ConfigureAwait(false);
         await Console.Out.WriteLineAsync(Path.GetFullPath(output)).ConfigureAwait(false);
         return 0;
+    }
+
+    private static async Task<IReadOnlyList<ProducedImage>> PublishAppHostImagesAsync(
+        ModulePreviewProducerDescriptor descriptor,
+        string appHost,
+        string artifactsDirectory,
+        string aspireExecutable,
+        string dockerExecutable,
+        CancellationToken cancellationToken)
+    {
+        var descriptionDirectory = Path.Combine(artifactsDirectory, "description");
+        Directory.CreateDirectory(descriptionDirectory);
+        var describeResult = await RunCommandAsync(
+            aspireExecutable,
+            [
+                "do", "describe-images",
+                "--apphost", appHost,
+                "--output-path", descriptionDirectory,
+                "--non-interactive"
+            ],
+            Environment.CurrentDirectory,
+            standardInput: null,
+            cancellationToken,
+            applyTimeout: false).ConfigureAwait(false);
+        EnsureSuccess(describeResult, "Aspire image description");
+
+        var descriptionPath = Path.Combine(descriptionDirectory, "module-images.json");
+        var description = await ModuleImageDescriptionDocument.LoadAsync(
+            descriptionPath,
+            cancellationToken).ConfigureAwait(false);
+        var selectedImages = new List<ModuleImageDescription>();
+        foreach (var declaredImage in descriptor.Images)
+        {
+            var matches = description.Images
+                .Where(image =>
+                    string.Equals(image.Module, descriptor.Module, StringComparison.Ordinal) &&
+                    string.Equals(image.Resource, declaredImage.Resource, StringComparison.Ordinal) &&
+                    image.Build is not null &&
+                    image.PushReference is not null)
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                throw new PreviewToolException(
+                    $"Producer descriptor image '{declaredImage.Resource}' must resolve to exactly one " +
+                    "AppHost image with a build publisher and push target.");
+            }
+
+            var expectedKind = Enum.Parse<ModulePreviewResourceKind>(
+                declaredImage.ResourceKind,
+                ignoreCase: true);
+            if (matches[0].ResourceKind != expectedKind)
+            {
+                throw new PreviewToolException(
+                    $"Producer descriptor image '{declaredImage.Resource}' declares resource kind " +
+                    $"'{expectedKind}', but the AppHost describes '{matches[0].ResourceKind}'.");
+            }
+
+            selectedImages.Add(matches[0]);
+        }
+
+        var pushDirectory = Path.Combine(artifactsDirectory, "push");
+        if (selectedImages.Count > 0)
+        {
+            Directory.CreateDirectory(pushDirectory);
+            var pushSteps = selectedImages
+                .Select(image => $"push-{image.EffectiveResource}")
+                .ToArray();
+            var pushArguments = new List<string> { "do" };
+            pushArguments.AddRange(pushSteps);
+            pushArguments.AddRange(
+                [
+                    "--apphost", appHost,
+                    "--output-path", pushDirectory,
+                    "--non-interactive"
+                ]);
+            var pushResult = await RunCommandAsync(
+                aspireExecutable,
+                pushArguments,
+                Environment.CurrentDirectory,
+                standardInput: null,
+                cancellationToken,
+                applyTimeout: false).ConfigureAwait(false);
+            EnsureSuccess(
+                pushResult,
+                $"Aspire pipeline steps '{string.Join("', '", pushSteps)}'");
+        }
+
+        var producedImages = new List<ProducedImage>(selectedImages.Count);
+        foreach (var image in selectedImages)
+        {
+            var pushReference = image.PushReference!;
+            var inspectResult = await RunCommandAsync(
+                dockerExecutable,
+                [
+                    "buildx", "imagetools", "inspect", pushReference,
+                    "--format", "{{.Manifest.Digest}}"
+                ],
+                Environment.CurrentDirectory,
+                standardInput: null,
+                cancellationToken).ConfigureAwait(false);
+            EnsureSuccess(inspectResult, $"Inspect pushed image '{pushReference}'");
+            var repository = GetImageRepository(pushReference);
+            producedImages.Add(ParseProducedImage(
+                $"{image.Resource}={repository}@{inspectResult.StandardOutput.Trim()}"));
+        }
+
+        return producedImages;
+    }
+
+    private static string GetImageRepository(string reference)
+    {
+        var digestSeparator = reference.LastIndexOf('@');
+        if (digestSeparator > 0)
+        {
+            return reference[..digestSeparator];
+        }
+
+        var lastSlash = reference.LastIndexOf('/');
+        var tagSeparator = reference.LastIndexOf(':');
+        if (tagSeparator > lastSlash)
+        {
+            return reference[..tagSeparator];
+        }
+
+        throw new PreviewToolException(
+            $"Pushed image reference '{reference}' must include a tag or digest.");
     }
 
     private static async Task<int> VerifyAsync(

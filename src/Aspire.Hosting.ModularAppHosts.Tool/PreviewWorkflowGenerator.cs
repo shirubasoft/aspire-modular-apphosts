@@ -106,6 +106,7 @@ internal static partial class PreviewTool
 
         var workflow = RenderProducerWorkflow(new ProducerWorkflowOptions(
             descriptorPath,
+            descriptor.Module,
             appHostPath,
             consumerRepository,
             consumerWorkflow,
@@ -265,7 +266,7 @@ internal static partial class PreviewTool
         builder.AppendLine("      PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview");
         builder.AppendLine("      ASPIRE_TOOL_DIR: ${{ runner.temp }}/tools/aspire");
         builder.AppendLine("      MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/tools/modular-apphosts");
-        builder.AppendLine("      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/modular-apphosts-tools.nuget.config");
+        builder.AppendLine("      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/tools/nuget/nuget.config");
         builder.AppendLine("      NUGET_PACKAGES: ${{ runner.temp }}/nuget-packages");
         builder.AppendLine("      Aspire__ModularAppHosts__PublishImages: 'true'");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"      GH_TOKEN: ${{{{ secrets.{options.GitHubTokenSecret} }}}}");
@@ -286,21 +287,6 @@ internal static partial class PreviewTool
         builder.AppendLine("          ref: ${{ inputs.source-ref || github.head_ref || github.ref_name }}");
         builder.AppendLine("          fetch-depth: 0");
         builder.AppendLine();
-        builder.AppendLine("      - name: Verify attached pushed branch");
-        builder.AppendLine("        shell: bash");
-        builder.AppendLine("        run: |");
-        builder.AppendLine("          set -euo pipefail");
-        builder.AppendLine("          branch=$(git symbolic-ref --quiet --short HEAD) || {");
-        builder.AppendLine("            echo 'The producer checkout must be attached to a branch.' >&2");
-        builder.AppendLine("            exit 1");
-        builder.AppendLine("          }");
-        builder.AppendLine("          commit=$(git rev-parse HEAD)");
-        builder.AppendLine("          remote_commit=$(git ls-remote --heads origin \"refs/heads/$branch\" | awk '{print $1}')");
-        builder.AppendLine("          if [[ -z \"$remote_commit\" || \"$remote_commit\" != \"$commit\" ]]; then");
-        builder.AppendLine("            echo \"HEAD must be the pushed tip of origin branch '$branch'.\" >&2");
-        builder.AppendLine("            exit 1");
-        builder.AppendLine("          fi");
-        builder.AppendLine();
         builder.AppendLine("      - name: Set up .NET");
         builder.AppendLine("        uses: actions/setup-dotnet@v5");
         builder.AppendLine("        with:");
@@ -311,14 +297,7 @@ internal static partial class PreviewTool
         builder.AppendLine("        run: |");
         builder.AppendLine("          set -euo pipefail");
         builder.AppendLine("          mkdir -p \"$PREVIEW_ARTIFACTS_DIR\" \"$ASPIRE_TOOL_DIR\" \"$MODULAR_APPHOSTS_TOOL_DIR\"");
-        builder.AppendLine("          printf '%s\\n' \\");
-        builder.AppendLine("            '<?xml version=\"1.0\" encoding=\"utf-8\"?>' \\");
-        builder.AppendLine("            '<configuration>' \\");
-        builder.AppendLine("            '  <packageSources>' \\");
-        builder.AppendLine("            '    <clear />' \\");
-        builder.AppendLine("            '    <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" />' \\");
-        builder.AppendLine("            '  </packageSources>' \\");
-        builder.AppendLine("            '</configuration>' > \"$TOOLS_NUGET_CONFIG\"");
+        builder.AppendLine("          dotnet new nugetconfig --output \"$(dirname \"$TOOLS_NUGET_CONFIG\")\" --force");
         builder.AppendLine("          dotnet tool install aspire.cli \\");
         builder.AppendLine("            --tool-path \"$ASPIRE_TOOL_DIR\" \\");
         builder.AppendLine("            --version \"$ASPIRE_VERSION\" \\");
@@ -327,6 +306,15 @@ internal static partial class PreviewTool
         builder.AppendLine("            --tool-path \"$MODULAR_APPHOSTS_TOOL_DIR\" \\");
         builder.AppendLine("            --version \"$MODULAR_APPHOSTS_VERSION\" \\");
         builder.AppendLine("            --configfile \"$TOOLS_NUGET_CONFIG\"");
+        builder.AppendLine();
+        builder.AppendLine("      - name: Verify attached pushed branch");
+        builder.AppendLine("        shell: bash");
+        builder.AppendLine("        run: |");
+        builder.AppendLine("          set -euo pipefail");
+        builder.AppendLine("          \"$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts\" preview export \\");
+        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            --module {ShellWord(options.Module)} \\");
+        builder.AppendLine("            --output \"$PREVIEW_ARTIFACTS_DIR/producer.json\" \\");
+        builder.AppendLine("            --working-directory \"$GITHUB_WORKSPACE\"");
 
         AppendScriptStep(builder, "Authenticate package feed", options.PackageAuthenticationScript);
         if (options.ContractPublishScript is not null)
@@ -341,95 +329,18 @@ internal static partial class PreviewTool
 
         AppendScriptStep(builder, "Authenticate image registries", options.RegistryAuthenticationScript);
         builder.AppendLine();
-        builder.AppendLine("      - name: Describe module images");
-        builder.AppendLine("        shell: bash");
-        builder.AppendLine("        run: |");
-        builder.AppendLine("          set -euo pipefail");
-        builder.AppendLine("          mkdir -p \"$PREVIEW_ARTIFACTS_DIR/images\"");
-        builder.AppendLine("          \"$ASPIRE_TOOL_DIR/aspire\" do describe-images \\");
-        builder.AppendLine("            --apphost \"$GITHUB_WORKSPACE/$APPHOST\" \\");
-        builder.AppendLine("            --output-path \"$PREVIEW_ARTIFACTS_DIR/images\" \\");
-        builder.AppendLine("            --non-interactive");
-        builder.AppendLine();
-        builder.AppendLine("      - name: Build and push declared images");
-        builder.AppendLine("        shell: bash");
-        builder.AppendLine("        run: |");
-        builder.AppendLine("          set -euo pipefail");
-        builder.AppendLine("          image_description=\"$PREVIEW_ARTIFACTS_DIR/images/module-images.json\"");
-        builder.AppendLine("          missing=$(jq -r --slurpfile descriptor \"$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR\" '");
-        builder.AppendLine("            . as $description");
-        builder.AppendLine("            | $descriptor[0].images[].resource as $resource");
-        builder.AppendLine("            | select([");
-        builder.AppendLine("                $description.images[]");
-        builder.AppendLine("                | select(.module == $descriptor[0].module");
-        builder.AppendLine("                    and .resource == $resource");
-        builder.AppendLine("                    and .build != null");
-        builder.AppendLine("                    and .pushReference != null)");
-        builder.AppendLine("              ] | length != 1)");
-        builder.AppendLine("            | $resource");
-        builder.AppendLine("          ' \"$image_description\")");
-        builder.AppendLine("          if [[ -n \"$missing\" ]]; then");
-        builder.AppendLine("            echo 'Every descriptor image must have exactly one build publisher and push target.' >&2");
-        builder.AppendLine("            printf 'Missing or ambiguous resources:\\n%s\\n' \"$missing\" >&2");
-        builder.AppendLine("            exit 1");
-        builder.AppendLine("          fi");
-        builder.AppendLine("          mapfile -t resources < <(");
-        builder.AppendLine("            jq -r --slurpfile descriptor \"$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR\" '");
-        builder.AppendLine("              .images[]");
-        builder.AppendLine("              | select(.module == $descriptor[0].module)");
-        builder.AppendLine("              | select(.resource as $resource");
-        builder.AppendLine("                  | ($descriptor[0].images | map(.resource) | index($resource)))");
-        builder.AppendLine("              | select(.build != null and .pushReference != null)");
-        builder.AppendLine("              | .effectiveResource");
-        builder.AppendLine("            ' \"$image_description\" | sort -u");
-        builder.AppendLine("          )");
-        builder.AppendLine("          if (( ${#resources[@]} > 0 )); then");
-        builder.AppendLine("            mkdir -p \"$PREVIEW_ARTIFACTS_DIR/push\"");
-        builder.AppendLine("            \"$ASPIRE_TOOL_DIR/aspire\" do push \\");
-        builder.AppendLine("              --apphost \"$GITHUB_WORKSPACE/$APPHOST\" \\");
-        builder.AppendLine("              --output-path \"$PREVIEW_ARTIFACTS_DIR/push\" \\");
-        builder.AppendLine("              --non-interactive \\");
-        builder.AppendLine("              \"${resources[@]}\"");
-        builder.AppendLine("          fi");
-        builder.AppendLine();
         builder.AppendLine("      - name: Produce immutable preview request");
         builder.AppendLine("        shell: bash");
         builder.AppendLine("        run: |");
         builder.AppendLine("          set -euo pipefail");
-        builder.AppendLine("          image_description=\"$PREVIEW_ARTIFACTS_DIR/images/module-images.json\"");
-        builder.AppendLine("          image_args=()");
-        builder.AppendLine("          while IFS=$'\\t' read -r resource push_reference; do");
-        builder.AppendLine("            if [[ \"$push_reference\" == *@* ]]; then");
-        builder.AppendLine("              pushed_repository=${push_reference%@*}");
-        builder.AppendLine("            elif [[ \"${push_reference##*/}\" == *:* ]]; then");
-        builder.AppendLine("              pushed_repository=${push_reference%:*}");
-        builder.AppendLine("            else");
-        builder.AppendLine("              echo \"Image '$resource' has an untagged push reference: $push_reference\" >&2");
-        builder.AppendLine("              exit 1");
-        builder.AppendLine("            fi");
-        builder.AppendLine("            manifest=$(docker buildx imagetools inspect \\");
-        builder.AppendLine("              \"$push_reference\" --format '{{json .Manifest}}')");
-        builder.AppendLine("            digest=$(jq -er '.digest | select(test(\"^sha256:[0-9a-f]{64}$\"))' <<< \"$manifest\")");
-        builder.AppendLine("            image_args+=(--image \"$resource=$pushed_repository@$digest\")");
-        builder.AppendLine("          done < <(");
-        builder.AppendLine("            jq -r --slurpfile descriptor \"$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR\" '");
-        builder.AppendLine("              .images[]");
-        builder.AppendLine("              | select(.module == $descriptor[0].module)");
-        builder.AppendLine("              | select(.resource as $resource");
-        builder.AppendLine("                  | ($descriptor[0].images | map(.resource) | index($resource)))");
-        builder.AppendLine("              | select(.build != null and .pushReference != null)");
-        builder.AppendLine("              | [");
-        builder.AppendLine("                  .resource,");
-        builder.AppendLine("                  .pushReference");
-        builder.AppendLine("                ]");
-        builder.AppendLine("              | @tsv");
-        builder.AppendLine("            ' \"$image_description\"");
-        builder.AppendLine("          )");
         builder.AppendLine("          produce_args=(");
         builder.AppendLine("            preview produce");
         builder.AppendLine("            --descriptor \"$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR\"");
         builder.AppendLine("            --output \"$PREVIEW_ARTIFACTS_DIR/module-preview.json\"");
         builder.AppendLine("            --working-directory \"$GITHUB_WORKSPACE\"");
+        builder.AppendLine("            --apphost \"$GITHUB_WORKSPACE/$APPHOST\"");
+        builder.AppendLine("            --artifacts-directory \"$PREVIEW_ARTIFACTS_DIR/images\"");
+        builder.AppendLine("            --aspire-executable \"$ASPIRE_TOOL_DIR/aspire\"");
         if (options.HasContract)
         {
             builder.AppendLine("            --contract-version \"$CONTRACT_VERSION\"");
@@ -437,20 +348,27 @@ internal static partial class PreviewTool
 
         builder.AppendLine("          )");
         builder.AppendLine("          \"$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts\" \\");
-        builder.AppendLine("            \"${produce_args[@]}\" \"${image_args[@]}\"");
+        builder.AppendLine("            \"${produce_args[@]}\"");
         builder.AppendLine();
         builder.AppendLine("      - name: Trigger and wait for consumer E2E");
         builder.AppendLine("        id: trigger");
         builder.AppendLine("        shell: bash");
         builder.AppendLine("        run: |");
         builder.AppendLine("          set -euo pipefail");
-        builder.AppendLine("          \"$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts\" preview trigger \\");
-        builder.AppendLine("            --manifest \"$PREVIEW_ARTIFACTS_DIR/module-preview.json\" \\");
+        builder.AppendLine("          run_url=$(gh workflow run \\");
+        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            {ShellWord(options.ConsumerWorkflow)} \\");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            --repo {ShellWord(options.ConsumerRepository)} \\");
-        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            --workflow {ShellWord(options.ConsumerWorkflow)} \\");
         builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"            --ref {ShellWord(options.ConsumerRef)} \\");
-        builder.AppendLine("            --wait \\");
-        builder.AppendLine("            --github-output \"$GITHUB_OUTPUT\"");
+        builder.AppendLine("            --raw-field \"manifest_json=$(<\"$PREVIEW_ARTIFACTS_DIR/module-preview.json\")\")");
+        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          expected_run_prefix={ShellWord($"https://github.com/{options.ConsumerRepository}/actions/runs/")}");
+        builder.AppendLine("          run_id=${run_url##*/}");
+        builder.AppendLine("          if [[ ! \"$run_id\" =~ ^[0-9]+$ || \"$run_url\" != \"$expected_run_prefix$run_id\" ]]; then");
+        builder.AppendLine("            echo \"gh workflow run returned an unexpected run URL: $run_url\" >&2");
+        builder.AppendLine("            exit 1");
+        builder.AppendLine("          fi");
+        builder.AppendLine("          printf 'workflow_run_id=%s\\nworkflow_run_url=%s\\n' \\");
+        builder.AppendLine("            \"$run_id\" \"$run_url\" >> \"$GITHUB_OUTPUT\"");
+        builder.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $"          gh run watch \"$run_id\" --repo {ShellWord(options.ConsumerRepository)} --exit-status");
         builder.AppendLine();
         builder.AppendLine("      - name: Link consumer run");
         builder.AppendLine("        if: always() && steps.trigger.outputs.workflow_run_url != ''");
@@ -572,6 +490,7 @@ internal static partial class PreviewTool
 
     private sealed record ProducerWorkflowOptions(
         string DescriptorPath,
+        string Module,
         string AppHostPath,
         string ConsumerRepository,
         string ConsumerWorkflow,

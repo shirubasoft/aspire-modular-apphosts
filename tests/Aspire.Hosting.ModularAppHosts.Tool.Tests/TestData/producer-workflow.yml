@@ -61,7 +61,7 @@ jobs:
       PREVIEW_ARTIFACTS_DIR: ${{ runner.temp }}/module-preview
       ASPIRE_TOOL_DIR: ${{ runner.temp }}/tools/aspire
       MODULAR_APPHOSTS_TOOL_DIR: ${{ runner.temp }}/tools/modular-apphosts
-      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/modular-apphosts-tools.nuget.config
+      TOOLS_NUGET_CONFIG: ${{ runner.temp }}/tools/nuget/nuget.config
       NUGET_PACKAGES: ${{ runner.temp }}/nuget-packages
       Aspire__ModularAppHosts__PublishImages: 'true'
       GH_TOKEN: ${{ secrets.PREVIEW_GITHUB_TOKEN }}
@@ -75,21 +75,6 @@ jobs:
           ref: ${{ inputs.source-ref || github.head_ref || github.ref_name }}
           fetch-depth: 0
 
-      - name: Verify attached pushed branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          branch=$(git symbolic-ref --quiet --short HEAD) || {
-            echo 'The producer checkout must be attached to a branch.' >&2
-            exit 1
-          }
-          commit=$(git rev-parse HEAD)
-          remote_commit=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
-          if [[ -z "$remote_commit" || "$remote_commit" != "$commit" ]]; then
-            echo "HEAD must be the pushed tip of origin branch '$branch'." >&2
-            exit 1
-          fi
-
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -100,14 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$PREVIEW_ARTIFACTS_DIR" "$ASPIRE_TOOL_DIR" "$MODULAR_APPHOSTS_TOOL_DIR"
-          printf '%s\n' \
-            '<?xml version="1.0" encoding="utf-8"?>' \
-            '<configuration>' \
-            '  <packageSources>' \
-            '    <clear />' \
-            '    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />' \
-            '  </packageSources>' \
-            '</configuration>' > "$TOOLS_NUGET_CONFIG"
+          dotnet new nugetconfig --output "$(dirname "$TOOLS_NUGET_CONFIG")" --force
           dotnet tool install aspire.cli \
             --tool-path "$ASPIRE_TOOL_DIR" \
             --version "$ASPIRE_VERSION" \
@@ -116,6 +94,15 @@ jobs:
             --tool-path "$MODULAR_APPHOSTS_TOOL_DIR" \
             --version "$MODULAR_APPHOSTS_VERSION" \
             --configfile "$TOOLS_NUGET_CONFIG"
+
+      - name: Verify attached pushed branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts" preview export \
+            --module 'sample-module' \
+            --output "$PREVIEW_ARTIFACTS_DIR/producer.json" \
+            --working-directory "$GITHUB_WORKSPACE"
 
       - name: Authenticate package feed
         shell: bash
@@ -135,112 +122,42 @@ jobs:
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/.github/scripts/registry-login.sh"
 
-      - name: Describe module images
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$PREVIEW_ARTIFACTS_DIR/images"
-          "$ASPIRE_TOOL_DIR/aspire" do describe-images \
-            --apphost "$GITHUB_WORKSPACE/$APPHOST" \
-            --output-path "$PREVIEW_ARTIFACTS_DIR/images" \
-            --non-interactive
-
-      - name: Build and push declared images
-        shell: bash
-        run: |
-          set -euo pipefail
-          image_description="$PREVIEW_ARTIFACTS_DIR/images/module-images.json"
-          missing=$(jq -r --slurpfile descriptor "$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR" '
-            . as $description
-            | $descriptor[0].images[].resource as $resource
-            | select([
-                $description.images[]
-                | select(.module == $descriptor[0].module
-                    and .resource == $resource
-                    and .build != null
-                    and .pushReference != null)
-              ] | length != 1)
-            | $resource
-          ' "$image_description")
-          if [[ -n "$missing" ]]; then
-            echo 'Every descriptor image must have exactly one build publisher and push target.' >&2
-            printf 'Missing or ambiguous resources:\n%s\n' "$missing" >&2
-            exit 1
-          fi
-          mapfile -t resources < <(
-            jq -r --slurpfile descriptor "$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR" '
-              .images[]
-              | select(.module == $descriptor[0].module)
-              | select(.resource as $resource
-                  | ($descriptor[0].images | map(.resource) | index($resource)))
-              | select(.build != null and .pushReference != null)
-              | .effectiveResource
-            ' "$image_description" | sort -u
-          )
-          if (( ${#resources[@]} > 0 )); then
-            mkdir -p "$PREVIEW_ARTIFACTS_DIR/push"
-            "$ASPIRE_TOOL_DIR/aspire" do push \
-              --apphost "$GITHUB_WORKSPACE/$APPHOST" \
-              --output-path "$PREVIEW_ARTIFACTS_DIR/push" \
-              --non-interactive \
-              "${resources[@]}"
-          fi
-
       - name: Produce immutable preview request
         shell: bash
         run: |
           set -euo pipefail
-          image_description="$PREVIEW_ARTIFACTS_DIR/images/module-images.json"
-          image_args=()
-          while IFS=$'\t' read -r resource push_reference; do
-            if [[ "$push_reference" == *@* ]]; then
-              pushed_repository=${push_reference%@*}
-            elif [[ "${push_reference##*/}" == *:* ]]; then
-              pushed_repository=${push_reference%:*}
-            else
-              echo "Image '$resource' has an untagged push reference: $push_reference" >&2
-              exit 1
-            fi
-            manifest=$(docker buildx imagetools inspect \
-              "$push_reference" --format '{{json .Manifest}}')
-            digest=$(jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest")
-            image_args+=(--image "$resource=$pushed_repository@$digest")
-          done < <(
-            jq -r --slurpfile descriptor "$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR" '
-              .images[]
-              | select(.module == $descriptor[0].module)
-              | select(.resource as $resource
-                  | ($descriptor[0].images | map(.resource) | index($resource)))
-              | select(.build != null and .pushReference != null)
-              | [
-                  .resource,
-                  .pushReference
-                ]
-              | @tsv
-            ' "$image_description"
-          )
           produce_args=(
             preview produce
             --descriptor "$GITHUB_WORKSPACE/$PRODUCER_DESCRIPTOR"
             --output "$PREVIEW_ARTIFACTS_DIR/module-preview.json"
             --working-directory "$GITHUB_WORKSPACE"
+            --apphost "$GITHUB_WORKSPACE/$APPHOST"
+            --artifacts-directory "$PREVIEW_ARTIFACTS_DIR/images"
+            --aspire-executable "$ASPIRE_TOOL_DIR/aspire"
             --contract-version "$CONTRACT_VERSION"
           )
           "$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts" \
-            "${produce_args[@]}" "${image_args[@]}"
+            "${produce_args[@]}"
 
       - name: Trigger and wait for consumer E2E
         id: trigger
         shell: bash
         run: |
           set -euo pipefail
-          "$MODULAR_APPHOSTS_TOOL_DIR/dotnet-modular-apphosts" preview trigger \
-            --manifest "$PREVIEW_ARTIFACTS_DIR/module-preview.json" \
+          run_url=$(gh workflow run \
+            'e2e.yml' \
             --repo 'example/consumer-tests' \
-            --workflow 'e2e.yml' \
             --ref 'main' \
-            --wait \
-            --github-output "$GITHUB_OUTPUT"
+            --raw-field "manifest_json=$(<"$PREVIEW_ARTIFACTS_DIR/module-preview.json")")
+          expected_run_prefix='https://github.com/example/consumer-tests/actions/runs/'
+          run_id=${run_url##*/}
+          if [[ ! "$run_id" =~ ^[0-9]+$ || "$run_url" != "$expected_run_prefix$run_id" ]]; then
+            echo "gh workflow run returned an unexpected run URL: $run_url" >&2
+            exit 1
+          fi
+          printf 'workflow_run_id=%s\nworkflow_run_url=%s\n' \
+            "$run_id" "$run_url" >> "$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo 'example/consumer-tests' --exit-status
 
       - name: Link consumer run
         if: always() && steps.trigger.outputs.workflow_run_url != ''

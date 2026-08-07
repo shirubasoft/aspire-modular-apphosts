@@ -124,6 +124,139 @@ public sealed class PreviewWorkflowCommandTests
     }
 
     [Fact]
+    public async Task Produce_discovers_and_pushes_AppHost_images_with_named_Aspire_steps()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var directory = WorkflowTestDirectory.Create();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var descriptorPath = await WriteProducerDescriptorAsync(directory, cancellationToken);
+        var git = await WriteGitExecutableAsync(directory, cancellationToken);
+        var imageDescriptionPath = Path.Combine(directory.Path, "module-images.json");
+        await directory.WriteTextAsync(
+            imageDescriptionPath,
+            $$"""
+            {
+              "schemaVersion": 1,
+              "images": [
+                {
+                  "module": "preview-producer",
+                  "resource": "preview-producer-api",
+                  "effectiveResource": "imported-api",
+                  "resourceKind": "container",
+                  "registry": "ghcr.io",
+                  "repository": "shirubasoft/preview-producer/api",
+                  "tag": "preview",
+                  "digest": null,
+                  "reference": "{{ApiImageRepository}}:preview",
+                  "pullReference": "{{ApiImageRepository}}:preview",
+                  "pushReference": "{{ApiImageRepository}}:preview",
+                  "build": {
+                    "command": "docker",
+                    "arguments": [],
+                    "workingDirectory": "{{directory.Path}}",
+                    "repository": null,
+                    "revision": null,
+                    "step": "build-imported-api"
+                  }
+                },
+                {
+                  "module": "preview-producer",
+                  "resource": "preview-producer-sidecar",
+                  "effectiveResource": "imported-sidecar",
+                  "resourceKind": "container",
+                  "registry": "docker.io",
+                  "repository": "library/nginx",
+                  "tag": "preview",
+                  "digest": null,
+                  "reference": "{{SidecarImageRepository}}:preview",
+                  "pullReference": "{{SidecarImageRepository}}:preview",
+                  "pushReference": "{{SidecarImageRepository}}:preview",
+                  "build": {
+                    "command": "docker",
+                    "arguments": [],
+                    "workingDirectory": "{{directory.Path}}",
+                    "repository": null,
+                    "revision": null,
+                    "step": "build-imported-sidecar"
+                  }
+                }
+              ]
+            }
+            """,
+            cancellationToken);
+        var aspireLog = Path.Combine(directory.Path, "aspire-arguments.txt");
+        var aspire = await directory.WriteExecutableAsync(
+            "fake-aspire",
+            $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\n' "$*" >> '{{aspireLog}}'
+            if [[ "$1" == "do" && "$2" == "describe-images" ]]; then
+              while (( $# > 0 )); do
+                if [[ "$1" == "--output-path" ]]; then
+                  mkdir -p "$2"
+                  cp '{{imageDescriptionPath}}' "$2/module-images.json"
+                  exit 0
+                fi
+                shift
+              done
+              exit 2
+            fi
+            """,
+            cancellationToken);
+        var dockerLog = Path.Combine(directory.Path, "docker-arguments.txt");
+        var docker = await directory.WriteExecutableAsync(
+            "fake-docker",
+            $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            printf '%s\n' "$*" >> '{{dockerLog}}'
+            case "$4" in
+              '{{ApiImageRepository}}:preview') printf '{{ApiImageDigest}}\n' ;;
+              '{{SidecarImageRepository}}:preview') printf '{{SidecarImageDigest}}\n' ;;
+              *) exit 2 ;;
+            esac
+            """,
+            cancellationToken);
+        var manifestPath = Path.Combine(directory.Path, "module-preview.json");
+        var appHostPath = Path.Combine(directory.Path, "Preview.AppHost.csproj");
+        var artifactsDirectory = Path.Combine(directory.Path, "artifacts");
+
+        var exitCode = await PreviewTool.RunAsync(
+            [
+                "preview", "produce",
+                "--descriptor", descriptorPath,
+                "--output", manifestPath,
+                "--working-directory", directory.Path,
+                "--git-executable", git,
+                "--apphost", appHostPath,
+                "--artifacts-directory", artifactsDirectory,
+                "--aspire-executable", aspire,
+                "--docker-executable", docker
+            ],
+            cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        var aspireArguments = await File.ReadAllLinesAsync(aspireLog, cancellationToken);
+        Assert.Equal(2, aspireArguments.Length);
+        Assert.StartsWith("do describe-images ", aspireArguments[0], StringComparison.Ordinal);
+        Assert.StartsWith(
+            "do push-imported-api push-imported-sidecar ",
+            aspireArguments[1],
+            StringComparison.Ordinal);
+        var dockerArguments = await File.ReadAllLinesAsync(dockerLog, cancellationToken);
+        Assert.All(dockerArguments, argument =>
+            Assert.EndsWith("--format {{.Manifest.Digest}}", argument, StringComparison.Ordinal));
+        var manifest = await ModulePreviewManifest.LoadAsync(manifestPath, cancellationToken);
+        Assert.Equal(ApiImageDigest, manifest.Images[0].Sha256);
+        Assert.Equal(SidecarImageDigest, manifest.Images[1].Sha256);
+    }
+
+    [Fact]
     public async Task Materialize_resolves_policy_owned_contract_images_and_GitHub_environment()
     {
         if (OperatingSystem.IsWindows())

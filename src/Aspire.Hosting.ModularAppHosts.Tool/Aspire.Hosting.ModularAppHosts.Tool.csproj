@@ -25,6 +25,8 @@
              Link="ModulePreviewManifest.cs" />
     <Compile Include="../Aspire.Hosting.ModularAppHosts/ModulePreviewResolution.cs"
              Link="ModulePreviewResolution.cs" />
+    <Compile Include="../Aspire.Hosting.ModularAppHosts/ModuleImageDescription.cs"
+             Link="ModuleImageDescription.cs" />
     <Compile Include="../Aspire.Hosting.ModularAppHosts/GitHubGitAuthentication.cs"
              Link="GitHubGitAuthentication.cs" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />

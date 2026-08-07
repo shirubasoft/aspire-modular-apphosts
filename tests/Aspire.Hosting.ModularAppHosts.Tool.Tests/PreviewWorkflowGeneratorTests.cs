@@ -46,21 +46,22 @@ public sealed class PreviewWorkflowGeneratorTests
                 cancellationToken);
             Assert.Equal(NormalizeLineEndings(expected), NormalizeLineEndings(actual));
             Assert.Contains(
-                "branch=$(git symbolic-ref --quiet --short HEAD)",
+                "preview export",
                 actual,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "pushed_repository=${push_reference%:*}",
+                "dotnet new nugetconfig",
                 actual,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "select(.build != null and .pushReference != null)",
+                "--apphost \"$GITHUB_WORKSPACE/$APPHOST\"",
                 actual,
                 StringComparison.Ordinal);
-            Assert.DoesNotContain(
-                ".registry + \"/\" + .repository",
+            Assert.Contains(
+                "gh workflow run",
                 actual,
                 StringComparison.Ordinal);
+            Assert.DoesNotContain("jq", actual, StringComparison.Ordinal);
 
             var parsed = new DeserializerBuilder().Build()
                 .Deserialize<Dictionary<object, object>>(actual);
