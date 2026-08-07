@@ -281,7 +281,9 @@ public static partial class DistributedApplicationModuleExtensions
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
+        var useIsolatedRevisionCheckout = imported && !string.IsNullOrWhiteSpace(repositoryRevision);
         var repositoryResolution = !materializeWithoutRepository &&
+            !useIsolatedRevisionCheckout &&
             autoCloneRepository &&
             (requiresRepository || !string.IsNullOrWhiteSpace(repository))
             ? await ModuleRepositoryDiscovery.ResolveAsync(
@@ -302,7 +304,8 @@ public static partial class DistributedApplicationModuleExtensions
                 $"'{repositoryConfigurationKey}' or call WithRepository() in the module definition.");
         }
 
-        var existingSameWorktreeRepository = imported && !materializeWithoutRepository
+        var existingSameWorktreeRepository = imported && !materializeWithoutRepository &&
+            !useIsolatedRevisionCheckout
             ? await TryGetExistingSameWorktreeRepositoryAsync(
                 builder.AppHostDirectory,
                 repository,

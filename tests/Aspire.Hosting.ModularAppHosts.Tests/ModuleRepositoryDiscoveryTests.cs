@@ -275,6 +275,116 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public async Task Pinned_import_uses_managed_checkout_without_detaching_sibling_worktree()
+    {
+        using var parent = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var appHostRoot = Path.Combine(parent.Path, "consumer");
+        var appHostDirectory = Path.Combine(appHostRoot, "src", "AppHost");
+        var moduleRoot = Path.Combine(parent.Path, "orders");
+        var relativeProjectPath = Path.Combine("src", "Orders.Api", "Orders.Api.csproj");
+        var projectPath = Path.Combine(moduleRoot, relativeProjectPath);
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
+        await InitializeGitAsync(appHostRoot, "consumer-branch");
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        File.WriteAllText(projectPath, ProjectContents);
+        await InitializeGitAsync(moduleRoot, "feature/orders-service");
+        var pinnedCommit = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            moduleRoot,
+            cancellationToken: TestContext.Current.CancellationToken));
+        File.AppendAllText(projectPath, Environment.NewLine + "<!-- current branch -->");
+        await RunGitAsync(moduleRoot, "add", ".");
+        await RunGitAsync(moduleRoot, "commit", "-m", "current branch");
+        var developerCommit = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            moduleRoot,
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(moduleRoot, pinnedCommit);
+            definition.AddProject("orders-api", relativeProjectPath, ModuleProjectPathBase.Repository)
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync(module.Name);
+
+        Assert.Equal("feature/orders-service", await RepositoryInspector.TryGetBranchAsync(
+            moduleRoot,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(developerCommit, await RepositoryInspector.TryResolveCommitAsync(
+            moduleRoot,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var annotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.StartsWith(Path.GetFullPath(imports.Path), annotation.RepositoryPath, StringComparison.Ordinal);
+        Assert.NotEqual(moduleRoot, annotation.RepositoryPath);
+        Assert.Equal(pinnedCommit, await RepositoryInspector.TryResolveCommitAsync(
+            annotation.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(await RepositoryInspector.TryGetBranchAsync(
+            annotation.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Pinned_import_uses_managed_checkout_without_detaching_AppHost_worktree()
+    {
+        using var repository = TemporaryDirectory.Create();
+        using var imports = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(repository.Path, "src", "AppHost");
+        var relativeProjectPath = Path.Combine("src", "Orders.Api", "Orders.Api.csproj");
+        var projectPath = Path.Combine(repository.Path, relativeProjectPath);
+        Directory.CreateDirectory(appHostDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        File.WriteAllText(projectPath, ProjectContents);
+        await InitializeGitAsync(repository.Path, "feature/consumer");
+        var pinnedCommit = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        File.AppendAllText(projectPath, Environment.NewLine + "<!-- active AppHost -->");
+        await RunGitAsync(repository.Path, "add", ".");
+        await RunGitAsync(repository.Path, "commit", "-m", "active AppHost");
+        var developerCommit = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = imports.Path;
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(repository.Path, pinnedCommit);
+            definition.AddProject("orders-api", relativeProjectPath, ModuleProjectPathBase.Repository)
+                .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync(module.Name);
+
+        Assert.Equal("feature/consumer", await RepositoryInspector.TryGetBranchAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(developerCommit, await RepositoryInspector.TryResolveCommitAsync(
+            repository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var annotation = Assert.Single(
+            container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
+        Assert.StartsWith(Path.GetFullPath(imports.Path), annotation.RepositoryPath, StringComparison.Ordinal);
+        Assert.NotEqual(repository.Path, annotation.RepositoryPath);
+        Assert.Equal(pinnedCommit, await RepositoryInspector.TryResolveCommitAsync(
+            annotation.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(await RepositoryInspector.TryGetBranchAsync(
+            annotation.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Repository_relative_project_does_not_inherit_the_consumer_repository_identity()
     {
         using var parent = TemporaryDirectory.Create();
