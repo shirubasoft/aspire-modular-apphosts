@@ -58,7 +58,7 @@ internal sealed class ModulePreviewProducerImageDescriptor
 
 internal sealed class ModulePreviewConsumerPolicy : IPreviewDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     [JsonPropertyOrder(0)]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;

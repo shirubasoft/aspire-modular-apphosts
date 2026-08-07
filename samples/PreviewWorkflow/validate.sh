@@ -30,6 +30,18 @@ jq --exit-status '
     .images[0].sha256 == "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 ' "$verified_request" >/dev/null
 
+jq --exit-status '
+    .schemaVersion == 2 and
+    .modules[0].contract.required == true and
+    ([.modules[0].images[] | select(.required == true)] | length) == 2 and
+    ([.modules[0].images[] | select(.producerRepositories | length > 0)] | length) == 1
+' samples/PreviewWorkflow/module-preview-policy.json >/dev/null
+
+jq --exit-status '
+    (.contracts | length) == 0 and
+    (.images | length) == 1
+' "$verified_request" >/dev/null
+
 ImagePush__RegistryEndpoint=registry.example.test \
     dotnet tool run aspire -- do describe-images \
     --apphost samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj \

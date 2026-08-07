@@ -15,7 +15,6 @@ internal static class PreviewPolicyEvaluator
         policy.Validate();
 
         var policies = policy.Modules.ToDictionary(module => module.Module, StringComparer.OrdinalIgnoreCase);
-        var selections = manifest.Modules.ToDictionary(module => module.Name, StringComparer.OrdinalIgnoreCase);
         var contracts = manifest.Contracts.ToDictionary(contract => contract.Module, StringComparer.OrdinalIgnoreCase);
         var images = manifest.Images.ToLookup(image => image.Module, StringComparer.OrdinalIgnoreCase);
         var evaluations = new List<ModulePreviewPolicyModuleEvaluation>(manifest.Modules.Count);
@@ -35,16 +34,29 @@ internal static class PreviewPolicyEvaluator
                     $"Expected repository '{modulePolicy.Repository}'.");
             }
 
+            var producerOwnsModule = ProducerMatchesSelection(manifest.Producer, selection);
             contracts.TryGetValue(selection.Name, out var contract);
-            ValidateContractRequest(selection.Name, contract, modulePolicy.Contract);
+            ValidateContractRequest(
+                selection,
+                manifest.Producer,
+                producerOwnsModule,
+                contract,
+                modulePolicy.Contract);
 
             var moduleImages = images[selection.Name].ToArray();
             foreach (var image in moduleImages)
             {
                 ValidateImageArtifact(image, modulePolicy.Images);
+                ValidateImageProducer(
+                    image,
+                    manifest.Producer,
+                    selection,
+                    producerOwnsModule,
+                    modulePolicy.Images);
             }
 
-            foreach (var requiredImage in modulePolicy.Images.Where(image => image.Required))
+            foreach (var requiredImage in modulePolicy.Images.Where(image =>
+                IsRequiredFromProducer(image, manifest.Producer, producerOwnsModule)))
             {
                 if (!moduleImages.Any(image =>
                         string.Equals(image.Resource, requiredImage.Resource, StringComparison.OrdinalIgnoreCase) &&
@@ -66,43 +78,6 @@ internal static class PreviewPolicyEvaluator
                 moduleImages));
         }
 
-        foreach (var contract in manifest.Contracts)
-        {
-            EnsureSelectedModule(contract.Module, selections, "contract request");
-            var selection = selections[contract.Module];
-            if (!ProducerMatchesSelection(manifest.Producer, selection))
-            {
-                throw new InvalidDataException(
-                    $"Preview producer repository and commit " +
-                    $"('{manifest.Producer.Repository}' at '{manifest.Producer.Commit}') do not match " +
-                    $"module '{contract.Module}' ('{selection.Repository}' at '{selection.Commit}'), " +
-                    "so the producer cannot request its contract package.");
-            }
-        }
-
-        foreach (var image in manifest.Images)
-        {
-            EnsureSelectedModule(image.Module, selections, "image artifact");
-            var selection = selections[image.Module];
-            if (!ProducerMatchesSelection(manifest.Producer, selection))
-            {
-                var modulePolicy = policies[image.Module];
-                var imagePolicy = FindImagePolicy(image, modulePolicy.Images);
-                if (!imagePolicy.ProducerRepositories.Contains(
-                        manifest.Producer.Repository,
-                        RepositoryIdentityComparer.Instance))
-                {
-                    var expectedRepositories = new[] { selection.Repository }
-                        .Concat(imagePolicy.ProducerRepositories)
-                        .Select(repository => $"'{repository}'");
-                    throw new InvalidDataException(
-                        $"Preview producer repository '{manifest.Producer.Repository}' is not allowed for image " +
-                        $"resource '{image.Resource}' in module '{image.Module}'. Expected one of: " +
-                        $"{string.Join(", ", expectedRepositories)}.");
-                }
-            }
-        }
-
         if (manifest.Contracts.Count == 0 && manifest.Images.Count == 0)
         {
             throw new InvalidDataException(
@@ -113,31 +88,82 @@ internal static class PreviewPolicyEvaluator
     }
 
     private static void ValidateContractRequest(
-        string module,
+        ModulePreviewSelection selection,
+        ModulePreviewProducer producer,
+        bool producerOwnsModule,
         ModulePreviewContractRequest? request,
         ModulePreviewConsumerContractPolicy? policy)
     {
         if (request is null)
         {
-            if (policy?.Required == true)
+            if (producerOwnsModule && policy?.Required == true)
             {
                 throw new InvalidDataException(
-                    $"Module '{module}' must request its required policy-owned contract package.");
+                    $"Module '{selection.Name}' must request its required policy-owned contract package.");
             }
 
             return;
         }
 
+        if (!producerOwnsModule)
+        {
+            throw new InvalidDataException(
+                $"Preview producer repository and commit " +
+                $"('{producer.Repository}' at '{producer.Commit}') do not match module '{selection.Name}' " +
+                $"('{selection.Repository}' at '{selection.Commit}'), " +
+                "so the producer cannot request its contract package.");
+        }
+
         if (policy is null || !string.Equals(request.PackageId, policy.PackageId, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Contract package '{request.PackageId}' is not allowed for module '{module}'.");
+                $"Contract package '{request.PackageId}' is not allowed for module '{selection.Name}'.");
         }
 
         PreviewPolicyValidation.ValidatePackageVersion(
             request.Version,
-            $"Contract request for module '{module}'.Version");
+            $"Contract request for module '{selection.Name}'.Version");
     }
+
+    private static void ValidateImageProducer(
+        ModulePreviewImageArtifact artifact,
+        ModulePreviewProducer producer,
+        ModulePreviewSelection selection,
+        bool producerOwnsModule,
+        IEnumerable<ModulePreviewConsumerImagePolicy> policies)
+    {
+        if (producerOwnsModule)
+        {
+            return;
+        }
+
+        var imagePolicy = FindImagePolicy(artifact, policies);
+        if (ProducerIsAuthorized(imagePolicy, producer))
+        {
+            return;
+        }
+
+        var expectedRepositories = new[] { selection.Repository }
+            .Concat(imagePolicy.ProducerRepositories)
+            .Select(repository => $"'{repository}'");
+        throw new InvalidDataException(
+            $"Preview producer repository '{producer.Repository}' is not allowed for image " +
+            $"resource '{artifact.Resource}' in module '{artifact.Module}'. Expected one of: " +
+            $"{string.Join(", ", expectedRepositories)}.");
+    }
+
+    private static bool IsRequiredFromProducer(
+        ModulePreviewConsumerImagePolicy imagePolicy,
+        ModulePreviewProducer producer,
+        bool producerOwnsModule) =>
+        imagePolicy.Required && (producerOwnsModule || ProducerIsAuthorized(imagePolicy, producer));
+
+    private static bool ProducerIsAuthorized(
+        ModulePreviewConsumerImagePolicy imagePolicy,
+        ModulePreviewProducer producer) =>
+        imagePolicy.ProducerRepositories.Contains(
+            producer.Repository,
+            RepositoryIdentityComparer.Instance);
 
     private static void ValidateImageArtifact(
         ModulePreviewImageArtifact artifact,
@@ -166,18 +192,6 @@ internal static class PreviewPolicyEvaluator
         ?? throw new InvalidDataException(
             $"Image resource '{artifact.Resource}' ({artifact.ResourceKind}) is not allowed " +
             $"for module '{artifact.Module}'.");
-
-    private static void EnsureSelectedModule(
-        string module,
-        Dictionary<string, ModulePreviewSelection> selections,
-        string item)
-    {
-        if (!selections.ContainsKey(module))
-        {
-            throw new InvalidDataException(
-                $"The {item} for module '{module}' does not correspond to a selected module.");
-        }
-    }
 
     private static bool ProducerMatchesSelection(
         ModulePreviewProducer producer,

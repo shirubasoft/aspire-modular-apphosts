@@ -1,9 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "modules": [
     {
       "module": "image-push-e2e",
       "repository": "https://github.com/example/sample-module.git",
+      "contract": {
+        "packageId": "Example.SampleModule.Contract",
+        "versionEnvironment": "SampleModuleContractVersion",
+        "required": true,
+        "published": {
+          "source": "https://api.nuget.org/v3/index.json"
+        },
+        "sourceFallback": {
+          "enabled": false
+        }
+      },
       "images": [
         {
           "resource": "image-push-declared",
@@ -13,6 +24,14 @@
           ],
           "producerRepositories": [
             "https://github.com/example/sample-image-builder.git"
+          ],
+          "required": true
+        },
+        {
+          "resource": "image-push-factory",
+          "resourceKind": "container",
+          "repositories": [
+            "registry.example.test/image-push/factory"
           ],
           "required": true
         }

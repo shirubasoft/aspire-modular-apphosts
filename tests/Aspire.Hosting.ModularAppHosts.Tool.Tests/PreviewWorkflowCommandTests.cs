@@ -802,7 +802,7 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -863,7 +863,7 @@ public sealed class PreviewWorkflowCommandTests
             path,
             $$"""
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "modules": [
                 {
                   "module": "preview-producer",

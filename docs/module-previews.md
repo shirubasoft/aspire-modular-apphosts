@@ -297,7 +297,7 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "modules": [
     {
       "module": "module-c",
@@ -328,10 +328,17 @@ Commit a policy such as `.github/module-preview-policy.json` to Repo D's default
 }
 ```
 
-The contract policy's `required` value defaults to `true`. Set it to `false` only when Repo D permits
-an image-only request; when the request omits the contract, no contract version or package feed is
-exported. Image `required: true` independently prevents a producer from omitting a digest and making
-the AppHost fall back to a source build.
+Consumer policies use schema version 2. Requirements are scoped to the producer making the request.
+The repository and exact commit selected for a module own that module: its producer owes the required
+contract and every required image. An external producer can never request the contract and owes only
+the required images whose `producerRepositories` explicitly authorize that producer. Required
+owner-only artifacts therefore remain strict without forcing an external image-only producer to
+provide artifacts it cannot own.
+
+The contract policy's `required` value defaults to `true`. Set it to `false` only when the owning
+module producer may make an image-only request; when the request omits the contract, no contract
+version or package feed is exported. Image `required: true` prevents each producer authorized for
+that image from omitting its digest and making the AppHost fall back to a source build.
 
 `published.source` is the preferred contract materialization mode when Repo C already published the
 package. It must be a consumer-reviewed, credential-free absolute HTTPS NuGet source without a query

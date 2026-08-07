@@ -11,6 +11,7 @@ public sealed class PreviewPolicyTests
     private const string Repository = "https://github.com/shirubasoft/preview-producer.git";
     private const string ExternalRepository = "https://github.com/shirubasoft/image-builder.git";
     private const string ImageRepository = "ghcr.io/shirubasoft/preview-producer";
+    private const string OwnerOnlyImageRepository = "ghcr.io/shirubasoft/preview-producer/worker";
     private const string ImageDigest =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -79,7 +80,7 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -106,6 +107,18 @@ public sealed class PreviewPolicyTests
         Assert.Equal(
             ExternalRepository,
             Assert.Single(Assert.Single(policy.Modules).Images).ProducerRepositories.Single());
+    }
+
+    [Fact]
+    public void Consumer_policy_rejects_schema_version_one()
+    {
+        var policy = CreatePolicy();
+        policy.SchemaVersion = 1;
+
+        var exception = Assert.Throws<InvalidDataException>(policy.Validate);
+
+        Assert.Contains("schema version '1'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Expected '2'", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -304,13 +317,30 @@ public sealed class PreviewPolicyTests
         manifest.Producer.Commit = ExternalCommit;
         manifest.Contracts.Clear();
         var policy = CreatePolicy();
-        policy.Modules[0].Contract!.Required = false;
         policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        AddRequiredOwnerOnlyImage(policy);
 
         var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
 
         Assert.Single(evaluation.Modules);
         Assert.Single(evaluation.Manifest.Images);
+    }
+
+    [Fact]
+    public void Evaluator_requires_an_external_producers_authorized_required_image()
+    {
+        var manifest = CreateManifest(includeImage: false);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains("must provide an immutable image", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("preview-producer-api", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -527,5 +557,17 @@ public sealed class PreviewPolicyTests
             Module = "build-support",
             Repository = ExternalRepository
         });
+    }
+
+    private static void AddRequiredOwnerOnlyImage(ModulePreviewConsumerPolicy policy)
+    {
+        var image = new ModulePreviewConsumerImagePolicy
+        {
+            Resource = "preview-producer-worker",
+            ResourceKind = "container",
+            Required = true
+        };
+        image.Repositories.Add(OwnerOnlyImageRepository);
+        policy.Modules[0].Images.Add(image);
     }
 }
