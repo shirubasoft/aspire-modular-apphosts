@@ -216,61 +216,7 @@ jobs:
 
       - name: Start and validate both modular AppHosts
         shell: bash
-        run: |
-          set -euo pipefail
-          active_apphost=""
-          stop_active_apphost() {
-            if [[ -n "$active_apphost" ]]; then
-              dotnet tool run aspire -- stop \
-                --apphost "$active_apphost" \
-                --non-interactive || true
-              active_apphost=""
-            fi
-          }
-          trap stop_active_apphost EXIT
-
-          active_apphost="samples/AppHostA/ModularSample.AppHostA.csproj"
-          dotnet tool run aspire -- start \
-            --apphost "$active_apphost" \
-            --isolated \
-            --format Json \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-api \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-static \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-generated-static \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          stop_active_apphost
-
-          active_apphost="samples/AppHostB/ModularSample.AppHostB.csproj"
-          dotnet tool run aspire -- start \
-            --apphost "$active_apphost" \
-            --isolated \
-            --format Json \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-api \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-static \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          dotnet tool run aspire -- wait sample-generated-static \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
-          dotnet tool run aspire -- wait dependency-gateway \
-            --apphost "$active_apphost" \
-            --timeout 180 \
-            --non-interactive
+        run: bash samples/test-modular-apphosts.sh
 
   e2e-image-registry-pipelines:
     runs-on: ubuntu-latest
@@ -292,11 +238,38 @@ jobs:
           dotnet tool restore
           dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
 
+      - name: Describe effective module image identities
+        run: bash samples/ImagePushE2E/test-image-describe.sh
+
       - name: Push scoped and complete image sets to a local registry
         run: bash samples/ImagePushE2E/test-image-push.sh
 
       - name: Pull scoped and complete image sets from a local registry
         run: bash samples/ImagePushE2E/test-image-pull.sh
+
+  e2e-preview-workflow-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore the preview sample toolchain
+        run: |
+          dotnet tool restore
+          dotnet restore src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj
+          dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
+
+      - name: Validate preview policy and producer workflow generation
+        run: bash samples/PreviewWorkflow/validate.sh
 
   e2e-multi-repo:
     runs-on: ubuntu-latest

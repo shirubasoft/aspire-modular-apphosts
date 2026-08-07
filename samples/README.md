@@ -4,14 +4,15 @@ This sample demonstrates one AppHost exporting a mixed module and another AppHos
 
 ```text
 AppHost A
+├── sample-message parameter
 ├── sample-api project (development) / branch-tagged modular-sample-api container
+│   └── both callbacks resolve sample-message from the same module context
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
 ├── sample-static (ContainerResource, nginx:alpine)
 ├── sample-generated-static ── container build ──> branch-tagged modular-sample-static
 ├── sample-executable (ExecutableResource, explicit start)
 ├── sample-dotnet-tool (DotnetToolResource, explicit start)
-├── sample-message (ParameterResource)
 ├── sample-connection-string (ConnectionStringResource)
 ├── sample-external-service (ExternalServiceResource)
 ├── sample-container-registry (ContainerRegistryResource)
@@ -37,6 +38,12 @@ The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleCo
 For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
 
 `AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `GeneratedStatic`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
+
+The message parameter is declared before `sample-api`. Both `ConfigureProject` and the
+`ExportAsContainer` callback receive the module materialization context, resolve that earlier parameter
+with `context.GetResource<ParameterResource>()`, and inject it into the project or container. CI runs
+AppHost A in project mode and AppHost B in container mode, then asserts that both representations
+receive the same value.
 
 ## Prerequisites
 
@@ -77,6 +84,9 @@ aspire describe --include-hidden
 
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
+Run `bash samples/test-modular-apphosts.sh` from the repository root to start both AppHosts exactly as
+CI does and verify that the project and container callbacks resolve the module-owned message.
+
 ## E2E testing sample
 
 [`E2ETesting`](E2ETesting/README.md) contains a separate eShop example with `catalog` and `orders` modules. Its E2E AppHost supports both Aspire's in-process testing builder and an Aspire-deployed Docker Compose environment. The same test scenario runs against both modes in CI.
@@ -88,9 +98,15 @@ The dashboard graph shows `Reference` and `WaitFor` relationships from `dependen
 and a factory-created container publisher. The pull fixture also maps an image from one temporary
 registry to a local reference in a second registry. Each test first scopes the operation to the exported
 project and verifies the other images are untouched, then operates on every image and verifies all
-results. Run `bash samples/ImagePushE2E/test-image-push.sh` or
-`bash samples/ImagePushE2E/test-image-pull.sh`; set `ASPIRE_CONTAINER_RUNTIME=podman` when Podman
-should be used instead of Docker.
+results. `test-image-describe.sh` separately verifies the structured run, pull, push, and build
+identities consumed by CI tooling. See the [sample README](ImagePushE2E/README.md) for commands.
+
+## Preview workflow sample
+
+[`PreviewWorkflow`](PreviewWorkflow/README.md) validates an image-only request from a separately
+authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
+image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
+strict validation without dispatching a workflow or contacting an artifact service.
 
 ## Multi-repository E2E sample
 

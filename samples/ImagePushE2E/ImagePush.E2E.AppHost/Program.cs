@@ -43,13 +43,15 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             ImageRegistry = registryEndpoint,
             ImageTag = ImageTag,
             WorkingDirectory = "ImageFixture"
-        });
+        })
+        .Configure(container => container.WithExplicitStart());
 
     definition.AddContainer(
             "image-pull-mapped",
             $"{retagRegistryEndpoint}/image-pull/local",
             ImageTag)
-        .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}");
+        .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}")
+        .Configure(container => container.WithExplicitStart());
 
     definition.AddProject(
             ProjectResourceName,
@@ -69,11 +71,14 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             (_, container) => container
                 .WithContainerRegistry(registry)
                 .WithRemoteImageName("project")
-                .WithRemoteImageTag(ImageTag));
+                .WithRemoteImageTag(ImageTag)
+                .WithExplicitStart());
 
     definition.AddResource<ContainerResource>(
         "image-push-factory",
-        context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+        context => context.ApplicationBuilder
+            .AddContainer(context.ResourceName, "placeholder")
+            .WithExplicitStart(),
         new ModuleContainerExportOptions(
             "image-push/factory",
             containerRuntime,

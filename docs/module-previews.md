@@ -507,7 +507,12 @@ cross the consumer policy/materialization boundary and cannot consume prebuilt a
 
 ## Complete fixture
 
-The runnable fixture is split across:
+The repository-local [`PreviewWorkflow` sample](../samples/PreviewWorkflow/README.md) performs offline
+external-producer authorization, checks its descriptor against a real AppHost image publisher, and
+generates the producer workflow in CI. It uses non-operational repository and registry identities so
+the validation needs no credentials or external services.
+
+The complete cross-repository deployment fixture is split across:
 
 - [`Shirubasoft/aspire-modular-apphosts-preview-producer`](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-producer), which owns the contract, API image build, descriptor, and immutable digest; and
 - [`Shirubasoft/aspire-modular-apphosts-preview-consumer`](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-consumer), which owns the policy, trusted workflow, AppHost, and assertions.

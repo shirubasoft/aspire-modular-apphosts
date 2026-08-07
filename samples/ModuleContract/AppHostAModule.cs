@@ -33,12 +33,23 @@ public static partial class AppHostAModule
         {
             module.WithRepository(absoluteSourceRoot);
 
+            module.AddResource<ParameterResource>(MessageResourceName, context =>
+                context.ApplicationBuilder.AddParameter(
+                    context.ResourceName,
+                    "Hello from an arbitrary exported Aspire resource.",
+                    publishValueAsDefault: true));
+
             module.AddProject(
                     ApiResourceName,
                     Path.Combine(absoluteSourceRoot, "Api", "ModularSample.Api.csproj"))
-                .ConfigureProject((_, project) => project
-                    .WithHttpEndpoint(name: "http")
-                    .WithHttpHealthCheck("/health"))
+                .ConfigureProject((context, project) =>
+                {
+                    var message = context.GetResource<ParameterResource>(MessageResourceName);
+                    project
+                        .WithEnvironment("MODULE_MESSAGE", message)
+                        .WithHttpEndpoint(name: "http")
+                        .WithHttpHealthCheck("/health");
+                })
                 .ExportAsContainer(
                     new ModuleContainerExportOptions(
                         imageName: "modular-sample-api",
@@ -50,9 +61,14 @@ public static partial class AppHostAModule
                             ModuleContainerExportOptions.ImageReferencePlaceholder,
                             "."
                         ]),
-                    (_, container) => container
-                        .WithHttpEndpoint(targetPort: 8080, name: "http")
-                        .WithHttpHealthCheck("/health"));
+                    (context, container) =>
+                    {
+                        var message = context.GetResource<ParameterResource>(MessageResourceName);
+                        container
+                            .WithEnvironment("MODULE_MESSAGE", message)
+                            .WithHttpEndpoint(targetPort: 8080, name: "http")
+                            .WithHttpHealthCheck("/health");
+                    });
 
             module.AddResource<ProjectResource>(ProjectResourceName, context =>
                 context.ApplicationBuilder
@@ -101,12 +117,6 @@ public static partial class AppHostAModule
                     .AddDotnetTool(context.ResourceName, "dotnetsay")
                     .WithExplicitStart());
 #pragma warning restore ASPIREDOTNETTOOL
-
-            module.AddResource<ParameterResource>(MessageResourceName, context =>
-                context.ApplicationBuilder.AddParameter(
-                    context.ResourceName,
-                    "Hello from an arbitrary exported Aspire resource.",
-                    publishValueAsDefault: true));
 
             module.AddResource<ConnectionStringResource>(ConnectionStringResourceName, context =>
             {

@@ -155,7 +155,9 @@ Projects exported as containers can still run directly during local debugging. T
 - [Cross-repository preview guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-previews.md): exact-SHA manifests, workflow dispatch, preview contracts, and security boundaries.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
-- [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer clones and runs a project from `Shirubasoft/spire` through the real GitHub CLI.
+- [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.
+- [Preview workflow sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/PreviewWorkflow): offline external-producer policy verification and producer workflow generation.
+- [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer builds a module image from an independently pinned Git repository without changing the producer worktree.
 - [Cross-repository preview producer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-producer) and [consumer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-consumer): a producer feature branch changes source and its resource graph, then dispatches a trusted consumer E2E at the exact commit.
 
 For repository setup, validation commands, and the release workflow, see [Contributing](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/CONTRIBUTING.md).

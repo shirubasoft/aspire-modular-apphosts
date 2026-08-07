@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "modules": [
+    {
+      "module": "image-push-e2e",
+      "repository": "https://github.com/example/sample-module.git",
+      "images": [
+        {
+          "resource": "image-push-declared",
+          "resourceKind": "container",
+          "repositories": [
+            "registry.example.test/image-push/declared"
+          ],
+          "producerRepositories": [
+            "https://github.com/example/sample-image-builder.git"
+          ],
+          "required": true
+        }
+      ]
+    }
+  ]
+}

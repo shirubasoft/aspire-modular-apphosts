@@ -6,4 +6,6 @@ Mark every breaking change with Conventional Commits syntax (for example, `feat!
 
 Samples should work by default by just executing `aspire` running the sample.
 
+Every major feature must include a runnable sample that is validated in CI.
+
 Prefer standard configuration APIs (`IConfiguration`/`IOptions<T>`) over reading environment variables directly.
