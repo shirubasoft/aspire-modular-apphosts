@@ -438,6 +438,28 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Deployment_target_registry_is_used_when_no_resource_registry_is_configured()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "acme");
+        var container = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        container.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
+        {
+            ContainerRegistry = registry.Resource
+        });
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("registry.example.test/acme/orders-api:latest", references.RemoteImage);
+        Assert.Equal("orders-api:preview", references.LocalImage);
+    }
+
+    [Fact]
     public void Pull_arguments_scope_the_pipeline_to_named_resources()
     {
         var selection = ModuleImagePullPipeline.GetSelection(
