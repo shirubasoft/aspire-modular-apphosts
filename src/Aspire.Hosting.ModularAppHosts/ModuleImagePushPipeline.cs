@@ -133,12 +133,7 @@ internal static class ModuleImagePushPipeline
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
             context.CancellationToken).ConfigureAwait(false);
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        var hasExplicitAspireRegistry =
-            resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
-            resource.Annotations.OfType<DeploymentTargetAnnotation>().Any(annotation =>
-                annotation.ContainerRegistry is not null);
-        if (!hasExplicitAspireRegistry && image is { Registry.Length: > 0 })
+        if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
         {
             var runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
             await CliCommand.Wrap(runtime)
@@ -150,6 +145,12 @@ internal static class ModuleImagePushPipeline
                 .ExecuteAsync(context.CancellationToken)
                 .ConfigureAwait(false);
             return;
+        }
+
+        if (resolved.PushTargetKind != ModuleImagePushTargetKind.AspireRegistry)
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a remote image push target.");
         }
 
         var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();

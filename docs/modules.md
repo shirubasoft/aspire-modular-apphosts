@@ -338,6 +338,8 @@ aspire do build orders-api orders-worker
 
 Every registry-backed module image also contributes a `push-<resource>` step. That push depends on its matching build step, so `aspire do push` now builds a missing image from the module-owned command before pushing it. Producers no longer need to repeat that command in workflow YAML or prebuild the image locally. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
 
+Remote identity resolution uses one precedence order for describe, pull, and push: an explicit pull mapping (pull only), a per-resource `WithContainerRegistry`, the qualified registry declared by the module, and finally a deployment or default registry. Registries with an empty endpoint, such as the local registry supplied by a Docker Compose environment, are never remote pull or push targets. Consequently, adding a compute environment cannot erase a module-owned registry host.
+
 Project exports retain the `ImageRegistry` from `ModuleContainerExportOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
 
 ```csharp

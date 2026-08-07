@@ -9,6 +9,7 @@ const string ProjectResourceName = "image-push-project";
 
 var builder = DistributedApplication.CreateBuilder(args);
 builder.UseModuleContainers();
+builder.AddDockerComposeEnvironment("compose");
 var containerRuntime = await ContainerRuntimeResolver.ResolveAsync();
 
 var registryEndpoint = builder.Configuration["ImagePush:RegistryEndpoint"];

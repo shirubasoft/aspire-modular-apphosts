@@ -460,6 +460,124 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Module_registry_wins_over_a_compute_environment_registry()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var environmentRegistry = builder.AddContainerRegistry(
+            "environment-registry",
+            "environment.example.test",
+            "environment");
+        var resource = builder
+            .AddContainer("orders-api", "acme/orders", "preview")
+            .WithImageRegistry("module.example.test")
+            .Resource;
+        resource.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
+        {
+            ContainerRegistry = environmentRegistry.Resource
+        });
+
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal(resolved.PullReference, resolved.PushReference);
+        Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
+    }
+
+    [Fact]
+    public async Task Empty_compute_environment_registry_is_not_a_remote_target()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var resource = builder
+            .AddContainer("orders-api", "acme/orders", "preview")
+            .WithImageRegistry("module.example.test")
+            .Resource;
+        resource.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
+        {
+            ContainerRegistry = CreateEmptyRegistry()
+        });
+
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
+    }
+
+    [Fact]
+    public async Task Empty_explicit_resource_registry_falls_back_to_the_module_registry()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var resource = builder
+            .AddContainer("orders-api", "acme/orders", "preview")
+            .WithImageRegistry("module.example.test")
+            .Resource;
+        resource.Annotations.Add(new ContainerRegistryReferenceAnnotation(CreateEmptyRegistry()));
+
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
+    }
+
+    [Fact]
+    public async Task Explicit_resource_registry_wins_over_the_module_and_environment_registries()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var explicitRegistry = builder.AddContainerRegistry(
+            "explicit-registry",
+            "explicit.example.test",
+            "explicit");
+        var environmentRegistry = builder.AddContainerRegistry(
+            "environment-registry",
+            "environment.example.test",
+            "environment");
+        var resource = builder
+            .AddContainer("orders-api", "acme/orders", "preview")
+            .WithImageRegistry("module.example.test")
+            .WithContainerRegistry(explicitRegistry)
+            .WithRemoteImageName("orders")
+            .WithRemoteImageTag("release")
+            .Resource;
+        resource.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
+        {
+            ContainerRegistry = environmentRegistry.Resource
+        });
+
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("explicit.example.test/explicit/orders:release", resolved.PullReference);
+        Assert.Equal(resolved.PullReference, resolved.PushReference);
+        Assert.Equal(ModuleImagePushTargetKind.AspireRegistry, resolved.PushTargetKind);
+    }
+
+    [Fact]
+    public async Task Empty_default_registry_is_ignored_when_a_remote_default_exists()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var remoteRegistry = builder.AddContainerRegistry(
+            "remote-registry",
+            "remote.example.test",
+            "acme");
+        var resource = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        resource.Annotations.Add(new RegistryTargetAnnotation(CreateEmptyRegistry()));
+        resource.Annotations.Add(new RegistryTargetAnnotation(remoteRegistry.Resource));
+
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("remote.example.test/acme/orders-api:latest", resolved.PullReference);
+        Assert.Equal(ModuleImagePushTargetKind.AspireRegistry, resolved.PushTargetKind);
+    }
+
+    [Fact]
     public void Pull_arguments_scope_the_pipeline_to_named_resources()
     {
         var selection = ModuleImagePullPipeline.GetSelection(
@@ -564,6 +682,9 @@ public sealed class ModuleImagePullPipelineTests
             Resource = new ContainerResource(resourceName)
         };
     }
+
+    private static ContainerRegistryResource CreateEmptyRegistry() =>
+        new("local", ReferenceExpression.Empty, ReferenceExpression.Empty);
 
     private static async Task<IReadOnlyList<PipelineStep>> CreatePullStepsAsync(IResource resource)
     {

@@ -2,8 +2,10 @@
 
 This AppHost declares all three supported module image publishers: a declared container, a project
 exported as a container, and a factory-created container. It also declares a consumed image with a
-pull mapping. Publisher resources use explicit start so running the AppHost demonstrates the model
-without requiring the example registry to exist:
+pull mapping. A Docker Compose compute environment proves that its local, empty registry does not
+replace the remote identities declared by the module or by `WithContainerRegistry`. Publisher
+resources use explicit start so running the AppHost demonstrates the model without requiring the
+example registry to exist:
 
 ```bash
 cd samples/ImagePushE2E/ImagePush.E2E.AppHost
