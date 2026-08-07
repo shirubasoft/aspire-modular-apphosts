@@ -176,7 +176,7 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
     public IDistributedApplicationModuleProject Project => project;
 
     public IDistributedApplicationModuleProjectBuilder ConfigureProject(
-        Action<IResourceBuilder<ProjectResource>> configureProject)
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ProjectResource>> configureProject)
     {
         ArgumentNullException.ThrowIfNull(configureProject);
         project.ConfigureProject += configureProject;
@@ -187,7 +187,7 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
         string imageName,
         string publishCommand,
         IReadOnlyList<string> publishArguments,
-        Action<IResourceBuilder<ContainerResource>>? configureContainer = null)
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null)
     {
         ArgumentNullException.ThrowIfNull(publishArguments);
         return ExportAsContainer(
@@ -197,7 +197,7 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
 
     public IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         ModuleContainerExportOptions options,
-        Action<IResourceBuilder<ContainerResource>>? configureContainer = null)
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null)
     {
         project.SetExport(new ModuleContainerExport(CopyOptions(options), configureContainer));
         return this;

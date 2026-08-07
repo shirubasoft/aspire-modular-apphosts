@@ -7,7 +7,9 @@ namespace Shirubasoft.Aspire.ModularAppHosts.Tool.Tests;
 public sealed class PreviewPolicyTests
 {
     private const string Commit = "0123456789abcdef0123456789abcdef01234567";
+    private const string ExternalCommit = "89abcdef0123456789abcdef0123456789abcdef";
     private const string Repository = "https://github.com/shirubasoft/preview-producer.git";
+    private const string ExternalRepository = "https://github.com/shirubasoft/image-builder.git";
     private const string ImageRepository = "ghcr.io/shirubasoft/preview-producer";
     private const string ImageDigest =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -70,6 +72,40 @@ public sealed class PreviewPolicyTests
 
         Assert.Null(descriptor.Contract);
         Assert.Single(descriptor.Images);
+    }
+
+    [Fact]
+    public async Task Consumer_policy_loads_external_producer_repositories_per_image()
+    {
+        const string json = """
+            {
+              "schemaVersion": 1,
+              "modules": [
+                {
+                  "module": "preview-producer",
+                  "repository": "https://github.com/shirubasoft/preview-producer.git",
+                  "images": [
+                    {
+                      "resource": "preview-producer-api",
+                      "resourceKind": "project",
+                      "repositories": ["ghcr.io/shirubasoft/preview-producer"],
+                      "producerRepositories": ["https://github.com/shirubasoft/image-builder.git"],
+                      "required": true
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        var policy = await ModulePreviewConsumerPolicy.LoadAsync(
+            stream,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ExternalRepository,
+            Assert.Single(Assert.Single(policy.Modules).Images).ProducerRepositories.Single());
     }
 
     [Fact]
@@ -231,6 +267,86 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Evaluator_accepts_an_explicitly_allowlisted_external_image_producer()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Required = false;
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
+
+        Assert.Single(evaluation.Modules);
+        Assert.Single(evaluation.Manifest.Images);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_an_external_producer_without_per_image_authorization()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Required = false;
+        AddProducerAsUnrelatedSelectedModule(manifest, policy);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains(ExternalRepository, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("is not allowed for image", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_contracts_from_an_external_image_producer()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        AddProducerAsUnrelatedSelectedModule(manifest, policy);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains("cannot request its contract package", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_an_external_producer_without_images()
+    {
+        var manifest = CreateManifest(includeImage: false);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Required = false;
+        policy.Modules[0].Images[0].Required = false;
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains("must offer at least one contract package or immutable image", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Policy_rejects_duplicate_external_producer_repositories()
+    {
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+
+        var exception = Assert.Throws<InvalidDataException>(policy.Validate);
+
+        Assert.Contains("duplicate producer repository", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Evaluator_rejects_contract_package_substitution()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -323,5 +439,22 @@ public sealed class PreviewPolicyTests
         module.Images.Add(image);
         policy.Modules.Add(module);
         return policy;
+    }
+
+    private static void AddProducerAsUnrelatedSelectedModule(
+        ModulePreviewManifest manifest,
+        ModulePreviewConsumerPolicy policy)
+    {
+        manifest.Modules.Add(new ModulePreviewSelection
+        {
+            Name = "build-support",
+            Repository = ExternalRepository,
+            Commit = ExternalCommit
+        });
+        policy.Modules.Add(new ModulePreviewConsumerModulePolicy
+        {
+            Module = "build-support",
+            Repository = ExternalRepository
+        });
     }
 }

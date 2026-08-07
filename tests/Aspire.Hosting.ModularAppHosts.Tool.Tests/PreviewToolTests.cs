@@ -183,7 +183,7 @@ public sealed class PreviewToolTests
     }
 
     [Fact]
-    public async Task Trigger_posts_typed_manifest_input_to_explicit_trusted_ref()
+    public async Task Trigger_uses_native_workflow_run_with_typed_manifest_input_and_trusted_ref()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -194,13 +194,11 @@ public sealed class PreviewToolTests
         var manifestPath = Path.Combine(directory.Path, "preview.json");
         await WriteTriggerManifestAsync(manifestPath, TestContext.Current.CancellationToken);
         var argumentsPath = Path.Combine(directory.Path, "arguments.txt");
-        var bodyPath = Path.Combine(directory.Path, "body.json");
         var gh = directory.WriteExecutable("fake-gh", $$"""
             #!/usr/bin/env bash
             set -euo pipefail
             printf '%s\n' "$@" > '{{argumentsPath}}'
-            tee '{{bodyPath}}' >/dev/null
-            printf '{"workflow_run_id":42,"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}'
+            printf 'https://github.com/shirubasoft/repo-d/actions/runs/42\n'
             """);
 
         var exitCode = await PreviewTool.RunAsync(
@@ -217,17 +215,15 @@ public sealed class PreviewToolTests
 
         Assert.Equal(0, exitCode);
         var arguments = await File.ReadAllLinesAsync(argumentsPath, TestContext.Current.CancellationToken);
-        Assert.Contains("repos/shirubasoft/repo-d/actions/workflows/preview-e2e.yml/dispatches", arguments);
-        using var body = JsonDocument.Parse(
-            await File.ReadAllTextAsync(bodyPath, TestContext.Current.CancellationToken));
-        Assert.Equal("main", body.RootElement.GetProperty("ref").GetString());
-        Assert.True(body.RootElement.GetProperty("return_run_details").GetBoolean());
-        Assert.Equal(
-            BaseCommit,
-            body.RootElement.GetProperty("inputs").GetProperty("library_commit").GetString());
-        var manifestJson = body.RootElement.GetProperty("inputs").GetProperty("manifest_json").GetString();
-        Assert.NotNull(manifestJson);
-        using var dispatchedManifest = JsonDocument.Parse(manifestJson);
+        Assert.Equal("workflow", arguments[0]);
+        Assert.Equal("run", arguments[1]);
+        Assert.Contains("preview-e2e.yml", arguments);
+        Assert.Contains("shirubasoft/repo-d", arguments);
+        Assert.Contains("main", arguments);
+        Assert.Contains($"library_commit={BaseCommit}", arguments);
+        var manifestInput = Assert.Single(arguments, argument =>
+            argument.StartsWith("manifest_json=", StringComparison.Ordinal));
+        using var dispatchedManifest = JsonDocument.Parse(manifestInput["manifest_json=".Length..]);
         Assert.Equal(Commit, dispatchedManifest.RootElement.GetProperty("producer").GetProperty("commit").GetString());
         Assert.Equal(
             "container",
@@ -253,9 +249,8 @@ public sealed class PreviewToolTests
             #!/usr/bin/env bash
             set -euo pipefail
             case "$1" in
-              api)
-                tee /dev/null >/dev/null
-                printf '{"workflow_run_id":42,"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}'
+              workflow)
+                printf 'https://github.com/shirubasoft/repo-d/actions/runs/42\n'
                 ;;
               run)
                 printf '%s\n' "$@" > '{{watchArgumentsPath}}'
@@ -291,10 +286,10 @@ public sealed class PreviewToolTests
     }
 
     [Theory]
-    [InlineData(null)]
+    [InlineData("")]
     [InlineData("0")]
-    [InlineData("\"42\"")]
-    public async Task Trigger_rejects_missing_or_invalid_workflow_run_id(string? workflowRunIdJson)
+    [InlineData("https://github.com/shirubasoft/other/actions/runs/42")]
+    public async Task Trigger_rejects_missing_or_invalid_workflow_run_url(string runUrl)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -305,14 +300,10 @@ public sealed class PreviewToolTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var manifestPath = Path.Combine(directory.Path, "preview.json");
         await WriteTriggerManifestAsync(manifestPath, cancellationToken);
-        var response = workflowRunIdJson is null
-            ? """{"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}"""
-            : $$"""{"workflow_run_id":{{workflowRunIdJson}},"html_url":"https://github.com/shirubasoft/repo-d/actions/runs/42"}""";
         var gh = directory.WriteExecutable("fake-gh", $$"""
             #!/usr/bin/env bash
             set -euo pipefail
-            tee /dev/null >/dev/null
-            printf '%s' '{{response}}'
+            printf '%s' '{{runUrl}}'
             """);
 
         var exitCode = await PreviewTool.RunAsync(

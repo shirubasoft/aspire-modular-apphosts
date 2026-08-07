@@ -52,7 +52,7 @@ internal static class ModuleImagePushPipeline
             var resource = factoryContext.Resource;
             if (resource.IsExcludedFromPublish() ||
                 resource.RequiresImageBuildAndPush() ||
-                !HasPushTarget(resource))
+                !ModuleEffectiveImageResolver.HasPushTarget(resource))
             {
                 return [];
             }
@@ -66,6 +66,7 @@ internal static class ModuleImagePushPipeline
                     Action = context => PushAsync(resource, context),
                     DependsOnSteps =
                     [
+                        ModuleImageBuildPipeline.GetStepName(resource),
                         WellKnownPipelineSteps.PushPrereq,
                         WellKnownPipelineSteps.CheckContainerRuntime
                     ],
@@ -98,10 +99,10 @@ internal static class ModuleImagePushPipeline
                 step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
             .ToArray();
         var availableResources = pushSteps
-            .Select(step => step.Resource!.Name)
+            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unknownResources = selection.Resources
-            .Where(resource => !availableResources.Contains(resource))
+            .Where(resource => !pushSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (unknownResources.Length > 0)
@@ -114,7 +115,7 @@ internal static class ModuleImagePushPipeline
                 $"Available image resources: {available}.");
         }
 
-        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!.Name)))
+        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));
@@ -127,23 +128,11 @@ internal static class ModuleImagePushPipeline
         }
     }
 
-    private static bool HasPushTarget(IResource resource)
-    {
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        if (image is { SHA256.Length: > 0 })
-        {
-            return false;
-        }
-
-        return image is { Registry.Length: > 0 } ||
-            resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
-            resource.Annotations.OfType<DeploymentTargetAnnotation>().Any(annotation =>
-                annotation.ContainerRegistry is not null) ||
-            resource.Annotations.OfType<RegistryTargetAnnotation>().Any();
-    }
-
     private static async Task PushAsync(IResource resource, PipelineStepContext context)
     {
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
+            resource,
+            context.CancellationToken).ConfigureAwait(false);
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
         var hasExplicitAspireRegistry =
             resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
@@ -151,15 +140,9 @@ internal static class ModuleImagePushPipeline
                 annotation.ContainerRegistry is not null);
         if (!hasExplicitAspireRegistry && image is { Registry.Length: > 0 })
         {
-            if (!resource.TryGetContainerImageName(out var imageReference))
-            {
-                throw new InvalidOperationException(
-                    $"Resource '{resource.Name}' does not have a container image reference to push.");
-            }
-
             var runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
             await CliCommand.Wrap(runtime)
-                .WithArguments(["push", imageReference])
+                .WithArguments(["push", resolved.PushReference!])
                 .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
                     LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
                 .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>

@@ -85,7 +85,7 @@ internal static class ModuleImagePullPipeline
         container.WithPipelineStepFactory(factoryContext =>
         {
             var resource = factoryContext.Resource;
-            if (resource.IsExcludedFromPublish() || !HasPullSource(resource))
+            if (resource.IsExcludedFromPublish() || !ModuleEffectiveImageResolver.HasPullSource(resource))
             {
                 return [];
             }
@@ -131,10 +131,10 @@ internal static class ModuleImagePullPipeline
                 step.RequiredBySteps.Contains(PullStepName))
             .ToArray();
         var availableResources = pullSteps
-            .Select(step => step.Resource!.Name)
+            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var unknownResources = selection.Resources
-            .Where(resource => !availableResources.Contains(resource))
+            .Where(resource => !pullSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (unknownResources.Length > 0)
@@ -147,7 +147,7 @@ internal static class ModuleImagePullPipeline
                 $"Available image resources: {available}.");
         }
 
-        foreach (var step in pullSteps.Where(step => !selection.Includes(step.Resource!.Name)))
+        foreach (var step in pullSteps.Where(step => !selection.Includes(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, PullStepName, StringComparison.Ordinal));
@@ -158,122 +158,9 @@ internal static class ModuleImagePullPipeline
         IResource resource,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(resource);
-        if (!resource.TryGetContainerImageName(out var localImage))
-        {
-            throw new InvalidOperationException(
-                $"Resource '{resource.Name}' does not have a container image reference to pull.");
-        }
-
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        var mapping = GetPullMapping(resource);
-        if (mapping is not null)
-        {
-            if (image is { SHA256.Length: > 0 })
-            {
-                throw new InvalidOperationException(
-                    $"Resource '{resource.Name}' cannot map a pulled image to its digest-pinned local reference. " +
-                    "Configure a tagged local image when using WithImagePullMapping.");
-            }
-
-            return (mapping.RemoteImageReference, localImage);
-        }
-
-        var registry = GetExplicitRegistry(resource);
-        if (registry is null && image is { Registry.Length: > 0 })
-        {
-            return (localImage, localImage);
-        }
-
-        registry ??= GetDefaultRegistry(resource);
-        if (registry is null)
-        {
-            throw new InvalidOperationException(
-                $"Resource '{resource.Name}' does not have a container registry to pull from.");
-        }
-
-        var options = new ContainerImagePushOptions
-        {
-#pragma warning disable CA1308
-            RemoteImageName = resource.Name.ToLowerInvariant(),
-#pragma warning restore CA1308
-            RemoteImageTag = "latest"
-        };
-        var optionsContext = new ContainerImagePushOptionsCallbackContext
-        {
-            Resource = resource,
-            Options = options,
-            CancellationToken = cancellationToken
-        };
-        foreach (var annotation in resource.Annotations.OfType<ContainerImagePushOptionsCallbackAnnotation>())
-        {
-            await annotation.Callback(optionsContext).ConfigureAwait(false);
-        }
-
-        var remoteImage = await options
-            .GetFullRemoteImageNameAsync(registry, cancellationToken)
+        var resolved = await ModuleEffectiveImageResolver.ResolveAsync(resource, cancellationToken)
             .ConfigureAwait(false);
-        return (remoteImage, localImage);
-    }
-
-    private static bool HasPullSource(IResource resource)
-    {
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        if (image is null)
-        {
-            return false;
-        }
-
-        var mapping = GetPullMapping(resource);
-        if (mapping is not null)
-        {
-            if (image.SHA256 is { Length: > 0 })
-            {
-                throw new InvalidOperationException(
-                    $"Resource '{resource.Name}' cannot map a pulled image to its digest-pinned local reference. " +
-                    "Configure a tagged local image when using WithImagePullMapping.");
-            }
-
-            return true;
-        }
-
-        var explicitRegistry = GetExplicitRegistry(resource);
-        if (image.SHA256 is { Length: > 0 })
-        {
-            return image.Registry is { Length: > 0 } && explicitRegistry is null;
-        }
-
-        if (image.Registry is { Length: > 0 })
-        {
-            return true;
-        }
-
-        return explicitRegistry is not null || GetDefaultRegistry(resource) is not null;
-    }
-
-    private static ModuleImagePullMappingAnnotation? GetPullMapping(IResource resource) =>
-        resource.Annotations.OfType<ModuleImagePullMappingAnnotation>().LastOrDefault();
-
-    private static IContainerRegistry? GetExplicitRegistry(IResource resource) =>
-        resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().LastOrDefault()?.Registry ??
-        resource.Annotations.OfType<DeploymentTargetAnnotation>()
-            .LastOrDefault(annotation => annotation.ContainerRegistry is not null)
-            ?.ContainerRegistry;
-
-    private static IContainerRegistry? GetDefaultRegistry(IResource resource)
-    {
-        var registries = resource.Annotations
-            .OfType<RegistryTargetAnnotation>()
-            .Select(annotation => annotation.Registry)
-            .ToArray();
-        return registries.Length switch
-        {
-            0 => null,
-            1 => registries[0],
-            _ => throw new InvalidOperationException(
-                $"Resource '{resource.Name}' has multiple container registries available. " +
-                "Specify one with WithContainerRegistry.")
-        };
+        return (resolved.PullReference, resolved.Reference);
     }
 
     private static Task PullAsync(IResource resource, PipelineStepContext context) =>

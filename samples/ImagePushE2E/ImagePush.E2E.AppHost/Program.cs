@@ -9,6 +9,7 @@ const string ProjectResourceName = "image-push-project";
 
 var builder = DistributedApplication.CreateBuilder(args);
 builder.UseModuleContainers();
+var containerRuntime = await ContainerRuntimeResolver.ResolveAsync();
 
 var registryEndpoint = builder.Configuration["ImagePush:RegistryEndpoint"];
 if (string.IsNullOrWhiteSpace(registryEndpoint))
@@ -33,18 +34,24 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
             ImageTag)
         .WithImagePublishCommand(new ModuleContainerExportOptions(
             "image-push/declared",
-            "dotnet",
-            "--info")
+            containerRuntime,
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
         {
             ImageRegistry = registryEndpoint,
-            ImageTag = ImageTag
-        });
+            ImageTag = ImageTag,
+            WorkingDirectory = "ImageFixture"
+        })
+        .Configure(container => container.WithExplicitStart());
 
     definition.AddContainer(
             "image-pull-mapped",
             $"{retagRegistryEndpoint}/image-pull/local",
             ImageTag)
-        .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}");
+        .WithImagePullMapping($"{registryEndpoint}/image-pull/source:{ImageTag}")
+        .Configure(container => container.WithExplicitStart());
 
     definition.AddProject(
             ProjectResourceName,
@@ -52,26 +59,37 @@ var module = await builder.ExportModuleAsync("image-push-e2e", definition =>
         .ExportAsContainer(
             new ModuleContainerExportOptions(
                 ProjectResourceName,
-                "dotnet",
-                "--info")
+                containerRuntime,
+                "build",
+                "--tag",
+                ModuleContainerExportOptions.ImageReferencePlaceholder,
+                ".")
             {
-                ImageTag = ImageTag
+                ImageTag = ImageTag,
+                WorkingDirectory = "ImageFixture"
             },
-            container => container
+            (_, container) => container
                 .WithContainerRegistry(registry)
                 .WithRemoteImageName("project")
-                .WithRemoteImageTag(ImageTag));
+                .WithRemoteImageTag(ImageTag)
+                .WithExplicitStart());
 
     definition.AddResource<ContainerResource>(
         "image-push-factory",
-        context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+        context => context.ApplicationBuilder
+            .AddContainer(context.ResourceName, "placeholder")
+            .WithExplicitStart(),
         new ModuleContainerExportOptions(
             "image-push/factory",
-            "dotnet",
-            "--info")
+            containerRuntime,
+            "build",
+            "--tag",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ".")
         {
             ImageRegistry = registryEndpoint,
-            ImageTag = ImageTag
+            ImageTag = ImageTag,
+            WorkingDirectory = "ImageFixture"
         });
 });
 

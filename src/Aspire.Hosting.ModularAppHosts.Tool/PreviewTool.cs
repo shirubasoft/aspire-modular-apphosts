@@ -21,7 +21,9 @@ internal static partial class PreviewTool
         Usage:
           dotnet modular-apphosts preview produce --descriptor <path> --output <path>
               [--contract-version <exact-version>]
-              [--image <resource>=<repository>@<sha256-digest>]...
+              ([--image <resource>=<repository>@<sha256-digest>]... |
+               --apphost <path> --artifacts-directory <path>)
+              [--aspire-executable <path>] [--docker-executable <path>]
               [--pin <name>=<repository-url>@<full-commit>]...
           dotnet modular-apphosts preview export --module <name> --output <path>
               [--pin <name>=<repository-url>@<full-commit>]...
@@ -30,10 +32,19 @@ internal static partial class PreviewTool
           dotnet modular-apphosts preview materialize --manifest <path> --policy <path>
               --work-directory <path> --resolution <path> [--package-feed <path>]
               --consumer-repository <url> --consumer-commit <full-commit>
-              [--github-env <path>] [--property <name>=<value>]...
+              [--github-env <path>] [--property <name>=<value>]... [--gh-executable <path>]
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]... [--wait] [--github-output <path>]
+          dotnet modular-apphosts preview workflow generate producer --descriptor <path>
+              --apphost <path> --output <path> --repo <owner/repo>
+              --workflow <file-or-id> --ref <trusted-ref>
+              --aspire-version <exact-version> --tool-version <exact-version>
+              --github-token-secret <name>
+              (--registry-auth-script <path> | --anonymous-registry)
+              [--package-auth-script <path>] [--contract-publish-script <path>]
+              [--secret <environment-name>=<secret-name>]...
+              [--working-directory <path>] [--force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
         --dependency is accepted as an alias for --pin.
@@ -55,7 +66,7 @@ internal static partial class PreviewTool
             {
                 throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', or 'preview trigger' command.");
+                    "'preview materialize', 'preview trigger', or 'preview workflow' command.");
             }
 
             return arguments[1] switch
@@ -65,9 +76,10 @@ internal static partial class PreviewTool
                 "verify" => await VerifyAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "materialize" => await MaterializeAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "trigger" => await TriggerAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "workflow" => await WorkflowAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 _ => throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', or 'preview trigger' command.")
+                    "'preview materialize', 'preview trigger', or 'preview workflow' command.")
             };
         }
         catch (Exception exception) when (
@@ -176,64 +188,28 @@ internal static partial class PreviewTool
             }
         }
 
-        var body = JsonSerializer.Serialize(new WorkflowDispatchRequest(
-            targetRef,
-            inputs,
-            true), CompactJsonOptions);
-        var endpoint = $"repos/{repository}/actions/workflows/{Uri.EscapeDataString(workflow)}/dispatches";
+        var dispatchArguments = new List<string>
+        {
+            "workflow", "run", workflow,
+            "--repo", repository,
+            "--ref", targetRef
+        };
+        foreach (var input in inputs.OrderBy(input => input.Key, StringComparer.Ordinal))
+        {
+            dispatchArguments.Add("--raw-field");
+            dispatchArguments.Add($"{input.Key}={input.Value}");
+        }
+
         var result = await RunCommandAsync(
             githubCli,
-            [
-                "api",
-                "--method", "POST",
-                "--header", "Accept: application/vnd.github+json",
-                "--header", "X-GitHub-Api-Version: 2026-03-10",
-                "--input", "-",
-                endpoint
-            ],
+            dispatchArguments,
             Environment.CurrentDirectory,
-            body,
+            standardInput: null,
             cancellationToken).ConfigureAwait(false);
         EnsureSuccess(result, "GitHub workflow dispatch");
 
-        long runId;
-        string? runUrl;
-        try
-        {
-            using var response = JsonDocument.Parse(result.StandardOutput);
-            if (response.RootElement.ValueKind != JsonValueKind.Object ||
-                !response.RootElement.TryGetProperty("workflow_run_id", out var workflowRunId) ||
-                workflowRunId.ValueKind != JsonValueKind.Number ||
-                !workflowRunId.TryGetInt64(out runId) ||
-                runId <= 0)
-            {
-                throw new PreviewToolException(
-                    "GitHub workflow dispatch did not return a positive numeric workflow_run_id. " +
-                    "Ensure the API supports run details.");
-            }
-
-            runUrl = response.RootElement.TryGetProperty("html_url", out var htmlUrl)
-                && htmlUrl.ValueKind == JsonValueKind.String
-                ? htmlUrl.GetString()
-                : null;
-        }
-        catch (JsonException exception)
-        {
-            throw new PreviewToolException(
-                "GitHub workflow dispatch succeeded but returned an invalid response.",
-                exception);
-        }
-
-        if (string.IsNullOrWhiteSpace(runUrl))
-        {
-            throw new PreviewToolException(
-                "GitHub workflow dispatch did not return a run URL. Ensure the API supports run details.");
-        }
-
-        if (runUrl.Any(char.IsControl))
-        {
-            throw new PreviewToolException("GitHub workflow dispatch returned an invalid run URL.");
-        }
+        var runUrl = result.StandardOutput.Trim();
+        var runId = ParseGitHubWorkflowRunUrl(runUrl, repository);
 
         var outputs = $"workflow_run_id={runId}{Environment.NewLine}" +
             $"workflow_run_url={runUrl}{Environment.NewLine}";
@@ -261,6 +237,34 @@ internal static partial class PreviewTool
         }
 
         return 0;
+    }
+
+    private static long ParseGitHubWorkflowRunUrl(string runUrl, string repository)
+    {
+        if (!Uri.TryCreate(runUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new PreviewToolException(
+                "GitHub workflow dispatch did not return a valid workflow run URL. " +
+                "GitHub CLI 2.87.0 or newer is required.");
+        }
+
+        var expectedPrefix = $"/{repository}/actions/runs/";
+        if (!uri.AbsolutePath.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) ||
+            !long.TryParse(
+                uri.AbsolutePath[expectedPrefix.Length..].TrimEnd('/'),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var runId) ||
+            runId <= 0)
+        {
+            throw new PreviewToolException(
+                $"GitHub workflow dispatch returned an unexpected workflow run URL '{runUrl}'.");
+        }
+
+        return runId;
     }
 
     private static ModulePreviewSelection ParsePin(string value)
@@ -705,11 +709,6 @@ internal static partial class PreviewTool
 
     private sealed record RemoteState(string BaseRef, string BaseCommit, string? BranchCommit);
 
-    private sealed record WorkflowDispatchRequest(
-        string Ref,
-        IReadOnlyDictionary<string, string> Inputs,
-        [property: System.Text.Json.Serialization.JsonPropertyName("return_run_details")]
-        bool ReturnRunDetails);
 }
 
 internal sealed class PreviewToolException : Exception

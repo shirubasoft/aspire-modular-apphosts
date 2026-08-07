@@ -21,7 +21,8 @@ The distinction between request and resolution is intentional:
 - Repo C controls requested module commits, optional contract versions, and immutable OCI digests.
 - Repo D controls whether a contract is required, allowed repositories and package IDs, the
   published package source or source fallback project, MSBuild properties, emitted environment
-  variable names, and allowed image repositories.
+  variable names, allowed image repositories, and any additional repositories allowed to produce
+  each image.
 - `preview verify` is pure and offline. It does not clone repositories, run producer code, or contact
   a registry.
 - `preview materialize` revalidates the request, performs only policy-approved work, hashes the
@@ -66,6 +67,73 @@ offer; it contains no credentials, commands, build contexts, or consumer paths.
 `resourceKind` is `project` when the module contract declares `AddProject(...).ExportAsContainer(...)`
 and `container` when it declares `AddContainer(...)`.
 
+### Generate the producer workflow
+
+The tool can generate the producer-owned GitHub Actions workflow that builds and pushes the images,
+turns their registry digests into a preview request, and waits for the trusted consumer workflow:
+
+```bash
+dotnet modular-apphosts preview workflow generate producer \
+  --descriptor module-preview.producer.json \
+  --apphost src/Producer.AppHost/Producer.AppHost.csproj \
+  --output .github/workflows/module-preview.yml \
+  --repo example/consumer-tests \
+  --workflow module-preview-e2e.yml \
+  --ref main \
+  --aspire-version 13.4.6 \
+  --tool-version 4.4.0 \
+  --github-token-secret PREVIEW_AUTOMATION_TOKEN \
+  --registry-auth-script .github/scripts/login-preview-registries.sh \
+  --package-auth-script .github/scripts/login-package-feed.sh \
+  --contract-publish-script .github/scripts/publish-preview-contract.sh \
+  --secret REGISTRY_TOKEN=PREVIEW_REGISTRY_TOKEN \
+  --secret PACKAGE_TOKEN=PREVIEW_PACKAGE_TOKEN
+```
+
+All paths embedded in the workflow are repository-relative. `--working-directory` changes where the
+generator reads the descriptor without changing that checked-in path, which is useful to tools that
+stage repository contents elsewhere. The output is deterministic for the same descriptor and
+options, so commit it and review changes like other CI code.
+
+Generation refuses to replace an existing file; pass `--force` only when intentionally regenerating
+the checked-in workflow.
+
+The generated workflow deliberately keeps authentication in producer-owned scripts. Secret
+mappings have the form `<environment-name>=<GitHub-secret-name>` and are declared for
+`workflow_call` as well as read during manual dispatch. `--github-token-secret` identifies the token
+used by `gh` to dispatch and watch the consumer workflow; a normal repository `GITHUB_TOKEN`
+generally cannot dispatch a different repository. When the configured registry explicitly accepts
+anonymous writes, replace `--registry-auth-script` with `--anonymous-registry`. Public image reads
+alone are not sufficient because this workflow pushes. Omit the package or publish script only when
+the feed is public/already authenticated or the exact contract package has already been published.
+Scripts receive the mapped secret environment variables plus `PREVIEW_ARTIFACTS_DIR`. Contract
+scripts additionally receive `CONTRACT_VERSION`, and the publish script receives the same exact
+version as its first argument.
+
+At run time the workflow:
+
+1. Checks out an explicit `source-ref` branch (or the current branch name), with full history, then
+   uses `preview export` to verify that `HEAD` is its pushed `origin` tip before publishing anything.
+   Tags and commit IDs are rejected because preview production requires an attached, pushed branch.
+2. Writes every generated manifest and tool configuration below `${{ runner.temp }}`, keeping the
+   producer worktree clean.
+3. Uses `dotnet new nugetconfig`, then installs Aspire CLI and Modular AppHosts into separate tool
+   paths with a NuGet.org-only configuration and isolated package cache.
+4. Runs `preview produce --apphost`. The tool invokes `aspire do describe-images`, joins the typed
+   image description to the producer descriptor, and invokes the exact named
+   `push-<effective-resource>` steps in one Aspire pipeline run. Push dependencies build each image.
+5. Uses `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'` for each pushed reference.
+   The tool validates the digest and effective repository (including registry mappings) while it
+   writes the immutable preview request. The generated shell does not parse JSON with `jq`.
+6. Runs `gh workflow run` and `gh run watch --exit-status` directly, exposes the consumer run ID and
+   URL as reusable-workflow outputs, links the consumer run in the job summary, and uploads the
+   generated preview documents for diagnosis.
+
+The authentication and contract publishing scripts are intentionally application-specific. For
+example, the registry script may use `docker login`, while the contract script may pack to
+`$PREVIEW_ARTIFACTS_DIR` and publish to a private feed. The generator does not put registry hosts,
+package feed URLs, credentials, or organization-specific actions into the workflow.
+
 Build and push images in Repo C. Capture the registry-reported digest, not a tag. If the origin
 workflow already built the image, pass that digest directly to the tool; Repo D does not rebuild it:
 
@@ -76,6 +144,22 @@ dotnet modular-apphosts preview produce \
   --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --output module-preview.json
 ```
+
+Alternatively, let `produce` discover, build, push, and inspect every image declared by the
+descriptor from an AppHost. The artifacts directory receives `module-images.json` and Aspire
+pipeline diagnostics:
+
+```bash
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --contract-version 2.3.0-preview.7 \
+  --apphost src/RepoC.AppHost/RepoC.AppHost.csproj \
+  --artifacts-directory "$RUNNER_TEMP/module-preview/images" \
+  --output "$RUNNER_TEMP/module-preview/module-preview.json"
+```
+
+This mode invokes the exact `push-<effective-resource>` Aspire steps and obtains each immutable
+digest through Docker's direct manifest-digest format. Do not combine `--apphost` with `--image`.
 
 The contract version may instead be committed as `contract.version` in the descriptor. Supplying
 `--contract-version` overrides that value, which lets CI pass the exact version it just published.
@@ -105,6 +189,11 @@ an image-only descriptor.
 is the pushed tip of that branch on `origin`. It rejects undeclared images, tags, uppercase or
 abbreviated digests, missing required images, and mismatches between a supplied image repository
 and the committed descriptor.
+
+In GitHub Actions, check out an explicit branch ref so `HEAD` is attached, calculate the exact
+contract version before packing, and write packages plus the generated manifest outside the Git
+worktree, such as under `RUNNER_TEMP`. The exact version published by the job is the value passed to
+`--contract-version`; a later or independently calculated version makes the request irreproducible.
 
 Add changed dependencies explicitly; a branch name is never inferred across repositories:
 
@@ -162,6 +251,45 @@ absent because Repo C is not allowed to choose them for Repo D:
 
 The producer branch and base ref are audit metadata. Consumers use only full immutable commits and
 digests as artifact identities.
+
+### Images built outside the module repository
+
+An image-only producer may build a resource owned by a module in another repository. In that case,
+use a pin with the same name as the descriptor's `module`; it replaces the default module selection
+without changing the producer identity:
+
+```bash
+dotnet modular-apphosts preview produce \
+  --descriptor module-preview.producer.json \
+  --pin module-c=https://github.com/acme/module-owner.git@0123456789abcdef0123456789abcdef01234567 \
+  --image module-c-api=ghcr.io/acme/module-c/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --output "$RUNNER_TEMP/module-preview.json"
+```
+
+Authorization is artifact-specific. A contract may be requested only when the producer repository
+and commit match that contract module's selected repository and commit. When an image's selected
+module does not match the producer, that image must independently authorize the producer's canonical
+Git repository in the consumer policy:
+
+```json
+{
+  "resource": "module-c-api",
+  "resourceKind": "container",
+  "repositories": [
+    "ghcr.io/acme/module-c/api"
+  ],
+  "producerRepositories": [
+    "https://github.com/acme/image-builder.git"
+  ],
+  "required": true
+}
+```
+
+`producerRepositories` authorizes who may request that image override; it does not assert OCI build
+provenance. Leave it empty or omit it when only the selected module repository may produce the
+image. Selecting the producer repository as some other dependency grants no authority over the
+contract or images of this module. A descriptor whose own module selection is overridden as above
+is therefore image-only and must offer at least one immutable image.
 
 ## Consumer policy
 
@@ -229,6 +357,9 @@ This fragment represents the corresponding fields inside `contract`. Source fall
 `dotnet restore` and `dotnet pack` commands to execute MSBuild from the producer commit, so run it in
 a no-secrets job. `allowedPackProperties` applies only to fallback mode and must be empty or omitted
 in published mode. Every declared contract policy must enable exactly one materialization mode.
+All transitive package dependencies of a published or fallback-built contract must already be
+resolvable from consumer-approved NuGet sources. The preview protocol does not publish dependencies
+or infer release order between independently owned packages.
 
 ## Verify and materialize in Repo D
 
@@ -294,6 +425,14 @@ The image-only GitHub environment contains `ModulePreview__Resolution`; it does 
 
 The work directory must be empty. Authentication for Git, NuGet, and OCI registries is configured by
 the workflow and never appears in the request, descriptor, policy, or resolution.
+`--nuget-config` is passed to `dotnet restore` as `--configfile`, so NuGet uses only that file rather
+than its normal configuration hierarchy. Include every required package source, source mapping, and
+credential in that file. Omit `--nuget-config` to use NuGet's normal machine, user, and repository
+configuration chain.
+When source fallback fetches a private GitHub HTTPS repository, `materialize` uses the configured
+`gh` executable as a process-scoped Git credential helper. Set `GH_TOKEN` or `GITHUB_TOKEN` for that
+process, and use `--gh-executable <path>` only when `gh` is not on `PATH`. No global Git configuration
+or credential-bearing repository URL is required.
 
 ## Apply the trusted resolution
 
@@ -368,7 +507,12 @@ cross the consumer policy/materialization boundary and cannot consume prebuilt a
 
 ## Complete fixture
 
-The runnable fixture is split across:
+The repository-local [`PreviewWorkflow` sample](../samples/PreviewWorkflow/README.md) performs offline
+external-producer authorization, checks its descriptor against a real AppHost image publisher, and
+generates the producer workflow in CI. It uses non-operational repository and registry identities so
+the validation needs no credentials or external services.
+
+The complete cross-repository deployment fixture is split across:
 
 - [`Shirubasoft/aspire-modular-apphosts-preview-producer`](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-producer), which owns the contract, API image build, descriptor, and immutable digest; and
 - [`Shirubasoft/aspire-modular-apphosts-preview-consumer`](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-consumer), which owns the policy, trusted workflow, AppHost, and assertions.
@@ -386,6 +530,7 @@ and uploads the trusted resolution and diagnostics.
 | Required contract omitted | Repo D does not allow an image-only request for that module | Include the contract or review the policy and set contract `required` to `false` |
 | Missing required image | The request could fall back to building source | Publish the image and pass its immutable digest |
 | Unauthorized repository or resource | Repo C attempted to widen Repo D's trust boundary | Review and update Repo D's policy, not the request |
+| Unauthorized external image producer | An image's policy does not allow the request producer repository | Add the canonical repository to that image's reviewed `producerRepositories`, or produce it from the selected module repository |
 | Contract identity mismatch | The restored or packed nuspec differs from the request | Fix the published package or producer package ID/version |
 | Published contract resolution fails | The exact version is absent, inaccessible, or NuGet authentication is missing | Publish or grant access to the exact version, then retry |
 | Image inspect failure | The digest is absent, inaccessible, or authentication is missing | Publish/grant access, then retry the same digest |

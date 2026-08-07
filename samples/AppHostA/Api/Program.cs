@@ -3,10 +3,10 @@ builder.Services.AddHealthChecks();
 
 var app = builder.Build();
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/", (IConfiguration configuration) => Results.Ok(new
 {
     service = "sample-api",
-    message = "Exported by AppHost A"
+    message = configuration["MODULE_MESSAGE"]
 }));
 app.MapHealthChecks("/health");
 

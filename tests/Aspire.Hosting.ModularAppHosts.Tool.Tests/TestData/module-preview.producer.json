@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "module": "sample-module",
+  "contract": {
+    "packageId": "Example.SampleModule.Contract"
+  },
+  "images": [
+    {
+      "resource": "sample-api",
+      "resourceKind": "container",
+      "repository": "registry.example.test/team/sample-api",
+      "required": true
+    }
+  ]
+}

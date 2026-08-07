@@ -68,20 +68,38 @@ internal static class PreviewPolicyEvaluator
         foreach (var contract in manifest.Contracts)
         {
             EnsureSelectedModule(contract.Module, selections, "contract request");
+            var selection = selections[contract.Module];
+            if (!ProducerMatchesSelection(manifest.Producer, selection))
+            {
+                throw new InvalidDataException(
+                    $"Preview producer repository and commit do not match module '{contract.Module}', " +
+                    "so the producer cannot request its contract package.");
+            }
         }
 
         foreach (var image in manifest.Images)
         {
             EnsureSelectedModule(image.Module, selections, "image artifact");
+            var selection = selections[image.Module];
+            if (!ProducerMatchesSelection(manifest.Producer, selection))
+            {
+                var modulePolicy = policies[image.Module];
+                var imagePolicy = FindImagePolicy(image, modulePolicy.Images);
+                if (!imagePolicy.ProducerRepositories.Contains(
+                        manifest.Producer.Repository,
+                        StringComparer.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"Preview producer repository '{manifest.Producer.Repository}' is not allowed for image " +
+                        $"resource '{image.Resource}' in module '{image.Module}'.");
+                }
+            }
         }
 
-        var producerIsSelected = manifest.Modules.Any(module =>
-            string.Equals(module.Repository, manifest.Producer.Repository, StringComparison.Ordinal) &&
-            string.Equals(module.Commit, manifest.Producer.Commit, StringComparison.OrdinalIgnoreCase));
-        if (!producerIsSelected)
+        if (manifest.Contracts.Count == 0 && manifest.Images.Count == 0)
         {
             throw new InvalidDataException(
-                "The preview producer repository and commit must match one selected module.");
+                "A policy-verified preview must offer at least one contract package or immutable image.");
         }
 
         return new ModulePreviewPolicyEvaluation(manifest, policy, evaluations);
@@ -118,15 +136,7 @@ internal static class PreviewPolicyEvaluator
         ModulePreviewImageArtifact artifact,
         IEnumerable<ModulePreviewConsumerImagePolicy> policies)
     {
-        var imagePolicy = policies.SingleOrDefault(policy =>
-            string.Equals(policy.Resource, artifact.Resource, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(policy.ResourceKind, ToWireName(artifact.ResourceKind), StringComparison.Ordinal));
-        if (imagePolicy is null)
-        {
-            throw new InvalidDataException(
-                $"Image resource '{artifact.Resource}' ({artifact.ResourceKind}) is not allowed " +
-                $"for module '{artifact.Module}'.");
-        }
+        var imagePolicy = FindImagePolicy(artifact, policies);
 
         if (!imagePolicy.Repositories.Contains(artifact.Repository, StringComparer.Ordinal))
         {
@@ -140,6 +150,16 @@ internal static class PreviewPolicyEvaluator
             $"Image artifact '{artifact.Module}/{artifact.Resource}'.Sha256");
     }
 
+    private static ModulePreviewConsumerImagePolicy FindImagePolicy(
+        ModulePreviewImageArtifact artifact,
+        IEnumerable<ModulePreviewConsumerImagePolicy> policies) =>
+        policies.SingleOrDefault(policy =>
+            string.Equals(policy.Resource, artifact.Resource, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(policy.ResourceKind, ToWireName(artifact.ResourceKind), StringComparison.Ordinal))
+        ?? throw new InvalidDataException(
+            $"Image resource '{artifact.Resource}' ({artifact.ResourceKind}) is not allowed " +
+            $"for module '{artifact.Module}'.");
+
     private static void EnsureSelectedModule(
         string module,
         Dictionary<string, ModulePreviewSelection> selections,
@@ -151,6 +171,12 @@ internal static class PreviewPolicyEvaluator
                 $"The {item} for module '{module}' does not correspond to a selected module.");
         }
     }
+
+    private static bool ProducerMatchesSelection(
+        ModulePreviewProducer producer,
+        ModulePreviewSelection selection) =>
+        string.Equals(selection.Repository, producer.Repository, StringComparison.Ordinal) &&
+        string.Equals(selection.Commit, producer.Commit, StringComparison.OrdinalIgnoreCase);
 
     private static string ToWireName(ModulePreviewResourceKind resourceKind) =>
         resourceKind switch
@@ -385,6 +411,20 @@ internal static class PreviewPolicyValidation
                     throw new InvalidDataException(
                         $"Image policy for module '{module}', resource '{image.Resource}' contains duplicate " +
                         $"repository '{repository}'.");
+                }
+            }
+
+            var producerRepositories = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var repository in image.ProducerRepositories)
+            {
+                ValidateRepositoryUrl(
+                    repository,
+                    $"Image policy for module '{module}'.ProducerRepositories");
+                if (!producerRepositories.Add(repository))
+                {
+                    throw new InvalidDataException(
+                        $"Image policy for module '{module}', resource '{image.Resource}' contains duplicate " +
+                        $"producer repository '{repository}'.");
                 }
             }
         }

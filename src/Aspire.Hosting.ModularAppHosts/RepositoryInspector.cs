@@ -860,6 +860,7 @@ internal static class RepositorySynchronizer
         bool updateRepository,
         string? revision = null,
         string gitExecutablePath = "git",
+        string githubCliPath = "gh",
         TimeSpan? commandTimeout = null,
         CancellationToken cancellationToken = default)
     {
@@ -869,6 +870,7 @@ internal static class RepositorySynchronizer
             updateRepository,
             revision,
             gitExecutablePath,
+            githubCliPath,
             commandTimeout,
             cancellationToken).ConfigureAwait(false);
         return commands.Count == 0 ? null : commands[0];
@@ -880,6 +882,7 @@ internal static class RepositorySynchronizer
         bool updateRepository,
         string? revision = null,
         string gitExecutablePath = "git",
+        string githubCliPath = "gh",
         TimeSpan? commandTimeout = null,
         CancellationToken cancellationToken = default)
     {
@@ -913,15 +916,27 @@ internal static class RepositorySynchronizer
             Directory.CreateDirectory(Path.GetDirectoryName(repositoryPath)
                 ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."));
 
+            var clone = GitHubGitAuthentication.IsGitHubRepository(repository)
+                ? GitHubRepositoryCloner.CreateCommand(githubCliPath, repository, repositoryPath)
+                : new RepositoryCloneCommand(
+                    gitExecutablePath,
+                    ["clone", "--recurse-submodules", "--", repository, repositoryPath],
+                    Path.GetDirectoryName(repositoryPath)!);
             var commands = new List<RepositorySyncCommand>
             {
-                new(gitExecutablePath, ["clone", "--recurse-submodules", "--", repository, repositoryPath])
+                new(clone.Executable, clone.Arguments)
             };
-            AddRevisionCommands(commands, repositoryPath, revision, gitExecutablePath);
+            AddRevisionCommands(
+                commands,
+                repositoryPath,
+                revision,
+                gitExecutablePath,
+                githubCliPath,
+                repository);
             return commands;
         }
 
-        await EnsureExpectedOriginAsync(
+        var actualRepository = await EnsureExpectedOriginAsync(
             repositoryPath,
             repository,
             gitExecutablePath,
@@ -947,7 +962,13 @@ internal static class RepositorySynchronizer
         if (!string.IsNullOrWhiteSpace(revision))
         {
             var commands = new List<RepositorySyncCommand>();
-            AddRevisionCommands(commands, repositoryPath, revision, gitExecutablePath);
+            AddRevisionCommands(
+                commands,
+                repositoryPath,
+                revision,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository);
             return commands;
         }
 
@@ -963,7 +984,10 @@ internal static class RepositorySynchronizer
 
         return [new RepositorySyncCommand(
             gitExecutablePath,
-            ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"])];
+            GitHubGitAuthentication.ConfigureCredentialHelper(
+                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"],
+                actualRepository ?? repository,
+                githubCliPath))];
     }
 
     public static async Task SynchronizeAsync(
@@ -973,6 +997,7 @@ internal static class RepositorySynchronizer
         CancellationToken cancellationToken,
         string? revision = null,
         string gitExecutablePath = "git",
+        string githubCliPath = "gh",
         TimeSpan? commandTimeout = null,
         Action<string>? progress = null)
     {
@@ -982,6 +1007,7 @@ internal static class RepositorySynchronizer
             updateRepository,
             revision,
             gitExecutablePath,
+            githubCliPath,
             commandTimeout,
             cancellationToken).ConfigureAwait(false);
         progress?.Invoke($"Synchronizing repository '{repositoryPath}'.");
@@ -1014,7 +1040,9 @@ internal static class RepositorySynchronizer
         List<RepositorySyncCommand> commands,
         string repositoryPath,
         string? revision,
-        string gitExecutablePath)
+        string gitExecutablePath,
+        string githubCliPath,
+        string? repository)
     {
         if (string.IsNullOrWhiteSpace(revision))
         {
@@ -1023,25 +1051,36 @@ internal static class RepositorySynchronizer
 
         commands.Add(new RepositorySyncCommand(
             gitExecutablePath,
-            ["-C", repositoryPath, "fetch", "--tags", "origin", revision]));
+            GitHubGitAuthentication.ConfigureCredentialHelper(
+                ["-C", repositoryPath, "fetch", "--tags", "origin", revision],
+                repository,
+                githubCliPath)));
         commands.Add(new RepositorySyncCommand(
             gitExecutablePath,
             ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"]));
         commands.Add(new RepositorySyncCommand(
             gitExecutablePath,
-            ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"]));
+            GitHubGitAuthentication.ConfigureCredentialHelper(
+                ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"],
+                repository,
+                githubCliPath)));
     }
 
-    private static async Task EnsureExpectedOriginAsync(
+    private static async Task<string?> EnsureExpectedOriginAsync(
         string repositoryPath,
         string? expectedRepository,
         string gitExecutablePath,
         TimeSpan? commandTimeout,
         CancellationToken cancellationToken)
     {
+        var actualRepository = await RepositoryInspector.TryGetRemoteAsync(
+            repositoryPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(expectedRepository))
         {
-            return;
+            return actualRepository;
         }
 
         var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
@@ -1054,14 +1093,9 @@ internal static class RepositorySynchronizer
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false))
         {
-            return;
+            return actualRepository;
         }
 
-        var actualRepository = await RepositoryInspector.TryGetRemoteAsync(
-            repositoryPath,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
         var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
             (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
              LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
@@ -1071,6 +1105,8 @@ internal static class RepositorySynchronizer
                 $"Repository '{repositoryPath}' has origin '{actualRepository ?? "(missing)"}', which does not match " +
                 $"configured repository '{expectedRepository}'. Move the checkout or correct the module configuration.");
         }
+
+        return actualRepository;
     }
 
     private static bool LocalRepositoriesMatch(string first, string second, string baseDirectory)

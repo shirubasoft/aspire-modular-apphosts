@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "module": "image-push-e2e",
+  "images": [
+    {
+      "resource": "image-push-declared",
+      "resourceKind": "container",
+      "repository": "registry.example.test/image-push/declared",
+      "required": true
+    }
+  ]
+}

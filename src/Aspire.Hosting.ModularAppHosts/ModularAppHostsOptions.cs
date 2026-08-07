@@ -25,7 +25,10 @@ public sealed class ModularAppHostsOptions
     /// </summary>
     public bool AutoCloneRepositories { get; set; }
 
-    /// <summary>Gets or sets the GitHub CLI executable used by automatic sibling clones.</summary>
+    /// <summary>
+    /// Gets or sets the GitHub CLI executable used by GitHub repository clones and as the process-scoped credential
+    /// helper for authenticated Git operations.
+    /// </summary>
     public string GitHubCliPath { get; set; } = "gh";
 
     /// <summary>Gets or sets the Git executable used to synchronize managed repositories.</summary>

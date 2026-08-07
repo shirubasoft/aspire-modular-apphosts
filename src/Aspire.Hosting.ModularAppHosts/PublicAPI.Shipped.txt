@@ -93,9 +93,6 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject.IsExportedAsContainer.get -> bool
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject.ProjectPath.get -> string!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder
-Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.ConfigureProject(System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ProjectResource!>!>! configureProject) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
-Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.ExportAsContainer(Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions! options, System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ContainerResource!>!>? configureContainer = null) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
-Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.ExportAsContainer(string! imageName, string! publishCommand, System.Collections.Generic.IReadOnlyList<string!>! publishArguments, System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ContainerResource!>!>? configureContainer = null) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.Project.get -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProject!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResource
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResource.Name.get -> string!

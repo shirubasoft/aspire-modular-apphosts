@@ -100,7 +100,7 @@ public sealed class ModuleImagePullPipelineTests
                     {
                         ImageTag = "local"
                     },
-                    container => container
+                    (_, container) => container
                         .WithContainerRegistry(registry)
                         .WithRemoteImageName("services/orders")
                         .WithRemoteImageTag("preview"));
@@ -354,6 +354,40 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Module_publisher_identity_wins_over_a_colliding_resource_name_default()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "mirror");
+        var module = await builder.ExportModuleAsync("database", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("postgres", "owner/database", "ci")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "owner/database",
+                    "docker",
+                    "build")
+                {
+                    ImageTag = "ci"
+                });
+        });
+        await builder.AddAsync(module);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        container.Annotations.Add(new RegistryTargetAnnotation(registry.Resource));
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("registry.example.test/mirror/owner/database:ci", references.RemoteImage);
+        Assert.Equal("owner/database:ci", references.LocalImage);
+        Assert.DoesNotContain("postgres:latest", references.RemoteImage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Pull_reference_resolution_rejects_a_resource_without_an_image()
     {
         var resource = new ContainerResource("orders-api");
@@ -401,6 +435,28 @@ public sealed class ModuleImagePullPipelineTests
 
         Assert.Contains("multiple container registries", exception.Message, StringComparison.Ordinal);
         Assert.Contains("WithContainerRegistry", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Deployment_target_registry_is_used_when_no_resource_registry_is_configured()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "acme");
+        var container = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        container.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
+        {
+            ContainerRegistry = registry.Resource
+        });
+
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("registry.example.test/acme/orders-api:latest", references.RemoteImage);
+        Assert.Equal("orders-api:preview", references.LocalImage);
     }
 
     [Fact]

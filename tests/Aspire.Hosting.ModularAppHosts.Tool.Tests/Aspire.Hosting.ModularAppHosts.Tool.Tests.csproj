@@ -9,8 +9,12 @@
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+    <PackageReference Include="YamlDotNet" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="TestData/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

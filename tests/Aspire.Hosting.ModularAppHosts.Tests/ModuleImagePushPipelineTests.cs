@@ -33,6 +33,7 @@ public sealed class ModuleImagePushPipelineTests
         var step = Assert.Single(await CreatePushStepsAsync(container));
         Assert.Equal("push-orders-api", step.Name);
         Assert.Same(container, step.Resource);
+        Assert.Contains("build-orders-api", step.DependsOnSteps);
         Assert.Contains(WellKnownPipelineSteps.PushPrereq, step.DependsOnSteps);
         Assert.Contains(WellKnownPipelineSteps.CheckContainerRuntime, step.DependsOnSteps);
         Assert.Contains(WellKnownPipelineSteps.Push, step.RequiredBySteps);
@@ -98,7 +99,7 @@ public sealed class ModuleImagePushPipelineTests
                     {
                         ImageTag = "local"
                     },
-                    container => container
+                    (_, container) => container
                         .WithContainerRegistry(registry)
                         .WithRemoteImageName("services/orders")
                         .WithRemoteImageTag("preview"));
@@ -192,6 +193,24 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public void Scoped_push_only_reaches_the_matching_module_build_dependency()
+    {
+        var apiStep = CreatePushStep("orders-api");
+        var workerStep = CreatePushStep("orders-worker");
+
+        ModuleImagePushPipeline.ApplySelection(
+            [apiStep, workerStep],
+            new ModuleImageSelection(["orders-api"]));
+
+        var reachableBuildSteps = new[] { apiStep, workerStep }
+            .Where(step => step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
+            .SelectMany(step => step.DependsOnSteps)
+            .Where(step => step.StartsWith("build-", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(["build-orders-api"], reachableBuildSteps);
+    }
+
+    [Fact]
     public void Scoped_push_rejects_resources_without_a_push_step()
     {
         var exception = Assert.Throws<InvalidOperationException>(() =>
@@ -209,6 +228,7 @@ public sealed class ModuleImagePushPipelineTests
         {
             Name = $"push-{resourceName}",
             Action = _ => Task.CompletedTask,
+            DependsOnSteps = [$"build-{resourceName}"],
             RequiredBySteps = [WellKnownPipelineSteps.Push],
             Tags = [WellKnownPipelineTags.PushContainerImage],
             Resource = new ContainerResource(resourceName)
