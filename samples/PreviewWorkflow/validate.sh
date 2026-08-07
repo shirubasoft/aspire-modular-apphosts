@@ -66,9 +66,14 @@ dotnet run --project "$tool_project" --configuration Release -- \
     --secret REGISTRY_TOKEN=SAMPLE_REGISTRY_TOKEN
 
 bash -n samples/PreviewWorkflow/authenticate-registry.sh
-grep --fixed-strings --quiet 'aspire" do describe-images' "$generated_workflow"
-grep --fixed-strings --quiet 'aspire" do push' "$generated_workflow"
-grep --fixed-strings --quiet 'preview trigger' "$generated_workflow"
+grep --fixed-strings --quiet 'preview produce' "$generated_workflow"
+grep --fixed-strings --quiet -- '--apphost "$GITHUB_WORKSPACE/$APPHOST"' "$generated_workflow"
+grep --fixed-strings --quiet 'gh workflow run' "$generated_workflow"
+grep --fixed-strings --quiet 'gh run watch' "$generated_workflow"
+if grep --fixed-strings --quiet 'jq' "$generated_workflow"; then
+    echo "Generated producer workflows must not depend on jq." >&2
+    exit 1
+fi
 grep --fixed-strings --quiet 'samples/PreviewWorkflow/authenticate-registry.sh' "$generated_workflow"
 
 echo "Verified the external image policy and generated producer workflow."

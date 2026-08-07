@@ -17,7 +17,8 @@ bash samples/PreviewWorkflow/validate.sh
 The script performs offline policy verification, asks the AppHost for its effective image document,
 confirms that the descriptor selects exactly one buildable push target, and generates a producer
 GitHub Actions workflow in a temporary directory. It also checks the producer-owned registry login
-hook and the generated describe, push, and trigger steps.
+hook, the high-level AppHost production command, native GitHub CLI dispatch and watch commands, and
+the absence of generated `jq` parsing.
 
 The `example` GitHub owners, registry host, consumer workflow, and secret names are deliberately
 non-operational placeholders. Replace them with repository-owned values before committing a generated
