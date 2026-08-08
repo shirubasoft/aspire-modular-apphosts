@@ -18,6 +18,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CliWrap" />
+    <PackageReference Include="NuGet.Versioning" />
   </ItemGroup>
   <ItemGroup>
     <!-- Share the wire contract without pulling the complete Aspire hosting runtime into the tool package. -->
@@ -30,5 +31,8 @@
     <Compile Include="../Aspire.Hosting.ModularAppHosts/GitHubGitAuthentication.cs"
              Link="GitHubGitAuthentication.cs" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../schemas/module-preview-producer.schema.json"
+          Pack="true"
+          PackagePath="schemas/" />
   </ItemGroup>
 </Project>

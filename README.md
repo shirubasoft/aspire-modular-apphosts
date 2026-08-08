@@ -1,6 +1,6 @@
 # Shirubasoft.Aspire.ModularAppHosts
 
-Define an Aspire resource graph once and reuse it across AppHosts. A module can be added from the current application, imported from a managed Git checkout, and exposed through a generated strongly typed API. Importing does not load a module definition from Git: every consumer references the producer-owned C# contract package, while the configured repository supplies only the source and build context needed to materialize that contract.
+Define an Aspire resource graph once and reuse it across AppHosts. A module can be added from the current application, imported from a managed Git checkout, and exposed through a generated strongly typed API. Every consumer references the producer-owned C# contract package, while the configured repository supplies the source and build context used to materialize that contract.
 
 ## Packages
 
@@ -17,7 +17,7 @@ Install the core package in AppHosts and shared module contracts:
 dotnet add package Shirubasoft.Aspire.ModularAppHosts
 ```
 
-The testing package is optional. Keeping it separate means regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies. Add it to both the AppHost that declares the test deployment environment and the test project that creates the deployment builder.
+The optional testing package carries `Aspire.Hosting.Testing` and Docker hosting dependencies. Add it to both the AppHost that declares the test deployment environment and the test project that creates the deployment builder.
 
 ```bash
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
@@ -44,7 +44,7 @@ using Aspire.Hosting.ModularAppHosts;
 
 namespace Catalog.Modules;
 
-[GenerateDistributedApplicationModule(Name, Version = "1")]
+[GenerateDistributedApplicationModule(Name, Version = "1", PackageId = "Catalog.Modules")]
 public static partial class CatalogModule
 {
     public const string Name = "catalog";
@@ -53,7 +53,7 @@ public static partial class CatalogModule
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
         module.AddContainer(ApiResourceName, "nginx", "alpine")
-            .Configure(container =>
+            .Configure((_, container) =>
                 container.WithHttpEndpoint(targetPort: 80, name: "http"));
     }
 }
@@ -79,11 +79,11 @@ For a repository-backed module, supply its repository through configuration or `
 
 Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
 
-By default, local modules run as projects, imported modules run as containers, and existing clean imported repositories with a configured upstream are fast-forwarded before startup. Clean local branches without an upstream and dirty checkouts are left unchanged. Image build commands remain opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
+By default, local modules run as projects, imported modules run as containers, and clean imported repositories with a configured upstream are fast-forwarded before startup. Local branches keep their current commit when they lack an upstream or contain changes. Image build commands are opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
 
-Module image build commands can follow Aspire's Docker or Podman selection by awaiting `ContainerRuntimeResolver.ResolveAsync()`. It honors `ASPIRE_CONTAINER_RUNTIME` and the legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable, otherwise probes both runtimes in parallel and prefers one that is running. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build, so CI does not repeat module-owned build commands. Pass declared or effective resource names after any aggregate step to operate on only that subset, for example `aspire do pull catalog-api catalog-worker`. `aspire do describe-images --output-path artifacts` writes the same effective run, pull, push, and build identities to `artifacts/module-images.json` for CI tooling. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry without changing push behavior.
+Module image build commands can follow Aspire's Docker or Podman selection by awaiting `ContainerRuntimeResolver.ResolveAsync()`. It reads `ASPIRE_CONTAINER_RUNTIME`, accepts `DOTNET_ASPIRE_CONTAINER_RUNTIME`, and otherwise probes both runtimes in parallel to prefer one that is running. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build, so CI can delegate module-owned build commands to Aspire. Pass declared or effective resource names after any aggregate step to operate on that subset, for example `aspire do pull catalog-api catalog-worker`. `aspire do describe-images --output-path artifacts` writes the same effective run, pull, push, and build identities to `artifacts/module-images.json` for CI tooling. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry while retaining its push behavior.
 
-For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered without a clone; a missing direct sibling is cloned with GitHub CLI. Published module images default to a branch-and-commit tag and add `-dirty` when their source worktree has changes. Registries can be modeled separately from image names, factory-created `ContainerResource` integrations can publish custom images without losing their typed APIs, missing clean images can be pulled before building, and legacy build outputs can be retagged without shell wrappers. Each exported project or container publisher can select a separate `BuildRepository` and revision, so a resource may be defined in an application contract while its Dockerfile and build script remain in an owning repository. Imported modules pinned to a branch, tag, or commit use isolated managed checkouts so materialization never detaches a sibling or AppHost developer worktree. The module guide documents the layout, configuration, and validation behavior.
+For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered in place; a missing direct sibling is cloned with GitHub CLI. Published module images default to a branch-and-commit tag and add `-dirty` when their source worktree has changes. Registries can be modeled separately from image names, factory-created `ContainerResource` integrations can publish custom images while retaining their typed APIs, missing clean images can be pulled before building, and custom build outputs can be retagged directly. Each exported project or container publisher can select a separate `BuildRepository` and revision, so a resource may be defined in an application contract while its Dockerfile and build script remain in an owning repository. Imported modules pinned to a branch, tag, or commit use isolated managed checkouts that protect sibling and AppHost developer worktrees. The module guide documents the layout, configuration, and validation behavior.
 
 For an ongoing feature branch that must be exercised by another repository's CI, install the local
 .NET tool, produce a request containing the clean pushed commit and any already-built image digests,
@@ -106,20 +106,28 @@ dotnet modular-apphosts preview trigger \
 ```
 
 For CI, `preview workflow generate producer` writes a reviewable GitHub Actions workflow that uses
-an attached checkout, isolated tool installs, named `aspire do push-<resource>` pipeline steps,
+an attached checkout, isolated tool installs, one aggregate `aspire do push <resource>...` pipeline run,
 Docker's registry-reported digest formatter, the exact contract version, `gh workflow run`, and
-`gh run watch`. Descriptor/image joining and validation stay in `preview produce`, not generated
-shell or `jq`. Registry and package authentication remain explicit producer-owned script hooks; the
-generated workflow contains no service, registry, feed, or organization-specific credentials. See
-the preview guide for the generator options and hook contract.
+`gh run watch`. `preview produce` owns descriptor/image joining and validation. Registry and package
+authentication uses explicit producer-owned scripts. See the preview guide for the generator options
+and authentication contract.
 
-The request carries full commits and OCI digests rather than mutable branch names and image tags.
+Image-only producers can configure a trusted external AppHost repository and ref. The workflow
+acquires it with `gh`, pins the module to its exact commit, and maps each
+descriptor image's build repository to the producer workspace before running one resource-scoped
+push pipeline.
+
+Generate the producer descriptor itself with `preview descriptor generate producer --apphost ...
+--module ...`, and run the same command with `--check` in CI. The command derives publisher kinds,
+image repositories, and the module contract package ID from the effective AppHost model and emits a
+descriptor linked to the shipped JSON Schema.
+
+The request records full commits and OCI digests as its reproducible identities.
 The producer descriptor may omit the contract for an image-only preview, or omit only its version
 and receive the exact CI-computed version through `--contract-version`. The consumer policy decides
 whether the contract is required and whether to restore its exact package from a reviewed HTTPS
-NuGet source or pack it from a reviewed source fallback. Published-package materialization does not
-check out or build the producer repository. A package feed is required only for requests that carry
-a contract.
+NuGet source or pack it from a reviewed source fallback. Published-package materialization restores
+the reviewed package directly. Requests that carry a contract also use a package feed.
 
 The consumer tool checks its own policy and writes a trusted resolution for
 `ApplyModulePreviewResolutionAsync`. `preview trigger` prints `workflow_run_id` and
@@ -128,7 +136,7 @@ The consumer tool checks its own policy and writes a trusted resolution for
 complete security model, package-source and source-fallback boundaries, and runnable two-repository
 example.
 
-Projects exported as containers can still run directly during local debugging. This changes run mode only; publishing continues to use the portable container representation:
+Set an exported project's run mode to `Project` for local debugging while keeping its portable container representation for publishing:
 
 ```json
 {
@@ -157,6 +165,7 @@ Projects exported as containers can still run directly during local debugging. T
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.
 - [Preview workflow sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/PreviewWorkflow): offline external-producer policy verification and producer workflow generation.
+- [Contract dependency preview sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ContractDependencyPreview): exact direct contract dependency generation and consumer-policy enforcement from a local feed.
 - [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer builds a module image from an independently pinned Git repository without changing the producer worktree.
 - [Cross-repository preview producer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-producer) and [consumer](https://github.com/Shirubasoft/aspire-modular-apphosts-preview-consumer): a producer feature branch changes source and its resource graph, then dispatches a trusted consumer E2E at the exact commit.
 

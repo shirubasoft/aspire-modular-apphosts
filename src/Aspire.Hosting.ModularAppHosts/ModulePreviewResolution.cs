@@ -9,7 +9,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 public sealed class ModulePreviewResolution
 {
     /// <summary>The schema version understood by this release.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>Gets or sets the resolution schema version.</summary>
     [JsonPropertyOrder(0)]
@@ -239,6 +239,10 @@ public sealed class ModulePreviewResolvedContract
     [JsonPropertyOrder(5)]
     public string? PackagePath { get; set; }
 
+    /// <summary>Gets the exact direct dependency versions verified against the package nuspec.</summary>
+    [JsonPropertyOrder(6)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
+
     internal void Validate(IReadOnlySet<string> selectedModules)
     {
         ModulePreviewValidation.ValidateSelectedModule(Module, selectedModules, "Resolved contract");
@@ -250,6 +254,9 @@ public sealed class ModulePreviewResolvedContract
             ModulePreviewValidation.ValidatePackageSource(Source, $"Contract for module '{Module}'.{nameof(Source)}");
         }
         ModulePreviewValidation.ValidateOptionalMetadata(PackagePath, $"Contract for module '{Module}'.{nameof(PackagePath)}");
+        ModulePreviewValidation.ValidateContractDependencies(
+            Dependencies,
+            $"Contract for module '{Module}'.{nameof(Dependencies)}");
         if (Source is null && PackagePath is null)
         {
             throw new InvalidDataException(

@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.ModularAppHosts;
 using Xunit;
 
@@ -11,6 +13,9 @@ public sealed class PreviewPolicyTests
     private const string Repository = "https://github.com/shirubasoft/preview-producer.git";
     private const string ExternalRepository = "https://github.com/shirubasoft/image-builder.git";
     private const string ImageRepository = "ghcr.io/shirubasoft/preview-producer";
+    private const string OwnerOnlyImageRepository = "ghcr.io/shirubasoft/preview-producer/worker";
+    private const string DependencyPackageId = "Shirubasoft.Shared.Contract";
+    private const string DependencyVersion = "1.7.3";
     private const string ImageDigest =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -19,11 +24,12 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "contract": {
                 "packageId": "Shirubasoft.PreviewProducer.Contract",
-                "version": "2.0.0-preview.1"
+                "version": "2.0.0-preview.1",
+                "dependencies": []
               },
               "images": [
                 {
@@ -48,11 +54,83 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public async Task Producer_descriptor_schema_matches_runtime_repository_validation()
+    {
+        var schemaPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "module-preview-producer.schema.json");
+        await using var stream = File.OpenRead(schemaPath);
+        using var schema = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var root = schema.RootElement;
+        Assert.DoesNotContain(
+            "$schema",
+            root.GetProperty("required").EnumerateArray().Select(element => element.GetString()));
+        Assert.DoesNotContain(
+            "dependencies",
+            root
+                .GetProperty("properties")
+                .GetProperty("contract")
+                .GetProperty("required")
+                .EnumerateArray()
+                .Select(element => element.GetString()));
+        var pattern = root
+            .GetProperty("properties")
+            .GetProperty("images")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("repository")
+            .GetProperty("pattern")
+            .GetString()!;
+        var regex = new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        var packageIdPattern = root
+            .GetProperty("$defs")
+            .GetProperty("packageId")
+            .GetProperty("pattern")
+            .GetString()!;
+        var packageIdRegex = new Regex(
+            packageIdPattern,
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+
+        Assert.Matches(packageIdRegex, "Sample.Module-Contract_2");
+        Assert.DoesNotMatch(packageIdRegex, ".Sample.Module");
+        Assert.Throws<InvalidDataException>(() =>
+            CreateContractOnlyDescriptor(".Sample.Module").Validate());
+        Assert.Throws<InvalidDataException>(() =>
+            CreateContractOnlyDescriptor("Sample.Module", string.Empty).Validate());
+
+        foreach (var repository in new[]
+                 {
+                     "ghcr.io/example/api",
+                     "registry.example.test:5000/a.b/image_name-v2"
+                 })
+        {
+            Assert.True(regex.IsMatch(repository), repository);
+            CreateImageOnlyDescriptor(repository).Validate();
+        }
+
+        foreach (var repository in new[]
+                 {
+                     "registry.example.test/a//b",
+                     "registry.example.test/a-/b",
+                     "-registry.example.test/a/b",
+                     "registry.example.test/a/b-"
+                 })
+        {
+            Assert.False(regex.IsMatch(repository), repository);
+            Assert.Throws<InvalidDataException>(() => CreateImageOnlyDescriptor(repository).Validate());
+        }
+    }
+
+    [Fact]
     public async Task Producer_descriptor_allows_an_image_only_preview()
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "images": [
                 {
@@ -79,7 +157,7 @@ public sealed class PreviewPolicyTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 3,
               "modules": [
                 {
                   "module": "preview-producer",
@@ -109,15 +187,28 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Consumer_policy_rejects_schema_version_one()
+    {
+        var policy = CreatePolicy();
+        policy.SchemaVersion = 1;
+
+        var exception = Assert.Throws<InvalidDataException>(policy.Validate);
+
+        Assert.Contains("schema version '1'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Expected '3'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Documents_reject_unknown_members()
     {
         const string json = """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "module": "preview-producer",
               "contract": {
                 "packageId": "Shirubasoft.PreviewProducer.Contract",
                 "version": "2.0.0-preview.1",
+                "dependencies": [],
                 "project": "producer-controlled.csproj"
               },
               "images": []
@@ -201,6 +292,36 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Evaluator_compares_GitHub_repository_owner_and_path_without_case_sensitivity()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = "https://github.com/SHIRUBASOFT/preview-PRODUCER.git";
+        manifest.Modules[0].Repository = "https://GITHUB.com/Shirubasoft/PREVIEW-producer.git";
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, CreatePolicy());
+
+        Assert.Single(evaluation.Modules);
+    }
+
+    [Fact]
+    public void Evaluator_keeps_non_GitHub_repository_paths_case_sensitive_and_reports_expected_identity()
+    {
+        const string actual = "https://git.example.com/Shirubasoft/Preview-Producer.git";
+        const string expected = "https://git.example.com/shirubasoft/Preview-Producer.git";
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = actual;
+        manifest.Modules[0].Repository = actual;
+        var policy = CreatePolicy();
+        policy.Modules[0].Repository = expected;
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains(actual, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(expected, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Evaluator_accepts_an_omitted_optional_contract()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -274,13 +395,46 @@ public sealed class PreviewPolicyTests
         manifest.Producer.Commit = ExternalCommit;
         manifest.Contracts.Clear();
         var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        AddRequiredOwnerOnlyImage(policy);
+
+        var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
+
+        Assert.Single(evaluation.Modules);
+        Assert.Single(evaluation.Manifest.Images);
+    }
+
+    [Fact]
+    public void Evaluator_requires_an_external_producers_authorized_required_image()
+    {
+        var manifest = CreateManifest(includeImage: false);
+        manifest.Producer.Repository = ExternalRepository;
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, policy));
+
+        Assert.Contains("must provide an immutable image", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("preview-producer-api", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_matches_external_GitHub_producer_allowlists_without_case_sensitivity()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Producer.Repository = "https://github.com/SHIRUBASOFT/IMAGE-BUILDER.git";
+        manifest.Producer.Commit = ExternalCommit;
+        manifest.Contracts.Clear();
+        var policy = CreatePolicy();
         policy.Modules[0].Contract!.Required = false;
         policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
 
         var evaluation = PreviewPolicyEvaluator.Evaluate(manifest, policy);
 
         Assert.Single(evaluation.Modules);
-        Assert.Single(evaluation.Manifest.Images);
     }
 
     [Fact]
@@ -347,6 +501,31 @@ public sealed class PreviewPolicyTests
     }
 
     [Fact]
+    public void Policy_rejects_case_only_duplicate_GitHub_producer_repositories()
+    {
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(ExternalRepository);
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://GITHUB.com/Shirubasoft/IMAGE-BUILDER.git");
+
+        var exception = Assert.Throws<InvalidDataException>(policy.Validate);
+
+        Assert.Contains("duplicate producer repository", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Policy_allows_case_distinct_non_GitHub_producer_repository_paths()
+    {
+        var policy = CreatePolicy();
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://git.example.com/Shirubasoft/image-builder.git");
+        policy.Modules[0].Images[0].ProducerRepositories.Add(
+            "https://git.example.com/shirubasoft/image-builder.git");
+
+        policy.Validate();
+    }
+
+    [Fact]
     public void Evaluator_rejects_contract_package_substitution()
     {
         var manifest = CreateManifest(includeImage: true);
@@ -357,6 +536,37 @@ public sealed class PreviewPolicyTests
             PreviewPolicyEvaluator.Evaluate(manifest, policy));
 
         Assert.Contains("is not allowed", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_contract_dependency_version_mismatch_with_actual_and_expected_values()
+    {
+        var manifest = CreateManifest(includeImage: true);
+        manifest.Contracts[0].Dependencies[0].Version = "1.8.0";
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(manifest, CreatePolicy()));
+
+        Assert.Contains(DependencyPackageId, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'1.8.0'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"'{DependencyVersion}'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Evaluator_rejects_missing_and_unapproved_contract_dependencies()
+    {
+        var missing = CreateManifest(includeImage: true);
+        missing.Contracts[0].Dependencies.Clear();
+        var missingException = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(missing, CreatePolicy()));
+        Assert.Contains("but it is missing", missingException.Message, StringComparison.Ordinal);
+
+        var unapproved = CreateManifest(includeImage: true);
+        var policy = CreatePolicy();
+        policy.Modules[0].Contract!.Dependencies.Clear();
+        var unapprovedException = Assert.Throws<InvalidDataException>(() =>
+            PreviewPolicyEvaluator.Evaluate(unapproved, policy));
+        Assert.Contains("not allowed by consumer policy", unapprovedException.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -395,6 +605,11 @@ public sealed class PreviewPolicyTests
             PackageId = "Shirubasoft.PreviewProducer.Contract",
             Version = "2.0.0-preview.1"
         });
+        manifest.Contracts[0].Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = DependencyPackageId,
+            Version = DependencyVersion
+        });
         if (includeImage)
         {
             manifest.Images.Add(new ModulePreviewImageArtifact
@@ -429,6 +644,11 @@ public sealed class PreviewPolicyTests
             }
         };
         module.Contract.AllowedPackProperties.Add("ModularAppHostsVersion");
+        module.Contract.Dependencies.Add(new ModulePreviewContractDependency
+        {
+            PackageId = DependencyPackageId,
+            Version = DependencyVersion
+        });
         var image = new ModulePreviewConsumerImagePolicy
         {
             Resource = "preview-producer-api",
@@ -440,6 +660,35 @@ public sealed class PreviewPolicyTests
         policy.Modules.Add(module);
         return policy;
     }
+
+    private static ModulePreviewProducerDescriptor CreateImageOnlyDescriptor(string repository)
+    {
+        var descriptor = new ModulePreviewProducerDescriptor
+        {
+            Module = "preview-producer"
+        };
+        descriptor.Images.Add(new ModulePreviewProducerImageDescriptor
+        {
+            Resource = "preview-producer-api",
+            ResourceKind = "container",
+            Repository = repository,
+            Required = true
+        });
+        return descriptor;
+    }
+
+    private static ModulePreviewProducerDescriptor CreateContractOnlyDescriptor(
+        string packageId,
+        string? version = null) =>
+        new()
+        {
+            Module = "preview-producer",
+            Contract = new ModulePreviewProducerContractDescriptor
+            {
+                PackageId = packageId,
+                Version = version
+            }
+        };
 
     private static void AddProducerAsUnrelatedSelectedModule(
         ModulePreviewManifest manifest,
@@ -456,5 +705,17 @@ public sealed class PreviewPolicyTests
             Module = "build-support",
             Repository = ExternalRepository
         });
+    }
+
+    private static void AddRequiredOwnerOnlyImage(ModulePreviewConsumerPolicy policy)
+    {
+        var image = new ModulePreviewConsumerImagePolicy
+        {
+            Resource = "preview-producer-worker",
+            ResourceKind = "container",
+            Required = true
+        };
+        image.Repositories.Add(OwnerOnlyImageRepository);
+        policy.Modules[0].Images.Add(image);
     }
 }

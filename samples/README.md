@@ -9,7 +9,8 @@ AppHost A
 │   └── both callbacks resolve sample-message from the same module context
 ├── sample-project (ProjectResource, explicit start)
 ├── sample-csharp-app (CSharpAppResource, explicit start)
-├── sample-static (ContainerResource, nginx:alpine)
+├── sample-static (ContainerResource, busybox:1.37)
+│   └── its Configure callback resolves sample-message from the same module context
 ├── sample-generated-static ── container build ──> branch-tagged modular-sample-static
 ├── sample-executable (ExecutableResource, explicit start)
 ├── sample-dotnet-tool (DotnetToolResource, explicit start)
@@ -35,15 +36,16 @@ The shared module definition is in [`ModuleContract/AppHostAModule.cs`](ModuleCo
 <docker|podman> build --tag modular-sample-static:<sanitized-branch>-<12-character-commit> .
 ```
 
-For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. The extension does not generate the executable or the rest of the command.
+For a dirty repository, the exact image-reference argument is changed to its `-dirty` tag. Declare the executable and remaining arguments explicitly.
 
 `AppHostAModule` opts into the source generator with `GenerateDistributedApplicationModule`. The generated `Module` exposes every declared resource as a strongly typed property, including `Api`, `Static`, `GeneratedStatic`, `Message`, and `Custom`. Both AppHosts consume these properties instead of repeating resource types and string names through `GetResource<TResource>(name)`.
 
-The message parameter is declared before `sample-api`. Both `ConfigureProject` and the
-`ExportAsContainer` callback receive the module materialization context, resolve that earlier parameter
-with `context.GetResource<ParameterResource>()`, and inject it into the project or container. CI runs
-AppHost A in project mode and AppHost B in container mode, then asserts that both representations
-receive the same value.
+The message parameter is declared before `sample-api` and `sample-static`. `ConfigureProject`, the
+`ExportAsContainer` callback, and the declared container's `Configure` callback receive the module
+materialization context, resolve that earlier parameter with `context.GetResource<ParameterResource>()`,
+and inject it into their resource. `sample-static` serves the injected value with BusyBox's HTTP
+server. CI runs AppHost A in project mode and AppHost B in container mode, then asserts that every
+representation receives the same value.
 
 ## Prerequisites
 
@@ -51,7 +53,7 @@ receive the same value.
 - Aspire CLI 13.4 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker. The legacy `DOTNET_ASPIRE_CONTAINER_RUNTIME` variable is also honored.
+The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; `DOTNET_ASPIRE_CONTAINER_RUNTIME` is also accepted; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker.
 
 ## Run AppHost A
 
@@ -60,7 +62,14 @@ cd samples/AppHostA
 aspire run
 ```
 
-AppHost A materializes its local module and opts into the module-declared image publishers. Development configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for debugging while publish mode retains its container representation. `sample-generated-static-installer` builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly from `nginx:alpine`. Clean images are reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`. The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate their model types without adding duplicate services or package downloads to the default run.
+AppHost A materializes its local module and opts into the module-declared image publishers. Development
+configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for
+debugging while publish mode retains its container representation. `sample-generated-static-installer`
+builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly
+from `busybox:1.37`, serving the message obtained from the module-owned parameter. Clean images are
+reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`.
+The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate
+their model types without adding duplicate services or package downloads to the default run.
 
 ## Run AppHost B
 
@@ -85,7 +94,8 @@ aspire describe --include-hidden
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
 Run `bash samples/test-modular-apphosts.sh` from the repository root to start both AppHosts exactly as
-CI does and verify that the project and container callbacks resolve the module-owned message.
+CI does and verify that project, exported-project, and declared-container callbacks resolve the
+module-owned message.
 
 ## E2E testing sample
 
@@ -95,18 +105,30 @@ CI does and verify that the project and container callbacks resolve the module-o
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. The pull fixture also maps an image from one temporary
-registry to a local reference in a second registry. Each test first scopes the operation to the exported
-project and verifies the other images are untouched, then operates on every image and verifies all
-results. `test-image-describe.sh` separately verifies the structured run, pull, push, and build
-identities consumed by CI tooling. See the [sample README](ImagePushE2E/README.md) for commands.
+and a factory-created container publisher. A second module proves module and multi-module push
+selection while verifying that unselected publishers are not built. The pull fixture also maps an
+image from one temporary registry to a local reference in a second registry. `test-image-describe.sh`
+separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
+the [sample README](ImagePushE2E/README.md) for commands.
 
 ## Preview workflow sample
 
 [`PreviewWorkflow`](PreviewWorkflow/README.md) validates an image-only request from a separately
 authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
-image pipeline AppHost. The sample stays offline: example repository and registry identities exercise
-strict validation without dispatching a workflow or contacting an artifact service.
+image pipeline AppHost. Example repository and registry identities keep the validation offline.
+
+## External AppHost workflow sample
+
+[`ExternalAppHostWorkflow`](ExternalAppHostWorkflow/README.md) validates an image-only producer that
+owns build inputs but no AppHost. Its consumer-owned AppHost is acquired at a trusted ref, pinned by
+exact commit, and configured to build only descriptor-selected resources from the producer checkout.
+CI executes the real image build and push against a temporary registry.
+
+## Contract dependency preview sample
+
+[`ContractDependencyPreview`](ContractDependencyPreview/README.md) restores a producer contract from
+a tiny local package feed, generates the exact direct dependency lock from NuGet assets, and tests
+both the accepted and rejected policy paths in CI. Its AppHost also runs directly with `aspire`.
 
 ## Multi-repository E2E sample
 

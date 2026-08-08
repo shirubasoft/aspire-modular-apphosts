@@ -1,22 +1,29 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aspire.Hosting.ModularAppHosts;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
 internal sealed class ModulePreviewProducerDescriptor : IPreviewDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+    public const string SchemaUri =
+        "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/module-preview-producer.schema.json";
 
     [JsonPropertyOrder(0)]
-    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    [JsonPropertyName("$schema")]
+    public string? Schema { get; set; }
 
     [JsonPropertyOrder(1)]
-    public string Module { get; set; } = string.Empty;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     [JsonPropertyOrder(2)]
-    public ModulePreviewProducerContractDescriptor? Contract { get; set; }
+    public string Module { get; set; } = string.Empty;
 
     [JsonPropertyOrder(3)]
+    public ModulePreviewProducerContractDescriptor? Contract { get; set; }
+
+    [JsonPropertyOrder(4)]
     public IList<ModulePreviewProducerImageDescriptor> Images { get; } = [];
 
     public static Task<ModulePreviewProducerDescriptor> LoadAsync(
@@ -29,6 +36,9 @@ internal sealed class ModulePreviewProducerDescriptor : IPreviewDocument
         CancellationToken cancellationToken = default) =>
         PreviewDocumentJson.LoadAsync<ModulePreviewProducerDescriptor>(stream, cancellationToken);
 
+    public Task SaveAsync(string path, CancellationToken cancellationToken = default) =>
+        PreviewDocumentJson.SaveAsync(path, this, cancellationToken);
+
     public void Validate() => PreviewPolicyValidation.Validate(this);
 }
 
@@ -39,6 +49,9 @@ internal sealed class ModulePreviewProducerContractDescriptor
 
     [JsonPropertyOrder(1)]
     public string? Version { get; set; }
+
+    [JsonPropertyOrder(2)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
 }
 
 internal sealed class ModulePreviewProducerImageDescriptor
@@ -58,7 +71,7 @@ internal sealed class ModulePreviewProducerImageDescriptor
 
 internal sealed class ModulePreviewConsumerPolicy : IPreviewDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 3;
 
     [JsonPropertyOrder(0)]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
@@ -113,6 +126,9 @@ internal sealed class ModulePreviewConsumerContractPolicy
 
     [JsonPropertyOrder(5)]
     public IList<string> AllowedPackProperties { get; } = [];
+
+    [JsonPropertyOrder(6)]
+    public IList<ModulePreviewContractDependency> Dependencies { get; } = [];
 }
 
 internal sealed class ModulePreviewPublishedContractPolicy
@@ -160,7 +176,9 @@ internal static class PreviewDocumentJson
         PropertyNameCaseInsensitive = false,
         PreferredObjectCreationHandling = JsonObjectCreationHandling.Populate,
         ReadCommentHandling = JsonCommentHandling.Disallow,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true
     };
 
     public static async Task<T> LoadAsync<T>(
@@ -210,5 +228,44 @@ internal static class PreviewDocumentJson
 
         document.Validate();
         return document;
+    }
+
+    public static async Task SaveAsync<T>(
+        string path,
+        T document,
+        CancellationToken cancellationToken)
+        where T : class, IPreviewDocument
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(document);
+        document.Validate();
+
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var stream = new FileStream(
+            fullPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            await JsonSerializer.SerializeAsync(
+                stream,
+                document,
+                SerializerOptions,
+                cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync("\n"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

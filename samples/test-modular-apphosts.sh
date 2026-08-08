@@ -30,6 +30,21 @@ assert_resource_message() {
         jq --exit-status --arg expected "$expected" '.message == $expected' >/dev/null
 }
 
+assert_container_message() {
+    local resource="$1"
+    local expected="Hello from an arbitrary exported Aspire resource."
+    local resource_url
+    resource_url="$(
+        dotnet tool run aspire -- describe "$resource" \
+            --apphost "$active_apphost" \
+            --format Json \
+            --non-interactive |
+            jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
+    )"
+    test -n "$resource_url"
+    test "$(curl --fail --show-error --silent "$resource_url")" = "$expected"
+}
+
 trap stop_active_apphost EXIT
 cd "$repository_root"
 
@@ -52,6 +67,7 @@ dotnet tool run aspire -- wait sample-generated-static \
     --timeout 180 \
     --non-interactive
 assert_resource_message sample-api
+assert_container_message sample-static
 stop_active_apphost
 
 active_apphost="samples/AppHostB/ModularSample.AppHostB.csproj"
@@ -77,5 +93,6 @@ dotnet tool run aspire -- wait dependency-gateway \
     --timeout 180 \
     --non-interactive
 assert_resource_message sample-api
+assert_container_message sample-static
 
-echo "Verified same-module callback resources in project and container modes."
+echo "Verified same-module callbacks for projects, exported projects, and declared containers."

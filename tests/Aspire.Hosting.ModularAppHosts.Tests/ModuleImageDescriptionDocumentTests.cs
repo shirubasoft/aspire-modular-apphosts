@@ -26,10 +26,15 @@ public sealed class ModuleImageDescriptionDocumentTests
             firstJson,
             await File.ReadAllTextAsync(secondPath, TestContext.Current.CancellationToken));
         Assert.True(firstJson.IndexOf("\"schemaVersion\"", StringComparison.Ordinal) <
+            firstJson.IndexOf("\"modules\"", StringComparison.Ordinal));
+        Assert.True(firstJson.IndexOf("\"modules\"", StringComparison.Ordinal) <
             firstJson.IndexOf("\"images\"", StringComparison.Ordinal));
         Assert.Contains("\"resourceKind\": \"project\"", firstJson, StringComparison.Ordinal);
 
         Assert.Equal(ModuleImageDescriptionDocument.CurrentSchemaVersion, loaded.SchemaVersion);
+        var module = Assert.Single(loaded.Modules);
+        Assert.Equal("catalog", module.Name);
+        Assert.Equal("Sample.Catalog.Contract", module.ContractPackageId);
         var image = Assert.Single(loaded.Images);
         Assert.Equal("catalog", image.Module);
         Assert.Equal("api", image.Resource);
@@ -68,6 +73,22 @@ public sealed class ModuleImageDescriptionDocumentTests
         var unknownKind = CreateDocument();
         unknownKind.Images[0].ResourceKind = (ModulePreviewResourceKind)42;
         Assert.Contains("Unsupported resource kind", Assert.Throws<InvalidDataException>(unknownKind.Validate).Message);
+
+        var invalidPackage = CreateDocument();
+        invalidPackage.Modules[0].ContractPackageId = "invalid/package";
+        Assert.Contains("package ID", Assert.Throws<InvalidDataException>(invalidPackage.Validate).Message);
+
+        var duplicateModule = CreateDocument();
+        duplicateModule.Modules.Add(new ModuleImageModuleDescription { Name = "CATALOG" });
+        Assert.Contains("duplicate module", Assert.Throws<InvalidDataException>(duplicateModule.Validate).Message);
+
+        var unknownModule = CreateDocument();
+        unknownModule.Images[0].Module = "missing";
+        Assert.Contains("unknown module", Assert.Throws<InvalidDataException>(unknownModule.Validate).Message);
+
+        var nullModule = CreateDocument();
+        nullModule.Modules.Add(null!);
+        Assert.Throws<ArgumentNullException>(nullModule.Validate);
     }
 
     [Theory]
@@ -139,6 +160,11 @@ public sealed class ModuleImageDescriptionDocumentTests
     private static ModuleImageDescriptionDocument CreateDocument()
     {
         var document = new ModuleImageDescriptionDocument();
+        document.Modules.Add(new ModuleImageModuleDescription
+        {
+            Name = "catalog",
+            ContractPackageId = "Sample.Catalog.Contract"
+        });
         document.Images.Add(CreateImage("imported-api"));
         return document;
     }

@@ -89,10 +89,12 @@ internal static class ModuleImageBuildPipeline
 
     internal static bool ShouldPrepareBuildRepository(
         IReadOnlyList<string> arguments,
+        string moduleName,
         string declaredResourceName,
         string effectiveResourceName)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(declaredResourceName);
         ArgumentException.ThrowIfNullOrWhiteSpace(effectiveResourceName);
         var requestedStep = ModuleImagePipelineSelectionParser.GetRequestedStep(arguments);
@@ -113,8 +115,7 @@ internal static class ModuleImageBuildPipeline
         {
             var selection = ModuleImagePipelineSelectionParser.GetSelection(arguments, requestedStep);
             return !selection.IsScoped ||
-                selection.Includes(declaredResourceName) ||
-                selection.Includes(effectiveResourceName);
+                selection.Includes(moduleName, declaredResourceName, effectiveResourceName);
         }
 
         if (requestedStep.StartsWith("build-", StringComparison.OrdinalIgnoreCase) ||
@@ -149,22 +150,11 @@ internal static class ModuleImageBuildPipeline
                 step.Tags.Contains(BuildContainerImageTag) &&
                 step.RequiredBySteps.Contains(WellKnownPipelineSteps.Build))
             .ToArray();
-        var unknown = selection.Resources
-            .Where(name => !buildSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, name)))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (unknown.Length > 0)
-        {
-            var available = buildSteps
-                .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase);
-            throw new InvalidOperationException(
-                $"The following resources do not contribute image build steps: {string.Join(", ", unknown)}. " +
-                $"Available image resources: {string.Join(", ", available)}.");
-        }
+        var selectedResources = selection.ResolveResources(
+            buildSteps.Select(step => step.Resource!),
+            "image build steps");
 
-        foreach (var step in buildSteps.Where(step => !selection.Includes(step.Resource!)))
+        foreach (var step in buildSteps.Where(step => !selectedResources.Contains(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Build, StringComparison.Ordinal));

@@ -98,24 +98,11 @@ internal static class ModuleImagePushPipeline
                 step.Tags.Contains(WellKnownPipelineTags.PushContainerImage) &&
                 step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
             .ToArray();
-        var availableResources = pushSteps
-            .SelectMany(step => ModuleImageSelection.GetNames(step.Resource!))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var unknownResources = selection.Resources
-            .Where(resource => !pushSteps.Any(step => ModuleImageSelection.NameMatches(step.Resource!, resource)))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (unknownResources.Length > 0)
-        {
-            var available = availableResources.Count == 0
-                ? "none"
-                : string.Join(", ", availableResources.Order(StringComparer.OrdinalIgnoreCase));
-            throw new InvalidOperationException(
-                $"The following resources do not contribute image push steps: {string.Join(", ", unknownResources)}. " +
-                $"Available image resources: {available}.");
-        }
+        var selectedResources = selection.ResolveResources(
+            pushSteps.Select(step => step.Resource!),
+            "image push steps");
 
-        foreach (var step in pushSteps.Where(step => !selection.Includes(step.Resource!)))
+        foreach (var step in pushSteps.Where(step => !selectedResources.Contains(step.Resource!)))
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));
@@ -133,12 +120,7 @@ internal static class ModuleImagePushPipeline
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
             context.CancellationToken).ConfigureAwait(false);
-        var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        var hasExplicitAspireRegistry =
-            resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().Any() ||
-            resource.Annotations.OfType<DeploymentTargetAnnotation>().Any(annotation =>
-                annotation.ContainerRegistry is not null);
-        if (!hasExplicitAspireRegistry && image is { Registry.Length: > 0 })
+        if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
         {
             var runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
             await CliCommand.Wrap(runtime)
@@ -150,6 +132,12 @@ internal static class ModuleImagePushPipeline
                 .ExecuteAsync(context.CancellationToken)
                 .ConfigureAwait(false);
             return;
+        }
+
+        if (resolved.PushTargetKind != ModuleImagePushTargetKind.AspireRegistry)
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a remote image push target.");
         }
 
         var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();

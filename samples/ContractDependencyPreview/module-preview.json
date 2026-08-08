@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "producer": {
+    "repository": "https://github.com/example/preview-producer.git",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "dirty": false
+  },
+  "modules": [
+    {
+      "name": "contract-dependency-preview",
+      "repository": "https://github.com/example/preview-producer.git",
+      "commit": "0123456789abcdef0123456789abcdef01234567"
+    }
+  ],
+  "contracts": [
+    {
+      "module": "contract-dependency-preview",
+      "packageId": "Example.Preview.Producer.Contract",
+      "version": "2.0.0-preview.1",
+      "dependencies": [
+        {
+          "packageId": "Example.Preview.Shared.Contract",
+          "version": "1.4.2"
+        }
+      ]
+    }
+  ],
+  "images": []
+}

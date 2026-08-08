@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" />
     <ProjectReference Include="../../../src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj"
                       IsAspireProjectResource="false" />
   </ItemGroup>

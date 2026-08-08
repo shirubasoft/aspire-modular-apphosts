@@ -22,10 +22,25 @@ dotnet tool run aspire -- do describe-images \
     --non-interactive
 
 jq --exit-status '
-    .schemaVersion == 1 and
+    .schemaVersion == 2 and
+    ([.modules[] | {name, contractPackageId}] == [
+        {
+          "name": "contract-only",
+          "contractPackageId": "Sample.ContractOnly"
+        },
+        {
+          "name": "image-push-e2e",
+          "contractPackageId": "Sample.ImagePush.Contract"
+        },
+        {
+          "name": "image-push-extra",
+          "contractPackageId": null
+        }
+    ]) and
     ([.images[].effectiveResource] == [
         "image-pull-mapped",
         "image-push-declared",
+        "image-push-extra",
         "image-push-factory",
         "image-push-project"
     ]) and
@@ -44,6 +59,12 @@ jq --exit-status '
         .pullReference == .reference and
         .pushReference == .reference and
         .build.step == "build-image-push-factory") and
+    (.images[] | select(.resource == "image-push-extra") |
+        .module == "image-push-extra" and
+        .reference == "registry.example.test/image-push/extra:push-test" and
+        .pullReference == .reference and
+        .pushReference == .reference and
+        .build.step == "build-image-push-extra") and
     (.images[] | select(.resource == "image-push-project") |
         .reference == "image-push-project:push-test" and
         .pullReference == "registry.example.test/image-push/project:push-test" and

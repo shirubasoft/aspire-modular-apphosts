@@ -151,6 +151,33 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public void Push_arguments_accept_explicit_module_and_resource_selectors()
+    {
+        var selection = ModuleImagePushPipeline.GetSelection(
+        [
+            "--operation",
+            "publish",
+            "--step",
+            "push",
+            "module:orders",
+            "resource:catalog-api"
+        ]);
+
+        Assert.Collection(
+            selection.Selectors.OrderBy(selector => selector.Kind),
+            selector =>
+            {
+                Assert.Equal(ModuleImageSelectorKind.Resource, selector.Kind);
+                Assert.Equal("catalog-api", selector.Name);
+            },
+            selector =>
+            {
+                Assert.Equal(ModuleImageSelectorKind.Module, selector.Kind);
+                Assert.Equal("orders", selector.Name);
+            });
+    }
+
+    [Fact]
     public void Push_without_resource_arguments_keeps_all_push_steps()
     {
         var selection = ModuleImagePushPipeline.GetSelection(
@@ -211,6 +238,51 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public void Module_selector_includes_every_owned_publisher_and_deduplicates_mixed_selection()
+    {
+        var apiStep = CreatePushStep("orders-api", "orders", "api");
+        var workerStep = CreatePushStep("orders-worker", "orders", "worker");
+        var catalogStep = CreatePushStep("catalog-api", "catalog", "api");
+
+        ModuleImagePushPipeline.ApplySelection(
+            [apiStep, workerStep, catalogStep],
+            new ModuleImageSelection(["module:orders", "orders-api"]));
+
+        Assert.Contains(WellKnownPipelineSteps.Push, apiStep.RequiredBySteps);
+        Assert.Contains(WellKnownPipelineSteps.Push, workerStep.RequiredBySteps);
+        Assert.DoesNotContain(WellKnownPipelineSteps.Push, catalogStep.RequiredBySteps);
+    }
+
+    [Fact]
+    public void Plain_selectors_are_always_resources_and_modules_require_the_explicit_prefix()
+    {
+        var collidingResource = CreatePushStep("orders", "catalog", "orders");
+        var moduleResource = CreatePushStep("orders-worker", "orders", "worker");
+
+        ModuleImagePushPipeline.ApplySelection(
+            [collidingResource, moduleResource],
+            new ModuleImageSelection(["orders"]));
+
+        Assert.Contains(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
+        Assert.DoesNotContain(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
+
+        collidingResource = CreatePushStep("orders", "catalog", "orders");
+        moduleResource = CreatePushStep("orders-worker", "orders", "worker");
+        ModuleImagePushPipeline.ApplySelection(
+            [collidingResource, moduleResource],
+            new ModuleImageSelection(["module:orders"]));
+
+        Assert.DoesNotContain(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
+        Assert.Contains(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ModuleImagePushPipeline.ApplySelection(
+                [CreatePushStep("orders-worker", "orders", "worker")],
+                new ModuleImageSelection(["orders"])));
+        Assert.Contains("resource:orders", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Scoped_push_rejects_resources_without_a_push_step()
     {
         var exception = Assert.Throws<InvalidOperationException>(() =>
@@ -220,10 +292,37 @@ public sealed class ModuleImagePushPipelineTests
 
         Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);
         Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Available modules", exception.Message, StringComparison.Ordinal);
     }
 
-    private static PipelineStep CreatePushStep(string resourceName)
+    [Fact]
+    public void Unknown_module_selector_lists_available_resources_and_modules()
     {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ModuleImagePushPipeline.ApplySelection(
+                [CreatePushStep("orders-api", "orders", "api")],
+                new ModuleImageSelection(["module:catalog"])));
+
+        Assert.Contains("module:catalog", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("orders", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static PipelineStep CreatePushStep(
+        string resourceName,
+        string? moduleName = null,
+        string? declaredResourceName = null)
+    {
+        var resource = new ContainerResource(resourceName);
+        if (moduleName is not null)
+        {
+            resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
+                moduleName,
+                declaredResourceName ?? resourceName,
+                "/work",
+                imported: true));
+        }
+
         return new PipelineStep
         {
             Name = $"push-{resourceName}",
@@ -231,7 +330,7 @@ public sealed class ModuleImagePushPipelineTests
             DependsOnSteps = [$"build-{resourceName}"],
             RequiredBySteps = [WellKnownPipelineSteps.Push],
             Tags = [WellKnownPipelineTags.PushContainerImage],
-            Resource = new ContainerResource(resourceName)
+            Resource = resource
         };
     }
 

@@ -32,7 +32,7 @@ public static partial class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteImageReference);
         var normalizedRemoteImageReference = remoteImageReference.Trim();
-        return resource.Configure(container =>
+        return resource.Configure((_, container) =>
             container.WithImagePullMapping(normalizedRemoteImageReference));
     }
 

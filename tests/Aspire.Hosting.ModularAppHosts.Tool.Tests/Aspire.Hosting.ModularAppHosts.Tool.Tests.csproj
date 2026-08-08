@@ -16,5 +16,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Update="TestData/**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../schemas/module-preview-producer.schema.json"
+          Link="TestData/module-preview-producer.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

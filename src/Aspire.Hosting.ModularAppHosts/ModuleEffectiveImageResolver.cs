@@ -36,10 +36,18 @@ internal sealed record ModuleEffectiveImage(
     string Reference,
     string PullReference,
     string? PushReference,
+    ModuleImagePushTargetKind PushTargetKind,
     string? Registry,
     string Repository,
     string? Tag,
     string? Digest);
+
+internal enum ModuleImagePushTargetKind
+{
+    None,
+    ContainerRuntime,
+    AspireRegistry
+}
 
 internal static class ModuleEffectiveImageResolver
 {
@@ -57,25 +65,30 @@ internal static class ModuleEffectiveImageResolver
             return true;
         }
 
-        var explicitRegistry = GetExplicitRegistry(resource);
+        var explicitRegistry = GetResourceRegistry(resource);
+        var mayHaveExplicitRegistry = explicitRegistry is not null && MayHaveRemoteEndpoint(explicitRegistry);
         if (image.SHA256 is { Length: > 0 })
         {
-            return image.Registry is { Length: > 0 } && explicitRegistry is null;
+            return image.Registry is { Length: > 0 } && !mayHaveExplicitRegistry;
         }
 
         return image.Registry is { Length: > 0 } ||
-            explicitRegistry is not null ||
-            GetDefaultRegistry(resource) is not null;
+            mayHaveExplicitRegistry ||
+            HasFallbackRegistry(resource);
     }
 
     public static bool HasPushTarget(IResource resource)
     {
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault();
-        return image is not null &&
-            image.SHA256 is not { Length: > 0 } &&
-            (image.Registry is { Length: > 0 } ||
-             GetExplicitRegistry(resource) is not null ||
-             GetDefaultRegistry(resource) is not null);
+        if (image is null || image.SHA256 is { Length: > 0 })
+        {
+            return false;
+        }
+
+        var registry = GetResourceRegistry(resource);
+        return image.Registry is { Length: > 0 } ||
+            registry is not null && MayHaveRemoteEndpoint(registry) ||
+            HasFallbackRegistry(resource);
     }
 
     public static async Task<ModuleEffectiveImage> ResolveAsync(
@@ -99,10 +112,16 @@ internal static class ModuleEffectiveImageResolver
             EnsureMappingIsTaggable(resource, image);
         }
 
-        var explicitRegistry = GetExplicitRegistry(resource);
+        var explicitRegistry = await GetRemoteRegistryAsync(
+            GetResourceRegistry(resource),
+            cancellationToken).ConfigureAwait(false);
+        var moduleDeclaresRegistry = image.Registry is { Length: > 0 };
         var registry = explicitRegistry ??
-            (image.Registry is { Length: > 0 } ? null : GetDefaultRegistry(resource));
+            (moduleDeclaresRegistry
+                ? null
+                : await GetFallbackRegistryAsync(resource, cancellationToken).ConfigureAwait(false));
         string? pushedImage = null;
+        var pushTargetKind = ModuleImagePushTargetKind.None;
         if (registry is not null && image.SHA256 is not { Length: > 0 })
         {
             pushedImage = await ResolveRegistryImageAsync(
@@ -110,10 +129,12 @@ internal static class ModuleEffectiveImageResolver
                 image,
                 registry,
                 cancellationToken).ConfigureAwait(false);
+            pushTargetKind = ModuleImagePushTargetKind.AspireRegistry;
         }
-        else if (image.Registry is { Length: > 0 } && image.SHA256 is not { Length: > 0 })
+        else if (moduleDeclaresRegistry && image.SHA256 is not { Length: > 0 })
         {
             pushedImage = localImage;
+            pushTargetKind = ModuleImagePushTargetKind.ContainerRuntime;
         }
 
         var pullImage = mapping?.RemoteImageReference ??
@@ -130,6 +151,7 @@ internal static class ModuleEffectiveImageResolver
             localImage,
             pullImage,
             pushedImage,
+            pushTargetKind,
             parsed.Registry,
             parsed.Repository,
             parsed.Tag,
@@ -197,19 +219,42 @@ internal static class ModuleEffectiveImageResolver
     private static ModuleImagePullMappingAnnotation? GetPullMapping(IResource resource) =>
         resource.Annotations.OfType<ModuleImagePullMappingAnnotation>().LastOrDefault();
 
-    private static IContainerRegistry? GetExplicitRegistry(IResource resource) =>
-        resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().LastOrDefault()?.Registry ??
-        resource.Annotations.OfType<DeploymentTargetAnnotation>()
-            .LastOrDefault(annotation => annotation.ContainerRegistry is not null)
-            ?.ContainerRegistry;
+    private static IContainerRegistry? GetResourceRegistry(IResource resource) =>
+        resource.Annotations.OfType<ContainerRegistryReferenceAnnotation>().LastOrDefault()?.Registry;
 
-    private static IContainerRegistry? GetDefaultRegistry(IResource resource)
+    private static IEnumerable<IContainerRegistry> GetFallbackRegistries(IResource resource)
     {
-        var registries = resource.Annotations
+        foreach (var annotation in resource.Annotations.OfType<DeploymentTargetAnnotation>().Reverse())
+        {
+            if (annotation.ContainerRegistry is not null)
+            {
+                yield return annotation.ContainerRegistry;
+            }
+        }
+
+        foreach (var registry in resource.Annotations
             .OfType<RegistryTargetAnnotation>()
-            .Select(annotation => annotation.Registry)
-            .ToArray();
-        return registries.Length switch
+            .Select(annotation => annotation.Registry))
+        {
+            yield return registry;
+        }
+    }
+
+    private static async Task<IContainerRegistry?> GetFallbackRegistryAsync(
+        IResource resource,
+        CancellationToken cancellationToken)
+    {
+        var registries = new List<IContainerRegistry>();
+        foreach (var registry in GetFallbackRegistries(resource))
+        {
+            if (await GetRemoteRegistryAsync(registry, cancellationToken).ConfigureAwait(false) is not null &&
+                !registries.Contains(registry))
+            {
+                registries.Add(registry);
+            }
+        }
+
+        return registries.Count switch
         {
             0 => null,
             1 => registries[0],
@@ -218,4 +263,38 @@ internal static class ModuleEffectiveImageResolver
                 "Specify one with WithContainerRegistry.")
         };
     }
+
+    private static bool HasFallbackRegistry(IResource resource)
+    {
+        var registries = GetFallbackRegistries(resource)
+            .Where(MayHaveRemoteEndpoint)
+            .Distinct()
+            .ToArray();
+        return registries.Length switch
+        {
+            0 => false,
+            1 => true,
+            _ => throw new InvalidOperationException(
+                $"Resource '{resource.Name}' has multiple container registries available. " +
+                "Specify one with WithContainerRegistry.")
+        };
+    }
+
+    private static async Task<IContainerRegistry?> GetRemoteRegistryAsync(
+        IContainerRegistry? registry,
+        CancellationToken cancellationToken)
+    {
+        if (registry is null)
+        {
+            return null;
+        }
+
+        var endpoint = await registry.Endpoint.GetValueAsync(cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(endpoint) ? null : registry;
+    }
+
+    private static bool MayHaveRemoteEndpoint(IContainerRegistry registry) =>
+        registry.Endpoint.IsConditional ||
+        registry.Endpoint.ValueProviders.Count > 0 ||
+        !string.IsNullOrWhiteSpace(registry.Endpoint.Format);
 }

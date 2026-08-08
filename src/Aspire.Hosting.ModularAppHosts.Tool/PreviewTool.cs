@@ -33,11 +33,13 @@ internal static partial class PreviewTool
               --work-directory <path> --resolution <path> [--package-feed <path>]
               --consumer-repository <url> --consumer-commit <full-commit>
               [--github-env <path>] [--property <name>=<value>]... [--gh-executable <path>]
+              [--command-timeout-seconds <1-86400>] [--nuget-config <path>]
           dotnet modular-apphosts preview trigger --manifest <path> --repo <owner/repo>
               --workflow <file-or-id> --ref <trusted-ref> [--input-name manifest_json]
               [--input <name>=<value>]... [--wait] [--github-output <path>]
           dotnet modular-apphosts preview workflow generate producer --descriptor <path>
               --apphost <path> --output <path> --repo <owner/repo>
+              [--apphost-repository <owner/repo> --apphost-ref <trusted-ref>]
               --workflow <file-or-id> --ref <trusted-ref>
               --aspire-version <exact-version> --tool-version <exact-version>
               --github-token-secret <name>
@@ -45,8 +47,17 @@ internal static partial class PreviewTool
               [--package-auth-script <path>] [--contract-publish-script <path>]
               [--secret <environment-name>=<secret-name>]...
               [--working-directory <path>] [--force]
+          dotnet modular-apphosts preview descriptor generate producer --apphost <path>
+              --module <name> --output <path> [--resource <name>]...
+              [--contract-version <exact-version>] [--artifacts-directory <path>]
+              [--contract-project <path>
+               --contract-dependency <package-id>... [--nuget-config <path>]]
+              [--aspire-executable <path>] [--dotnet-executable <path>]
+              [--working-directory <path>] [--check | --force]
 
         Produce and export require a clean Git worktree on an attached branch whose HEAD is pushed to origin.
+        Materialize command timeouts default to 120 seconds per external process.
+        Materialize --nuget-config replaces NuGet's normal configuration chain; include every source and credential.
         --dependency is accepted as an alias for --pin.
         """;
 
@@ -77,9 +88,10 @@ internal static partial class PreviewTool
                 "materialize" => await MaterializeAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "trigger" => await TriggerAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 "workflow" => await WorkflowAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
+                "descriptor" => await DescriptorAsync(arguments.Skip(2).ToArray(), cancellationToken).ConfigureAwait(false),
                 _ => throw new PreviewToolException(
                     "Expected the 'preview produce', 'preview export', 'preview verify', " +
-                    "'preview materialize', 'preview trigger', or 'preview workflow' command.")
+                    "'preview materialize', 'preview trigger', 'preview workflow', or 'preview descriptor' command.")
             };
         }
         catch (Exception exception) when (
@@ -369,7 +381,7 @@ internal static partial class PreviewTool
     private static string EnsureGitSuffix(string path) =>
         path.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? path : $"{path}.git";
 
-    private static string ValidateTargetRepository(string value)
+    private static string ValidateTargetRepository(string value, string option = "repo")
     {
         var segments = value.Split('/');
         if (segments.Length != 2 || segments.Any(segment =>
@@ -377,7 +389,7 @@ internal static partial class PreviewTool
                 segment is "." or ".." ||
                 segment.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))))
         {
-            throw new PreviewToolException("--repo must use the GitHub owner/repository form.");
+            throw new PreviewToolException($"--{option} must use the GitHub owner/repository form.");
         }
 
         return value;
@@ -411,7 +423,9 @@ internal static partial class PreviewTool
         string workingDirectory,
         string? standardInput,
         CancellationToken cancellationToken,
-        bool applyTimeout = true)
+        bool applyTimeout = true,
+        TimeSpan? timeout = null,
+        string? timeoutOperation = null)
     {
         var command = CliCommand.Wrap(executable)
             .WithArguments(arguments)
@@ -431,7 +445,8 @@ internal static partial class PreviewTool
                 untimedResult.StandardError);
         }
 
-        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var commandTimeout = timeout ?? TimeSpan.FromMinutes(2);
+        using var timeoutSource = new CancellationTokenSource(commandTimeout);
         using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutSource.Token);
@@ -442,8 +457,11 @@ internal static partial class PreviewTool
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            var operation = timeoutOperation ?? $"Command '{Path.GetFileName(executable)}'";
             throw new PreviewToolException(
-                $"Command '{Path.GetFileName(executable)}' exceeded the two-minute timeout.",
+                $"{operation} exceeded the command timeout of " +
+                $"{commandTimeout.TotalSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+                $"seconds while running '{Path.GetFileName(executable)}'.",
                 exception);
         }
     }

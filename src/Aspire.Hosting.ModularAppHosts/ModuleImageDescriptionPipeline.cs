@@ -43,11 +43,24 @@ internal static class ModuleImageDescriptionPipeline
     internal static async Task<ModuleImageDescriptionDocument> CreateDocumentAsync(
         IEnumerable<IResource> resources,
         ModuleImageSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IEnumerable<IDistributedApplicationModule>? modules = null)
     {
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(selection);
-        var images = resources
+        var materializedResources = resources.ToArray();
+        var moduleAnnotations = materializedResources
+            .Select(resource => resource.Annotations
+                .OfType<DistributedApplicationModuleResourceAnnotation>()
+                .LastOrDefault())
+            .OfType<DistributedApplicationModuleResourceAnnotation>();
+        var moduleIdentities = (modules ?? [])
+            .Select(module => (module.Name, module.PackageId))
+            .Concat(moduleAnnotations.Select(module => (module.ModuleName, module.PackageId)))
+            .GroupBy(module => module.Item1, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToArray();
+        var images = materializedResources
             .Select(resource => (
                 Resource: resource,
                 Module: resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>().LastOrDefault(),
@@ -58,28 +71,32 @@ internal static class ModuleImageDescriptionPipeline
             .OrderBy(item => item.Resource.Name, StringComparer.Ordinal)
             .ToArray();
 
-        if (selection.IsScoped)
-        {
-            var unknown = selection.Resources
-                .Where(name => !images.Any(item => Matches(item.Resource, item.Module!, name)))
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (unknown.Length > 0)
-            {
-                var available = images
-                    .SelectMany(item => GetNames(item.Resource, item.Module!))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Order(StringComparer.OrdinalIgnoreCase);
-                throw new InvalidOperationException(
-                    $"The following resources do not describe module images: {string.Join(", ", unknown)}. " +
-                    $"Available image resources: {string.Join(", ", available)}.");
-            }
-        }
+        var selectedResources = selection.ResolveResources(
+            images.Select(item => item.Resource),
+            "described module images");
 
         var document = new ModuleImageDescriptionDocument();
-        foreach (var item in images.Where(item =>
-                     !selection.IsScoped ||
-                     selection.Resources.Any(name => Matches(item.Resource, item.Module!, name))))
+        foreach (var moduleGroup in moduleIdentities)
+        {
+            var packageIds = moduleGroup
+                .Select(module => module.Item2)
+                .OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (packageIds.Length > 1)
+            {
+                throw new InvalidDataException(
+                    $"Module '{moduleGroup.Key}' has conflicting contract package identities in the AppHost model.");
+            }
+
+            document.Modules.Add(new ModuleImageModuleDescription
+            {
+                Name = moduleGroup.Key,
+                ContractPackageId = packageIds.SingleOrDefault()
+            });
+        }
+
+        foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var module = item.Module!;
@@ -130,7 +147,10 @@ internal static class ModuleImageDescriptionPipeline
         var document = await CreateDocumentAsync(
             context.Model.Resources,
             selection,
-            context.CancellationToken).ConfigureAwait(false);
+            context.CancellationToken,
+            context.Services.GetService<IDistributedApplicationModuleCatalog>() is ModuleApplicationRegistry registry
+                ? registry.GetMaterializedModules()
+                : []).ConfigureAwait(false);
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
         var path = Path.Combine(output, FileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);
@@ -147,17 +167,4 @@ internal static class ModuleImageDescriptionPipeline
         LogOutput(context.Logger, path, null);
     }
 
-    private static bool Matches(
-        IResource resource,
-        DistributedApplicationModuleResourceAnnotation module,
-        string name) =>
-        GetNames(resource, module).Contains(name, StringComparer.OrdinalIgnoreCase);
-
-    private static IEnumerable<string> GetNames(
-        IResource resource,
-        DistributedApplicationModuleResourceAnnotation module)
-    {
-        yield return resource.Name;
-        yield return module.ResourceName;
-    }
 }

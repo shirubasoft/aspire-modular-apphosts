@@ -51,7 +51,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var generated = Assert.Single(result.GeneratedSources);
         Assert.Contains("Task<Module> AddOrdersModuleAsync(", generated);
         Assert.Contains("this global::Aspire.Hosting.IDistributedApplicationBuilder builder", generated);
-        Assert.Contains("DefineModuleAsync(builder, \"orders\", \"2\", Define, cancellationToken)", generated);
+        Assert.Contains("DefineModuleAsync(builder, \"orders\", \"2\", null, Define, cancellationToken)", generated);
         Assert.Contains("return await AddOrdersModuleAsync(builder, module, cancellationToken)", generated);
         Assert.Contains("Task<Module> ImportOrdersModuleAsync(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
@@ -204,6 +204,61 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Fact]
+    public void Generator_flows_the_contract_package_identity_into_module_definitions()
+    {
+        const string source = """
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("orders", PackageId = "Sample.Orders.Contract")]
+            public static partial class OrdersModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("api", "orders");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Empty(result.GeneratorDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
+        var generated = Assert.Single(result.GeneratedSources);
+        Assert.Contains(
+            "DefineModuleAsync(builder, \"orders\", \"1\", \"Sample.Orders.Contract\", Define, cancellationToken)",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "String.Equals(module.PackageId, \"Sample.Orders.Contract\"",
+            generated,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("contains spaces")]
+    [InlineData("contains/slash")]
+    public void Generator_rejects_an_invalid_contract_package_id(string packageId)
+    {
+        var source = $$"""
+            using Aspire.Hosting.ModularAppHosts;
+
+            [GenerateDistributedApplicationModule("invalid", PackageId = "{{packageId}}")]
+            public static partial class InvalidModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("api", "invalid");
+                }
+            }
+            """;
+
+        var result = RunGenerator(source);
+
+        Assert.Contains(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "SAMHSG009");
+        Assert.Empty(result.GeneratedSources);
+    }
+
+    [Fact]
     public void Generator_keeps_the_advanced_overload_when_no_conventional_define_method_exists()
     {
         const string source = """
@@ -226,7 +281,10 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("IDistributedApplicationModule module,", generated, StringComparison.Ordinal);
         Assert.Contains("String.Equals(module.Name, \"advanced\"", generated, StringComparison.Ordinal);
         Assert.Contains("String.Equals(module.Version, \"1\"", generated, StringComparison.Ordinal);
-        Assert.Contains("Expected module 'advanced' with contract version '1'.", generated, StringComparison.Ordinal);
+        Assert.Contains(
+            "Expected module 'advanced' with contract version '1' and package ID 'none'.",
+            generated,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -373,13 +431,14 @@ public sealed class DistributedApplicationModuleGeneratorTests
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
                     module.AddContainer("name", "redis");
+                    module.AddContainer("package-id", "redis");
                 }
             }
             """;
 
         var result = RunGenerator(source);
 
-        Assert.Contains(result.GeneratorDiagnostics, diagnostic => diagnostic.Id == "SAMHSG004");
+        Assert.Equal(2, result.GeneratorDiagnostics.Count(diagnostic => diagnostic.Id == "SAMHSG004"));
         Assert.Empty(result.GeneratedSources);
     }
 

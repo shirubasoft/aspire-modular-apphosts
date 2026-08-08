@@ -30,6 +30,8 @@
     <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/ContractDependencyPreview/ContractDependencyPreview.AppHost/ContractDependencyPreview.AppHost.csproj" />
+    <Project Path="samples/ExternalAppHostWorkflow/Consumer/ExternalConsumer.AppHost/ExternalConsumer.AppHost.csproj" />
     <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />
     <Project Path="samples/AppHostA/Api/ModularSample.Api.csproj" />
     <Project Path="samples/AppHostA/ModularSample.AppHostA.csproj" />

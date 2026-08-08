@@ -5,7 +5,8 @@ namespace Aspire.Hosting.ModularAppHosts;
 internal sealed class DistributedApplicationModule(
     IDistributedApplicationBuilder definitionApplicationBuilder,
     string name,
-    string version) : IDistributedApplicationModule
+    string version,
+    string? packageId) : IDistributedApplicationModule
 {
     private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
@@ -17,6 +18,8 @@ internal sealed class DistributedApplicationModule(
     public string Name { get; } = name;
 
     public string Version { get; } = version;
+
+    public string? PackageId { get; } = packageId;
 
     public IReadOnlyList<IDistributedApplicationModuleResource> Resources => _resources;
 
@@ -93,6 +96,34 @@ internal sealed class DistributedApplicationModule(
     {
         _materializedApplicationBuilder = builder;
         _materializedResources[declaredName] = resource;
+    }
+
+    internal IResourceBuilder<TResource> GetResourceForCallback<TResource>(
+        string name,
+        string requestingResourceName)
+        where TResource : IResource
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        if (!_materializedResources.TryGetValue(name, out var resource))
+        {
+            if (_resources.Any(candidate => string.Equals(candidate.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"Module resource '{requestingResourceName}' cannot resolve '{name}' because module resources " +
+                    "are materialized in declaration order. Declare the dependency before the consuming resource.");
+            }
+
+            throw new KeyNotFoundException($"Module '{Name}' does not declare a resource named '{name}'.");
+        }
+
+        if (resource is not TResource typedResource)
+        {
+            throw new InvalidOperationException(
+                $"Module resource '{name}' is '{resource.GetType().Name}', not '{typeof(TResource).Name}'.");
+        }
+
+        return _materializedApplicationBuilder!.CreateResourceBuilder(typedResource);
     }
 
     internal async Task ValidateAsync(
@@ -300,7 +331,7 @@ internal sealed class DistributedApplicationModuleContainer(
 
     public string Tag { get; } = tag;
 
-    internal Action<IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
+    internal Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
 
     internal ModuleContainerExportOptions? ImagePublishOptions { get; private set; }
 
@@ -376,5 +407,5 @@ internal sealed class DistributedApplicationModuleResourceContext(
     public ModuleResourceImage? Image { get; } = image;
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
-        where TResource : IResource => module.GetResource<TResource>(name);
+        where TResource : IResource => module.GetResourceForCallback<TResource>(name, ResourceName);
 }

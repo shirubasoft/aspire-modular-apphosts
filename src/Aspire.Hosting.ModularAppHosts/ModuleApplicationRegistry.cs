@@ -69,6 +69,11 @@ internal sealed class ModuleApplicationRegistry(
     internal bool TryGetMaterialization(string moduleName, out string? materializationKey) =>
         _materializedModules.TryGetValue(moduleName, out materializationKey);
 
+    internal IReadOnlyCollection<IDistributedApplicationModule> GetMaterializedModules() =>
+        _materializedModules.Keys
+            .Select(name => (IDistributedApplicationModule)_modules[name])
+            .ToArray();
+
     internal void MarkMaterialized(string moduleName, string materializationKey) =>
         _materializedModules.Add(moduleName, materializationKey);
 

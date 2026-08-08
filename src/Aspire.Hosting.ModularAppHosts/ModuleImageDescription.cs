@@ -7,14 +7,18 @@ namespace Aspire.Hosting.ModularAppHosts;
 public sealed class ModuleImageDescriptionDocument
 {
     /// <summary>The schema version understood by this release.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>Gets or sets the document schema version.</summary>
     [JsonPropertyOrder(0)]
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
-    /// <summary>Gets the effective module images in deterministic resource-name order.</summary>
+    /// <summary>Gets the materialized modules in deterministic module-name order.</summary>
     [JsonPropertyOrder(1)]
+    public IList<ModuleImageModuleDescription> Modules { get; } = [];
+
+    /// <summary>Gets the effective module images in deterministic resource-name order.</summary>
+    [JsonPropertyOrder(2)]
     public IList<ModuleImageDescription> Images { get; } = [];
 
     /// <summary>Reads and validates an image description document.</summary>
@@ -82,11 +86,29 @@ public sealed class ModuleImageDescriptionDocument
                 $"Expected '{CurrentSchemaVersion}'.");
         }
 
+        var modules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var module in Modules)
+        {
+            ArgumentNullException.ThrowIfNull(module);
+            module.Validate();
+            if (!modules.Add(module.Name))
+            {
+                throw new InvalidDataException(
+                    $"Module image description contains duplicate module '{module.Name}'.");
+            }
+        }
+
         var resources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var image in Images)
         {
             ArgumentNullException.ThrowIfNull(image);
             image.Validate();
+            if (!modules.Contains(image.Module))
+            {
+                throw new InvalidDataException(
+                    $"Module image '{image.EffectiveResource}' refers to unknown module '{image.Module}'.");
+            }
+
             if (!resources.Add(image.EffectiveResource))
             {
                 throw new InvalidDataException(
@@ -104,6 +126,34 @@ public sealed class ModuleImageDescriptionDocument
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter<ModulePreviewResourceKind>(JsonNamingPolicy.CamelCase, false) }
     };
+}
+
+/// <summary>Describes one module represented in an AppHost image inventory.</summary>
+public sealed class ModuleImageModuleDescription
+{
+    /// <summary>Gets or sets the module name.</summary>
+    [JsonPropertyOrder(0)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the NuGet package ID that publishes the module contract, when declared.</summary>
+    [JsonPropertyOrder(1)]
+    public string? ContractPackageId { get; set; }
+
+    internal void Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name);
+        if (ContractPackageId is not null && !IsValidPackageId(ContractPackageId))
+        {
+            throw new InvalidDataException(
+                $"Module image contract package ID '{ContractPackageId}' is not a valid NuGet package ID.");
+        }
+    }
+
+    internal static bool IsValidPackageId(string packageId) =>
+        !string.IsNullOrWhiteSpace(packageId) &&
+        packageId.Length <= 100 &&
+        packageId.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_');
 }
 
 /// <summary>Describes one effective module container image and its pipeline identities.</summary>

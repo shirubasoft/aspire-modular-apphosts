@@ -31,6 +31,8 @@ cleanup() {
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$module_image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$module_image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/extra:$image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/extra:$module_image_tag}" \
         >/dev/null 2>&1 || true
 
     if [[ -n "$container_registries_configuration" ]]; then
@@ -101,13 +103,26 @@ dotnet tool run aspire -- do push image-push-project \
 assert_repository_has_tag "image-push/project"
 assert_repository_absent "image-push/declared"
 assert_repository_absent "image-push/factory"
+assert_repository_absent "image-push/extra"
 
-dotnet tool run aspire -- do push \
+dotnet tool run aspire -- do push module:image-push-e2e \
     --apphost "$apphost_project" \
     --non-interactive
 
 assert_repository_has_tag "image-push/project"
 assert_repository_has_tag "image-push/declared" "$module_image_tag"
 assert_repository_has_tag "image-push/factory" "$module_image_tag"
+assert_repository_absent "image-push/extra"
+if "$container_runtime" image exists "$registry_endpoint/image-push/extra:$image_tag" ||
+    "$container_runtime" image exists "$registry_endpoint/image-push/extra:$module_image_tag"; then
+    echo "The unselected image-push-extra module was built." >&2
+    exit 1
+fi
 
-echo "Verified scoped and complete Aspire image pushes against $registry_endpoint."
+dotnet tool run aspire -- do push module:image-push-e2e module:image-push-extra \
+    --apphost "$apphost_project" \
+    --non-interactive
+
+assert_repository_has_tag "image-push/extra" "$image_tag"
+
+echo "Verified resource-, module-, and multi-module-scoped Aspire image pushes against $registry_endpoint."

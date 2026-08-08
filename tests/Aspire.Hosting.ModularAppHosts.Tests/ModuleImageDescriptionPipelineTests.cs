@@ -19,6 +19,31 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class ModuleImageDescriptionPipelineTests
 {
     [Fact]
+    public async Task Describes_contract_modules_without_container_images()
+    {
+        var builder = CreatePublishBuilder(Directory.GetCurrentDirectory());
+        var module = await builder.ExportModuleAsync(
+            "contract-only",
+            "Sample.ContractOnly",
+            definition => definition.AddResource<ParameterResource>(
+                "marker",
+                context => context.ApplicationBuilder.AddParameter(context.ResourceName)),
+            TestContext.Current.CancellationToken);
+        await builder.AddAsync(module, TestContext.Current.CancellationToken);
+
+        var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
+            builder.Resources,
+            ModuleImageSelection.All,
+            TestContext.Current.CancellationToken,
+            [module]);
+
+        Assert.Empty(document.Images);
+        var describedModule = Assert.Single(document.Modules);
+        Assert.Equal("contract-only", describedModule.Name);
+        Assert.Equal("Sample.ContractOnly", describedModule.ContractPackageId);
+    }
+
+    [Fact]
     public async Task Describes_effective_configured_images_for_all_module_publisher_kinds()
     {
         using var repository = TemporaryDirectory.Create();
@@ -30,34 +55,38 @@ public sealed class ModuleImageDescriptionPipelineTests
         ConfigureImage(builder, "Projects", "project", "acme/project", "project-ci");
         ConfigureImage(builder, "Containers", "declared", "acme/declared", "declared-ci");
         ConfigureImage(builder, "Containers", "factory", "acme/factory", "factory-ci");
-        var module = await builder.ExportModuleAsync("images", definition =>
-        {
-            definition.WithRepository(repository.Path);
-            definition.AddProject("project", projectPath)
-                .ExportAsContainer(new ModuleContainerExportOptions("old/project", "build-project", "publish")
-                {
-                    ImageRegistry = "old.example.test",
-                    ImageTag = "old"
-                });
-            definition.AddContainer("declared", "old.example.test/old/declared", "old")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
-                    "old/declared",
-                    "build-declared",
-                    "publish")
-                {
-                    ImageRegistry = "old.example.test",
-                    ImageTag = "old"
-                });
-            definition.AddResource<ContainerResource>(
-                "factory",
-                context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                new ModuleContainerExportOptions("old/factory", "build-factory", "publish")
-                {
-                    ImageRegistry = "old.example.test",
-                    ImageTag = "old"
-                });
-            definition.AddContainer("consumed", "registry.example.test/library/redis", "7");
-        });
+        var module = await builder.ExportModuleAsync(
+            "images",
+            "Sample.Images.Contract",
+            definition =>
+            {
+                definition.WithRepository(repository.Path);
+                definition.AddProject("project", projectPath)
+                    .ExportAsContainer(new ModuleContainerExportOptions("old/project", "build-project", "publish")
+                    {
+                        ImageRegistry = "old.example.test",
+                        ImageTag = "old"
+                    });
+                definition.AddContainer("declared", "old.example.test/old/declared", "old")
+                    .WithImagePublishCommand(new ModuleContainerExportOptions(
+                        "old/declared",
+                        "build-declared",
+                        "publish")
+                    {
+                        ImageRegistry = "old.example.test",
+                        ImageTag = "old"
+                    });
+                definition.AddResource<ContainerResource>(
+                    "factory",
+                    context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+                    new ModuleContainerExportOptions("old/factory", "build-factory", "publish")
+                    {
+                        ImageRegistry = "old.example.test",
+                        ImageTag = "old"
+                    });
+                definition.AddContainer("consumed", "registry.example.test/library/redis", "7");
+            },
+            TestContext.Current.CancellationToken);
 
         await builder.AddAsync(module);
 
@@ -69,6 +98,9 @@ public sealed class ModuleImageDescriptionPipelineTests
         Assert.Equal(
             ["consumed", "declared", "factory", "project"],
             document.Images.Select(image => image.EffectiveResource));
+        var moduleDescription = Assert.Single(document.Modules);
+        Assert.Equal("images", moduleDescription.Name);
+        Assert.Equal("Sample.Images.Contract", moduleDescription.ContractPackageId);
         Assert.Collection(
             document.Images,
             image =>
@@ -128,6 +160,9 @@ public sealed class ModuleImageDescriptionPipelineTests
             TestContext.Current.CancellationToken);
 
         var image = Assert.Single(document.Images);
+        var module = Assert.Single(document.Modules);
+        Assert.Equal("orders", module.Name);
+        Assert.Null(module.ContractPackageId);
         Assert.Equal("imported-api", image.EffectiveResource);
         Assert.Equal("api", image.Resource);
     }
@@ -205,6 +240,7 @@ public sealed class ModuleImageDescriptionPipelineTests
             path,
             TestContext.Current.CancellationToken);
         var image = Assert.Single(document.Images);
+        Assert.Equal("catalog", Assert.Single(document.Modules).Name);
         Assert.Equal("imported-api", image.EffectiveResource);
         Assert.Equal("registry.example.test/acme/api:preview", image.Reference);
     }

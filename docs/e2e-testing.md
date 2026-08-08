@@ -5,7 +5,7 @@
 - start the AppHost in the test process with `DistributedApplicationTestingBuilder`;
 - deploy the AppHost to Docker Compose with Aspire and represent the deployed services as a testing application.
 
-The package is separate so regular AppHosts do not acquire `Aspire.Hosting.Testing` or Docker hosting dependencies. Install it in both the AppHost that declares the Docker Compose test environment and the test project that creates or deploys that environment.
+The testing package carries `Aspire.Hosting.Testing` and Docker hosting dependencies. Install it in both the AppHost that declares the Docker Compose test environment and the test project that creates or deploys that environment.
 
 ```bash
 dotnet add path/to/AppHost.csproj package Shirubasoft.Aspire.ModularAppHosts.Testing
@@ -36,7 +36,7 @@ compose
     .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
-`WithTestEndpoint` requires an external endpoint. When the endpoint omits a host port, the test export selects an available loopback port and applies it to the endpoint before Compose publishing; this avoids hard-coded sample ports and lets independent test deployments run concurrently. Because an availability probe cannot reserve a port until Compose binds it, `DeployAsync` detects bind conflicts, destroys the partial deployment, and retries once by default. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path must be a root-relative path on the exported endpoint; network-path references such as `//other-host/health` are rejected. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
+`WithTestEndpoint` requires an external endpoint. When the endpoint omits a host port, the test export selects an available loopback port and applies it to the endpoint before Compose publishing; this avoids hard-coded sample ports and lets independent test deployments run concurrently. `DeployAsync` handles the race between the availability probe and Compose binding by destroying a partial deployment after a bind conflict and retrying once by default. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path must be a root-relative path on the exported endpoint; network-path references such as `//other-host/health` are rejected. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
 
 ## Use one test lifecycle
 
@@ -89,7 +89,7 @@ var builder = await DockerComposeDeploymentTestingBuilder
 
 When `AspireCliPath` keeps its `aspire` default, the builder prefers an `aspire` command from the nearest `.config/dotnet-tools.json`. If that manifest has not been restored, it falls back to `aspire` on `PATH`; set an explicit executable path to override discovery. The Aspire CLI output is streamed while deploy and destroy run. A timed-out deploy still receives a best-effort destroy. Temporary output is removed only after destroy succeeds; if cleanup fails, the exception reports both failures and retains the output directory so a developer or CI recovery step still has the deployment state.
 
-When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. These modes import configuration without deploying or destroying the external environment. Imported files use dotenv syntax, including `export`, single- and double-quoted values, escapes, and inline comments. Malformed lines, duplicate keys, orphaned health checks, and endpoint URLs that are not plain HTTP(S) origins fail with the file and line or exported key in the diagnostic.
+When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. These modes import an existing environment's configuration. Imported files use dotenv syntax, including `export`, single- and double-quoted values, escapes, and inline comments. Malformed lines, duplicate keys, orphaned health checks, and endpoint URLs that are not plain HTTP(S) origins fail with the file and line or exported key in the diagnostic.
 
 Aspire's environment-specific file can contain resolved secrets. Keep it out of source control and do not publish it as a CI artifact.
 

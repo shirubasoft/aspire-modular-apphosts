@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Aspire.Hosting.ModularAppHosts;
+using NuGet.Versioning;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
@@ -112,6 +113,10 @@ internal static partial class PreviewTool
                 PackageId = descriptor.Contract.PackageId,
                 Version = contractVersion
             });
+            foreach (var dependency in descriptor.Contract.Dependencies)
+            {
+                manifest.Contracts[^1].Dependencies.Add(CopyContractDependency(dependency));
+            }
         }
         else if (options.Optional("contract-version") is not null)
         {
@@ -183,12 +188,14 @@ internal static partial class PreviewTool
         }
 
         var producerOwnsDescriptorModule =
-            string.Equals(moduleSelection.Repository, producer.Repository, StringComparison.Ordinal) &&
+            RepositoryIdentityComparer.Instance.Equals(moduleSelection.Repository, producer.Repository) &&
             string.Equals(moduleSelection.Commit, producer.Commit, StringComparison.OrdinalIgnoreCase);
         if (manifest.Contracts.Count > 0 && !producerOwnsDescriptorModule)
         {
             throw new PreviewToolException(
-                $"The preview producer repository and commit do not match module '{descriptor.Module}', " +
+                $"The preview producer repository and commit " +
+                $"('{producer.Repository}' at '{producer.Commit}') do not match module '{descriptor.Module}' " +
+                $"('{moduleSelection.Repository}' at '{moduleSelection.Commit}'), " +
                 "so the producer cannot request its contract package. Use an image-only descriptor.");
         }
 
@@ -260,11 +267,11 @@ internal static partial class PreviewTool
         if (selectedImages.Count > 0)
         {
             Directory.CreateDirectory(pushDirectory);
-            var pushSteps = selectedImages
-                .Select(image => $"push-{image.EffectiveResource}")
+            var pushSelectors = selectedImages
+                .Select(image => $"resource:{image.EffectiveResource}")
                 .ToArray();
-            var pushArguments = new List<string> { "do" };
-            pushArguments.AddRange(pushSteps);
+            var pushArguments = new List<string> { "do", "push" };
+            pushArguments.AddRange(pushSelectors);
             pushArguments.AddRange(
                 [
                     "--apphost", appHost,
@@ -280,7 +287,7 @@ internal static partial class PreviewTool
                 applyTimeout: false).ConfigureAwait(false);
             EnsureSuccess(
                 pushResult,
-                $"Aspire pipeline steps '{string.Join("', '", pushSteps)}'");
+                $"Aspire image push for '{string.Join("', '", pushSelectors)}'");
         }
 
         var producedImages = new List<ProducedImage>(selectedImages.Count);
@@ -376,6 +383,8 @@ internal static partial class PreviewTool
         var githubCli = options.Optional("gh-executable") ?? "gh";
         var dotnetExecutable = options.Optional("dotnet-executable") ?? "dotnet";
         var dockerExecutable = options.Optional("docker-executable") ?? "docker";
+        var commandTimeout = ParseMaterializationCommandTimeout(
+            options.Optional("command-timeout-seconds"));
         options.EnsureOnly(
             "manifest",
             "policy",
@@ -390,6 +399,7 @@ internal static partial class PreviewTool
             "gh-executable",
             "dotnet-executable",
             "docker-executable",
+            "command-timeout-seconds",
             "property");
 
         if (nugetConfig is not null && !File.Exists(nugetConfig))
@@ -448,6 +458,7 @@ internal static partial class PreviewTool
                     packageFeed!,
                     nugetConfig,
                     dotnetExecutable,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
             else
@@ -466,6 +477,7 @@ internal static partial class PreviewTool
                     checkoutPath,
                     gitExecutable,
                     githubCli,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
                 var projectPath = GetContainedPath(
                     checkoutPath,
@@ -487,8 +499,13 @@ internal static partial class PreviewTool
                     nugetConfig,
                     properties,
                     dotnetExecutable,
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
+            VerifyPackageContractDependencies(
+                package.Path,
+                contract.Module,
+                contract.Dependencies);
             resolution.Contracts.Add(new ModulePreviewResolvedContract
             {
                 Module = contract.Module,
@@ -498,19 +515,26 @@ internal static partial class PreviewTool
                 Source = package.Source,
                 PackagePath = package.Path
             });
+            foreach (var dependency in contract.Dependencies)
+            {
+                resolution.Contracts[^1].Dependencies.Add(CopyContractDependency(dependency));
+            }
         }
 
         foreach (var image in manifest.Images)
         {
             var reference = $"{image.Repository}@{image.Sha256}";
             await Console.Error.WriteLineAsync($"verifying image {reference}").ConfigureAwait(false);
+            var operation = $"OCI image verification for '{reference}'";
             var result = await RunCommandAsync(
                 dockerExecutable,
                 ["buildx", "imagetools", "inspect", reference],
                 workDirectory,
                 standardInput: null,
-                cancellationToken).ConfigureAwait(false);
-            EnsureSuccess(result, $"OCI image verification for '{reference}'");
+                cancellationToken,
+                timeout: commandTimeout,
+                timeoutOperation: operation).ConfigureAwait(false);
+            EnsureSuccess(result, operation);
             resolution.Images.Add(CopyImage(image));
         }
 
@@ -528,6 +552,29 @@ internal static partial class PreviewTool
 
         await Console.Out.WriteLineAsync(resolutionPath).ConfigureAwait(false);
         return 0;
+    }
+
+    internal static TimeSpan ParseMaterializationCommandTimeout(string? seconds)
+    {
+        const int defaultSeconds = 120;
+        const int maximumSeconds = 86400;
+        if (seconds is null)
+        {
+            return TimeSpan.FromSeconds(defaultSeconds);
+        }
+
+        if (!int.TryParse(
+                seconds,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsedSeconds) ||
+            parsedSeconds is < 1 or > maximumSeconds)
+        {
+            throw new PreviewToolException(
+                $"--command-timeout-seconds must be an integer from 1 through {maximumSeconds}.");
+        }
+
+        return TimeSpan.FromSeconds(parsedSeconds);
     }
 
     private static Dictionary<string, string> ParseMaterializationProperties(
@@ -620,6 +667,7 @@ internal static partial class PreviewTool
         string checkoutPath,
         string gitExecutable,
         string githubCli,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(checkoutPath);
@@ -628,12 +676,14 @@ internal static partial class PreviewTool
             ["init", "--quiet", checkoutPath],
             Path.GetDirectoryName(checkoutPath)!,
             "git init",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
             ["remote", "add", "origin", selection.Repository],
             checkoutPath,
             "git remote add",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
@@ -643,21 +693,26 @@ internal static partial class PreviewTool
                 githubCli),
             checkoutPath,
             "git fetch exact preview commit",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
         await RunRequiredCommandAsync(
             gitExecutable,
             ["-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD"],
             checkoutPath,
             "git checkout exact preview commit",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
+        const string resolveOperation = "git rev-parse exact preview commit";
         var head = await RunCommandAsync(
             gitExecutable,
             ["rev-parse", "HEAD"],
             checkoutPath,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(head, "git rev-parse exact preview commit");
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: resolveOperation).ConfigureAwait(false);
+        EnsureSuccess(head, resolveOperation);
         if (!string.Equals(head.StandardOutput.Trim(), selection.Commit, StringComparison.OrdinalIgnoreCase))
         {
             throw new PreviewToolException(
@@ -665,13 +720,16 @@ internal static partial class PreviewTool
                 $"not requested commit '{selection.Commit}'.");
         }
 
+        const string statusOperation = "git status after exact preview checkout";
         var status = await RunCommandAsync(
             gitExecutable,
             ["status", "--porcelain=v1", "--untracked-files=all"],
             checkoutPath,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
-        EnsureSuccess(status, "git status after exact preview checkout");
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: statusOperation).ConfigureAwait(false);
+        EnsureSuccess(status, statusOperation);
         if (!string.IsNullOrWhiteSpace(status.StandardOutput))
         {
             throw new PreviewToolException(
@@ -687,6 +745,7 @@ internal static partial class PreviewTool
         string? nugetConfig,
         IReadOnlyDictionary<string, string> properties,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var packageFeedParent = Path.GetDirectoryName(packageFeed)
@@ -707,6 +766,7 @@ internal static partial class PreviewTool
                 nugetConfig,
                 properties,
                 dotnetExecutable,
+                commandTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -725,6 +785,7 @@ internal static partial class PreviewTool
         string packageFeed,
         string? nugetConfig,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var resolutionDirectory = Path.Combine(
@@ -733,6 +794,12 @@ internal static partial class PreviewTool
         var packagesDirectory = Path.Combine(resolutionDirectory, "packages");
         Directory.CreateDirectory(resolutionDirectory);
         var projectPath = Path.Combine(resolutionDirectory, "ContractResolver.csproj");
+        var lockedDependencyReferences = string.Join(
+            Environment.NewLine,
+            contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase)
+                .Select(dependency =>
+                    $"    <PackageReference Include=\"{dependency.PackageId}\" Version=\"[{dependency.Version}]\" />"));
         var project = $$"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
@@ -740,6 +807,7 @@ internal static partial class PreviewTool
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="{{contract.PackageId}}" Version="[{{contract.Version}}]" />
+            {{lockedDependencyReferences}}
               </ItemGroup>
             </Project>
             """;
@@ -768,6 +836,7 @@ internal static partial class PreviewTool
             restoreArguments,
             resolutionDirectory,
             $"resolve published contract '{contract.PackageId}'",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var candidates = Directory.Exists(packagesDirectory)
@@ -913,6 +982,7 @@ internal static partial class PreviewTool
         string? nugetConfig,
         IReadOnlyDictionary<string, string> properties,
         string dotnetExecutable,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var allowedProperties = policy.AllowedPackProperties.ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -933,6 +1003,13 @@ internal static partial class PreviewTool
             restoreArguments,
             Path.GetDirectoryName(projectPath)!,
             $"restore contract '{contract.PackageId}'",
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        await VerifyRestoredContractDependenciesAsync(
+            projectPath,
+            contract.Dependencies,
+            dotnetExecutable,
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var packArguments = new List<string>
@@ -952,6 +1029,7 @@ internal static partial class PreviewTool
             packArguments,
             Path.GetDirectoryName(projectPath)!,
             $"pack contract '{contract.PackageId}'",
+            commandTimeout,
             cancellationToken).ConfigureAwait(false);
 
         var candidates = Directory.GetFiles(stagingDirectory, "*.nupkg", SearchOption.TopDirectoryOnly)
@@ -969,7 +1047,21 @@ internal static partial class PreviewTool
 
         var sha256 = await ComputeFileSha256Async(producedPackage, cancellationToken).ConfigureAwait(false);
         var packagePath = Path.Combine(packageFeed, Path.GetFileName(producedPackage));
-        File.Move(producedPackage, packagePath, overwrite: true);
+        if (File.Exists(packagePath))
+        {
+            var existingSha256 = await ComputeFileSha256Async(packagePath, cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(existingSha256, sha256, StringComparison.Ordinal))
+            {
+                throw new PreviewToolException(
+                    $"Package feed already contains different bytes for '{contract.PackageId}' " +
+                    $"version '{contract.Version}'.");
+            }
+        }
+        else
+        {
+            File.Move(producedPackage, packagePath);
+        }
+
         return new MaterializedContractPackage(Path.GetFullPath(packagePath), sha256, Source: null);
     }
 
@@ -994,10 +1086,151 @@ internal static partial class PreviewTool
             return string.Equals(actualId, packageId, StringComparison.Ordinal) &&
                 string.Equals(actualVersion, version, StringComparison.OrdinalIgnoreCase);
         }
-        catch (Exception exception) when (exception is InvalidDataException or XmlException)
+        catch (Exception exception) when (exception is InvalidDataException or XmlException or InvalidOperationException)
         {
             return false;
         }
+    }
+
+    private static void VerifyPackageContractDependencies(
+        string packagePath,
+        string module,
+        IList<ModulePreviewContractDependency> dependencies)
+    {
+        if (dependencies.Count == 0)
+        {
+            return;
+        }
+
+        List<NuspecDependencyConstraint> constraints;
+        try
+        {
+            using var archive = ZipFile.OpenRead(packagePath);
+            var nuspecs = archive.Entries
+                .Where(entry => entry.FullName.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (nuspecs.Length != 1)
+            {
+                throw new PreviewToolException(
+                    $"Contract package for module '{module}' must contain exactly one nuspec.");
+            }
+
+            using var stream = nuspecs[0].Open();
+            var document = XDocument.Load(stream, LoadOptions.None);
+            var metadata = document.Root?.Elements()
+                .SingleOrDefault(element => element.Name.LocalName == "metadata")
+                ?? throw new PreviewToolException(
+                    $"Contract package for module '{module}' has no nuspec metadata.");
+            constraints = ReadNuspecDependencyConstraints(metadata);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or XmlException or InvalidOperationException)
+        {
+            throw new PreviewToolException(
+                $"Contract package for module '{module}' has an invalid nuspec.",
+                exception);
+        }
+
+        foreach (var dependency in dependencies.OrderBy(
+                     dependency => dependency.PackageId,
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            var matches = constraints
+                .Where(constraint => string.Equals(
+                    constraint.PackageId,
+                    dependency.PackageId,
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderBy(constraint => constraint.Framework, StringComparer.Ordinal)
+                .ThenBy(constraint => constraint.Range, StringComparer.Ordinal)
+                .ToArray();
+            if (matches.Length == 0)
+            {
+                throw new PreviewToolException(
+                    $"Contract package for module '{module}' does not declare attested direct dependency " +
+                    $"'{dependency.PackageId}' version '{dependency.Version}' in its nuspec.");
+            }
+
+            foreach (var constraint in matches)
+            {
+                if (!NuGetVersionRangePinsExact(constraint.Range, dependency.Version, out var error))
+                {
+                    throw new PreviewToolException(
+                        $"Contract package for module '{module}' declares dependency '{dependency.PackageId}' " +
+                        $"range '{constraint.Range}' for framework '{constraint.Framework}', which does not pin " +
+                        $"the attested exact version '{dependency.Version}'.{error}");
+                }
+            }
+        }
+    }
+
+    private static List<NuspecDependencyConstraint> ReadNuspecDependencyConstraints(
+        XElement metadata)
+    {
+        var dependencies = metadata.Elements()
+            .SingleOrDefault(element => element.Name.LocalName == "dependencies");
+        if (dependencies is null)
+        {
+            return [];
+        }
+
+        var constraints = new List<NuspecDependencyConstraint>();
+        AddDependencyConstraints(constraints, dependencies, "all");
+        foreach (var group in dependencies.Elements()
+                     .Where(element => element.Name.LocalName == "group")
+                     .OrderBy(
+                         element => (string?)element.Attribute("targetFramework") ?? string.Empty,
+                         StringComparer.Ordinal))
+        {
+            AddDependencyConstraints(
+                constraints,
+                group,
+                (string?)group.Attribute("targetFramework") ?? "unspecified");
+        }
+
+        return constraints;
+    }
+
+    private static void AddDependencyConstraints(
+        ICollection<NuspecDependencyConstraint> constraints,
+        XElement parent,
+        string framework)
+    {
+        foreach (var dependency in parent.Elements()
+                     .Where(element => element.Name.LocalName == "dependency")
+                     .OrderBy(element => (string?)element.Attribute("id"), StringComparer.OrdinalIgnoreCase))
+        {
+            var packageId = (string?)dependency.Attribute("id");
+            var range = (string?)dependency.Attribute("version");
+            if (!string.IsNullOrWhiteSpace(packageId))
+            {
+                constraints.Add(new NuspecDependencyConstraint(
+                    packageId,
+                    string.IsNullOrWhiteSpace(range) ? "(,)" : range,
+                    framework));
+            }
+        }
+    }
+
+    private static bool NuGetVersionRangePinsExact(
+        string range,
+        string exactVersion,
+        out string error)
+    {
+        if (!NuGetVersion.TryParse(exactVersion, out var version))
+        {
+            error = $" Exact version '{exactVersion}' is not a valid NuGet version.";
+            return false;
+        }
+        if (!VersionRange.TryParse(range, out var versionRange))
+        {
+            error = $" Dependency range '{range}' is not a valid NuGet version range.";
+            return false;
+        }
+
+        error = string.Empty;
+        return versionRange.IsMinInclusive &&
+            versionRange.IsMaxInclusive &&
+            versionRange.MinVersion == version &&
+            versionRange.MaxVersion == version;
     }
 
     private static async Task<string> ComputeFileSha256Async(
@@ -1022,11 +1255,12 @@ internal static partial class PreviewTool
         }
     }
 
-    private static async Task RunRequiredCommandAsync(
+    internal static async Task RunRequiredCommandAsync(
         string executable,
         IReadOnlyList<string> arguments,
         string workingDirectory,
         string operation,
+        TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
         var result = await RunCommandAsync(
@@ -1034,7 +1268,9 @@ internal static partial class PreviewTool
             arguments,
             workingDirectory,
             standardInput: null,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            timeout: commandTimeout,
+            timeoutOperation: operation).ConfigureAwait(false);
         EnsureSuccess(result, operation);
     }
 
@@ -1085,6 +1321,11 @@ internal static partial class PreviewTool
 
     private static void SortResolution(ModulePreviewResolution resolution)
     {
+        foreach (var contract in resolution.Contracts)
+        {
+            ReplaceContents(contract.Dependencies, contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase));
+        }
         ReplaceContents(resolution.Modules, resolution.Modules
             .OrderBy(module => module.Name, StringComparer.OrdinalIgnoreCase));
         ReplaceContents(resolution.Contracts, resolution.Contracts
@@ -1157,6 +1398,11 @@ internal static partial class PreviewTool
 
     private static void SortManifest(ModulePreviewManifest manifest)
     {
+        foreach (var contract in manifest.Contracts)
+        {
+            ReplaceContents(contract.Dependencies, contract.Dependencies
+                .OrderBy(dependency => dependency.PackageId, StringComparer.OrdinalIgnoreCase));
+        }
         ReplaceContents(manifest.Modules, manifest.Modules
             .OrderBy(module => module.Name, StringComparer.OrdinalIgnoreCase));
         ReplaceContents(manifest.Contracts, manifest.Contracts
@@ -1179,4 +1425,7 @@ internal static partial class PreviewTool
     private sealed record ProducedImage(string Resource, string Repository, string Sha256);
 
     private sealed record MaterializedContractPackage(string Path, string Sha256, string? Source);
+
+    private sealed record NuspecDependencyConstraint(string PackageId, string Range, string Framework);
+
 }

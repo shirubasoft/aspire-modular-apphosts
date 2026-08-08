@@ -231,7 +231,7 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
     public IDistributedApplicationModuleContainer Container => container;
 
     public IDistributedApplicationModuleContainerBuilder Configure(
-        Action<IResourceBuilder<ContainerResource>> configureContainer)
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>> configureContainer)
     {
         ArgumentNullException.ThrowIfNull(configureContainer);
         container.ConfigureContainer += configureContainer;
