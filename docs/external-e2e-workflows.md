@@ -108,7 +108,7 @@ modular-apphosts workflow dispatch \
 ```
 
 The [dispatch workflow](workflows/repo-b-dispatch.yml) contains no custom orchestration script. The
-command writes `run-id`, `run-url`, and `conclusion` as step outputs, while the job's
+command writes `run-id` and `run-url` as step outputs, while the job's
 `timeout-minutes` bounds the wait. It returns the status from `gh run watch --exit-status`, so Repo
 B naturally propagates Repo A's conclusion.
 

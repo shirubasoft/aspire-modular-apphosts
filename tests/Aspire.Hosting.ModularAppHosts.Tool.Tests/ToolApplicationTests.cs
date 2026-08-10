@@ -25,11 +25,6 @@ public sealed class ToolApplicationTests
                     "https://github.com/acme/repo-a/actions/runs/12345\n",
                     string.Empty),
                 ["run", "watch"] => new ProcessExecutionResult(0, string.Empty, string.Empty),
-                ["run", "view"] => new ProcessExecutionResult(
-                    0,
-                    "{\"status\":\"completed\",\"conclusion\":\"success\"," +
-                    "\"url\":\"https://github.com/acme/repo-a/actions/runs/12345\"}",
-                    string.Empty),
                 _ => throw new InvalidOperationException("Unexpected process invocation.")
             }));
         var githubActions = Substitute.For<ICoreService>();
@@ -80,10 +75,7 @@ public sealed class ToolApplicationTests
                     ["run", "watch", "12345", "--repo", "acme/repo-a", "--compact", "--exit-status"],
                     watch.Arguments);
                 Assert.Equal(ProcessOutputMode.Stream, watch.OutputMode);
-            },
-            view => Assert.Equal(
-                ["run", "view", "12345", "--repo", "acme/repo-a", "--json", "status,conclusion,url"],
-                view.Arguments));
+            });
         var outputs = githubActions.ReceivedCalls()
             .Where(call => call.GetMethodInfo().Name == nameof(ICoreService.SetOutputAsync))
             .ToDictionary(
@@ -91,7 +83,7 @@ public sealed class ToolApplicationTests
                 call => Assert.IsType<string>(call.GetArguments()[1]),
                 StringComparer.Ordinal);
         Assert.Equal("12345", outputs["run-id"]);
-        Assert.Equal("success", outputs["conclusion"]);
+        Assert.Equal("https://github.com/acme/repo-a/actions/runs/12345", outputs["run-url"]);
     }
 
     [Fact]
@@ -108,15 +100,10 @@ public sealed class ToolApplicationTests
                     "https://github.com/acme/repo-a/actions/runs/88",
                     string.Empty),
                 ["run", "watch"] => new ProcessExecutionResult(1, string.Empty, string.Empty),
-                ["run", "view"] => new ProcessExecutionResult(
-                    0,
-                    "{\"status\":\"completed\",\"conclusion\":\"failure\"," +
-                    "\"url\":\"https://github.com/acme/repo-a/actions/runs/88\"}",
-                    string.Empty),
                 _ => throw new InvalidOperationException("Unexpected process invocation.")
             }));
 
-        var (exitCode, output, error, _) = await RunAsync(
+        var (exitCode, _, error, _) = await RunAsync(
             directory,
             [
                 "workflow", "dispatch",
@@ -128,7 +115,6 @@ public sealed class ToolApplicationTests
 
         Assert.Equal(1, exitCode);
         Assert.Empty(error);
-        Assert.Contains("failure", output, StringComparison.Ordinal);
     }
 
     [Theory]

@@ -92,6 +92,12 @@ internal sealed class WorkflowCommandService(
         }
 
         await output.WriteLineAsync($"Dispatched {runUrl}").ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(configuration["GITHUB_OUTPUT"]))
+        {
+            await githubActions.SetOutputAsync("run-id", runId).ConfigureAwait(false);
+            await githubActions.SetOutputAsync("run-url", runUrl).ConfigureAwait(false);
+        }
+
         var watch = await processRunner.RunAsync(
             new ProcessInvocation(
                 githubCliPath,
@@ -99,40 +105,6 @@ internal sealed class WorkflowCommandService(
                 workingDirectory,
                 OutputMode: ProcessOutputMode.Stream),
             cancellationToken).ConfigureAwait(false);
-
-        var view = await processRunner.RunAsync(
-            new ProcessInvocation(
-                githubCliPath,
-                ["run", "view", runId, "--repo", repository, "--json", "status,conclusion,url"],
-                workingDirectory,
-                OutputMode: ProcessOutputMode.Capture),
-            cancellationToken).ConfigureAwait(false);
-        if (!view.IsSuccess)
-        {
-            await WriteProcessFailureAsync("GitHub workflow result lookup", view).ConfigureAwait(false);
-            return ToolExitCode.Failure;
-        }
-
-        if (!TryGetConclusion(view.StandardOutput, out var conclusion, out var resolvedUrl))
-        {
-            await error.WriteLineAsync("GitHub CLI returned an invalid workflow result.").ConfigureAwait(false);
-            return ToolExitCode.Failure;
-        }
-
-        if (!string.IsNullOrWhiteSpace(configuration["GITHUB_OUTPUT"]))
-        {
-            await githubActions.SetOutputAsync("run-id", runId).ConfigureAwait(false);
-            await githubActions.SetOutputAsync("run-url", resolvedUrl).ConfigureAwait(false);
-            await githubActions.SetOutputAsync("conclusion", conclusion).ConfigureAwait(false);
-        }
-
-        await output.WriteLineAsync($"External workflow concluded '{conclusion}': {resolvedUrl}")
-            .ConfigureAwait(false);
-        if (watch.IsSuccess && !string.Equals(conclusion, "success", StringComparison.OrdinalIgnoreCase))
-        {
-            return ToolExitCode.Failure;
-        }
-
         return watch.ExitCode;
     }
 
@@ -186,36 +158,6 @@ internal sealed class WorkflowCommandService(
         runId = id;
         runUrl = uri.AbsoluteUri;
         return true;
-    }
-
-    private static bool TryGetConclusion(
-        string standardOutput,
-        out string conclusion,
-        out string runUrl)
-    {
-        conclusion = string.Empty;
-        runUrl = string.Empty;
-        try
-        {
-            using var document = JsonDocument.Parse(standardOutput);
-            var root = document.RootElement;
-            if (!root.TryGetProperty("status", out var status) ||
-                !string.Equals(status.GetString(), "completed", StringComparison.OrdinalIgnoreCase) ||
-                !root.TryGetProperty("conclusion", out var conclusionProperty) ||
-                !root.TryGetProperty("url", out var urlProperty))
-            {
-                return false;
-            }
-
-            conclusion = conclusionProperty.GetString() ?? string.Empty;
-            runUrl = urlProperty.GetString() ?? string.Empty;
-            return !string.IsNullOrWhiteSpace(conclusion) &&
-                Uri.TryCreate(runUrl, UriKind.Absolute, out _);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
     }
 
     private async Task WriteProcessFailureAsync(
