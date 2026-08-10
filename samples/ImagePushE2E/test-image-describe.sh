@@ -22,7 +22,7 @@ dotnet tool run aspire -- do describe-images \
     --non-interactive
 
 jq --exit-status '
-    .schemaVersion == 2 and
+    .schemaVersion == 3 and
     ([.modules[] | {name, contractPackageId}] == [
         {
           "name": "contract-only",
@@ -47,28 +47,44 @@ jq --exit-status '
     (.images[] | select(.resource == "image-pull-mapped") |
         .reference == "mirror.example.test/image-pull/local:push-test" and
         .pullReference == "registry.example.test/image-pull/source:push-test" and
-        .pushReference == null and
+        .push == null and
         .build == null) and
     (.images[] | select(.resource == "image-push-declared") |
         .reference == "registry.example.test/image-push/declared:push-test" and
         .pullReference == .reference and
-        .pushReference == .reference and
+        .push == {
+          "registry": "registry.example.test",
+          "repository": "image-push/declared",
+          "tag": "push-test"
+        } and
         .build.step == "build-image-push-declared") and
     (.images[] | select(.resource == "image-push-factory") |
         .reference == "registry.example.test/image-push/factory:push-test" and
         .pullReference == .reference and
-        .pushReference == .reference and
+        .push == {
+          "registry": "registry.example.test",
+          "repository": "image-push/factory",
+          "tag": "push-test"
+        } and
         .build.step == "build-image-push-factory") and
     (.images[] | select(.resource == "image-push-extra") |
         .module == "image-push-extra" and
         .reference == "registry.example.test/image-push/extra:push-test" and
         .pullReference == .reference and
-        .pushReference == .reference and
+        .push == {
+          "registry": "registry.example.test",
+          "repository": "image-push/extra",
+          "tag": "push-test"
+        } and
         .build.step == "build-image-push-extra") and
     (.images[] | select(.resource == "image-push-project") |
         .reference == "image-push-project:push-test" and
         .pullReference == "registry.example.test/image-push/project:push-test" and
-        .pushReference == "registry.example.test/image-push/project:push-test" and
+        .push == {
+          "registry": "registry.example.test",
+          "repository": "image-push/project",
+          "tag": "push-test"
+        } and
         .build.step == "build-image-push-project")
 ' "$document" >/dev/null
 
