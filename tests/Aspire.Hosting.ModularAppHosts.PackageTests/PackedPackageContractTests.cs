@@ -40,6 +40,9 @@ public sealed class PackedPackageContractTests
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Testing");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == "Aspire.Hosting.Docker");
         Assert.DoesNotContain(dependencies, dependency => dependency.Id == TestingPackageId);
+        Assert.True(ContainsEntry(
+            packages.CorePackagePath,
+            "schemas/full-control-module-preview.schema.json"));
     }
 
     [Fact]
@@ -73,6 +76,9 @@ public sealed class PackedPackageContractTests
         Assert.True(ContainsEntry(
             packages.ToolPackagePath,
             "schemas/module-preview-producer.schema.json"));
+        Assert.True(ContainsEntry(
+            packages.ToolPackagePath,
+            "schemas/full-control-module-preview.schema.json"));
         Assert.False(ContainsEntry(
             packages.ToolPackagePath,
             "tools/net10.0/any/Aspire.Hosting.dll"));

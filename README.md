@@ -11,6 +11,10 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
 | `Shirubasoft.Aspire.ModularAppHosts.Tool` | Exporting immutable module preview manifests and dispatching cross-repository E2E workflows. |
 
+For consumer-owned E2E workflows that intentionally trust a caller repository to select container
+tags without producer descriptors, contract validation, policy, or digest verification, see
+[full-control module previews](docs/full-control-module-previews.md).
+
 Install the core package in AppHosts and shared module contracts:
 
 ```bash

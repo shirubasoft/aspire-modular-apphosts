@@ -39,6 +39,11 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, ModulePreviewImageArtifact> _previewImages =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, string> _fullControlPreviewTags =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private FullControlModulePreviewSource? _fullControlPreviewSource;
+
     private readonly ConcurrentDictionary<string, RepositorySynchronization> _repositorySynchronizations =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -79,12 +84,14 @@ internal sealed class ModuleApplicationRegistry(
 
     internal void ApplyPreviewManifest(ModulePreviewManifest manifest, string baseDirectory)
     {
+        EnsureFullControlPreviewIsNotApplied();
         ApplyPreviewSelections(manifest.Modules, baseDirectory);
         RefreshConfiguration();
     }
 
     internal void ApplyPreviewResolution(ModulePreviewResolution resolution, string baseDirectory)
     {
+        EnsureFullControlPreviewIsNotApplied();
         ApplyPreviewSelections(resolution.Modules, baseDirectory);
 
         foreach (var image in resolution.Images)
@@ -113,6 +120,48 @@ internal sealed class ModuleApplicationRegistry(
         }
 
         RefreshConfiguration();
+    }
+
+    internal void ApplyFullControlPreview(
+        FullControlModulePreviewManifest manifest,
+        FullControlModulePreviewSource source,
+        string baseDirectory)
+    {
+        if (_materializedModules.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "A full-control module preview must be applied before importing or adding modules.");
+        }
+
+        if (_previewSelections.Count > 0 || _previewImages.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "A full-control module preview cannot be combined with an immutable module preview manifest or resolution.");
+        }
+
+        var resolvedTags = manifest.ResolveContainerTags(source.Ref);
+        if (_fullControlPreviewSource is not null &&
+            (!GitHubRepositoryCloner.RefersToSameRepository(
+                _fullControlPreviewSource.Repository,
+                source.Repository,
+                baseDirectory) ||
+             !string.Equals(_fullControlPreviewSource.Ref, source.Ref, StringComparison.Ordinal) ||
+             !DictionaryEquals(_fullControlPreviewTags, resolvedTags)))
+        {
+            throw new InvalidOperationException(
+                "A different full-control module preview has already been applied to this AppHost builder.");
+        }
+
+        _fullControlPreviewSource = new FullControlModulePreviewSource
+        {
+            Repository = source.Repository,
+            Ref = source.Ref
+        };
+        _fullControlPreviewTags.Clear();
+        foreach (var (resource, tag) in resolvedTags)
+        {
+            _fullControlPreviewTags.Add(resource, tag);
+        }
     }
 
     internal void ValidatePreviewSelection(DistributedApplicationModule module, string baseDirectory)
@@ -165,6 +214,13 @@ internal sealed class ModuleApplicationRegistry(
 
     internal bool CanMaterializePreviewWithoutRepository(DistributedApplicationModule module)
     {
+        return CanMaterializePreviewWithoutRepository(module, resourceNames: null);
+    }
+
+    internal bool CanMaterializePreviewWithoutRepository(
+        DistributedApplicationModule module,
+        ModuleResourceNameMap? resourceNames)
+    {
         var images = _previewImages.Values
             .Where(image => string.Equals(image.Module, module.Name, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(image => image.Resource, StringComparer.OrdinalIgnoreCase);
@@ -173,21 +229,29 @@ internal sealed class ModuleApplicationRegistry(
             return false;
         }
 
+        bool HasFullControlTag(string resource) =>
+            resourceNames is not null &&
+            _fullControlPreviewTags.ContainsKey(resourceNames[resource]);
+
         var projectsAreDigestSatisfied = module.ProjectDefinitions.All(project =>
-            images.TryGetValue(project.Name, out var image) &&
-            image.ResourceKind == ModulePreviewResourceKind.Project);
+            (images.TryGetValue(project.Name, out var image) &&
+             image.ResourceKind == ModulePreviewResourceKind.Project) ||
+            HasFullControlTag(project.Name));
         var publishableContainersAreDigestSatisfied = module.ContainerDefinitions
             .Where(container => container.ImagePublishOptions is not null)
             .All(container =>
-                images.TryGetValue(container.Name, out var image) &&
-                image.ResourceKind == ModulePreviewResourceKind.Container);
+                (images.TryGetValue(container.Name, out var image) &&
+                 image.ResourceKind == ModulePreviewResourceKind.Container) ||
+                HasFullControlTag(container.Name));
         var publishableFactoryResourcesAreDigestSatisfied = module.ResourceDefinitions
             .OfType<IDistributedApplicationModuleFactoryResource>()
             .Where(resource => resource.ImagePublishOptions is not null)
             .All(resource =>
-                images.TryGetValue(resource.Name, out var image) &&
-                image.ResourceKind == ModulePreviewResourceKind.Container);
-        var hasRepositoryIndependentPreviewImage = images.Count > 0 &&
+                (images.TryGetValue(resource.Name, out var image) &&
+                 image.ResourceKind == ModulePreviewResourceKind.Container) ||
+                HasFullControlTag(resource.Name));
+        var hasRepositoryIndependentPreviewImage = (images.Count > 0 ||
+            (resourceNames is not null && module.ResourceDefinitions.Any(resource => HasFullControlTag(resource.Name)))) &&
             (module.ProjectDefinitions.Count > 0 ||
                 module.ContainerDefinitions.Count > 0 ||
                 module.ResourceDefinitions.OfType<IDistributedApplicationModuleFactoryResource>()
@@ -196,6 +260,117 @@ internal sealed class ModuleApplicationRegistry(
             projectsAreDigestSatisfied &&
             publishableContainersAreDigestSatisfied &&
             publishableFactoryResourcesAreDigestSatisfied;
+    }
+
+    internal void ApplyFullControlPreviewOptions(
+        DistributedApplicationModule module,
+        ModuleResourceNameMap resourceNames)
+    {
+        foreach (var definition in module.ResourceDefinitions)
+        {
+            if (!_fullControlPreviewTags.TryGetValue(resourceNames[definition.Name], out var tag))
+            {
+                continue;
+            }
+
+            if (!Options.Modules.TryGetValue(module.Name, out var moduleOptions))
+            {
+                moduleOptions = new DistributedApplicationModuleOptions();
+                Options.Modules.Add(module.Name, moduleOptions);
+            }
+
+            DistributedApplicationModuleImageOptions imageOptions;
+            if (definition is DistributedApplicationModuleProject)
+            {
+                if (!moduleOptions.Projects.TryGetValue(definition.Name, out var projectOptions))
+                {
+                    projectOptions = new DistributedApplicationModuleProjectOptions();
+                    moduleOptions.Projects.Add(definition.Name, projectOptions);
+                }
+
+                projectOptions.ProjectMode = ModuleProjectMode.Container;
+                imageOptions = projectOptions;
+            }
+            else
+            {
+                if (!moduleOptions.Containers.TryGetValue(definition.Name, out var containerOptions))
+                {
+                    containerOptions = new DistributedApplicationModuleContainerOptions();
+                    moduleOptions.Containers.Add(definition.Name, containerOptions);
+                }
+
+                imageOptions = containerOptions;
+            }
+
+            imageOptions.ImageTag = tag;
+            imageOptions.ImageSHA256 = null;
+            imageOptions.PublishImage = false;
+        }
+    }
+
+    internal void ValidateAndApplyFullControlPreview(
+        DistributedApplicationModel model,
+        string baseDirectory)
+    {
+        if (_fullControlPreviewSource is null)
+        {
+            return;
+        }
+
+        var allowedRepositories = _modules.Values
+            .Select(module => module.Repository)
+            .Where(repository => !string.IsNullOrWhiteSpace(repository))
+            .Select(repository => repository!)
+            .Where(repository => GitHubRepositoryCloner.IsRemoteRepository(repository, baseDirectory))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (!allowedRepositories.Any(repository => GitHubRepositoryCloner.RefersToSameRepository(
+                _fullControlPreviewSource.Repository,
+                repository,
+                baseDirectory)))
+        {
+            var allowed = allowedRepositories.Length == 0
+                ? "(none)"
+                : string.Join(", ", allowedRepositories.Select(repository => $"'{repository}'"));
+            throw new InvalidOperationException(
+                $"Full-control preview source repository '{_fullControlPreviewSource.Repository}' is not declared " +
+                $"by an AppHost module. Allowed repositories: {allowed}.");
+        }
+
+        ApplyFullControlPreviewTags(model.Resources, requireEveryOverride: true);
+    }
+
+    internal void ApplyFullControlPreviewTags(
+        IEnumerable<IResource> modelResources,
+        bool requireEveryOverride = false)
+    {
+        var resources = modelResources.ToDictionary(resource => resource.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var (resourceName, tag) in _fullControlPreviewTags)
+        {
+            if (!resources.TryGetValue(resourceName, out var resource))
+            {
+                if (requireEveryOverride)
+                {
+                    throw new InvalidOperationException(
+                        $"Full-control preview selects unknown AppHost resource '{resourceName}'.");
+                }
+
+                continue;
+            }
+
+            if (resource is not ContainerResource container)
+            {
+                throw new InvalidOperationException(
+                    $"Full-control preview resource '{resourceName}' is not a container resource.");
+            }
+
+            var image = container.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault()
+                ?? throw new InvalidOperationException(
+                    $"Full-control preview resource '{resourceName}' does not declare a container image.");
+            image.SHA256 = null;
+            image.Tag = tag;
+        }
     }
 
     internal bool TryGetResource(string name, out IResource? resource) =>
@@ -376,6 +551,22 @@ internal sealed class ModuleApplicationRegistry(
     }
 
     private static string GetPreviewImageKey(string module, string resource) => $"{module}\0{resource}";
+
+    private void EnsureFullControlPreviewIsNotApplied()
+    {
+        if (_fullControlPreviewSource is not null)
+        {
+            throw new InvalidOperationException(
+                "An immutable module preview manifest or resolution cannot be combined with a full-control module preview.");
+        }
+    }
+
+    private static bool DictionaryEquals(
+        Dictionary<string, string> first,
+        IReadOnlyDictionary<string, string> second) =>
+        first.Count == second.Count && first.All(pair =>
+            second.TryGetValue(pair.Key, out var value) &&
+            string.Equals(pair.Value, value, StringComparison.Ordinal));
 
     internal void ValidateConfiguredModules()
     {

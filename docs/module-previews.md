@@ -1,5 +1,10 @@
 # Cross-repository module previews
 
+For a tag-only workflow that trusts an accepted caller repository without producer descriptors,
+contract validation, policies, or digest verification, use
+[full-control module previews](full-control-module-previews.md). It is a separate opt-in API and does
+not change the immutable workflow described below.
+
 Module previews let a developer in a producer repository run a consumer-owned E2E workflow against
 the exact commit and immutable container images they have pushed. The .NET tool owns the generic
 producer and consumer mechanics; each consumer retains a reviewed allowlist and its application-

@@ -34,5 +34,8 @@
     <None Include="../../schemas/module-preview-producer.schema.json"
           Pack="true"
           PackagePath="schemas/" />
+    <None Include="../../schemas/full-control-module-preview.schema.json"
+          Pack="true"
+          PackagePath="schemas/" />
   </ItemGroup>
 </Project>

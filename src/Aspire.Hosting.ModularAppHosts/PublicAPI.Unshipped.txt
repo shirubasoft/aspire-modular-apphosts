@@ -80,6 +80,41 @@ Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.Expor
 *REMOVED*Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.ExportAsContainer(Aspire.Hosting.ModularAppHosts.ModuleContainerExportOptions! options, System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ContainerResource!>!>? configureContainer = null) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 *REMOVED*Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder.ExportAsContainer(string! imageName, string! publishCommand, System.Collections.Generic.IReadOnlyList<string!>! publishArguments, System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ContainerResource!>!>? configureContainer = null) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleProjectBuilder!
 *REMOVED*Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainerBuilder.Configure(System.Action<Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.ApplicationModel.ContainerResource!>!>! configureContainer) -> Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleContainerBuilder!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.ContainerTags.get -> System.Collections.Generic.IDictionary<string!, string!>!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.FullControlModulePreviewManifest() -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.ResolveContainerTags(string! sourceRef) -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.Schema.get -> string!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.Schema.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SchemaVersion.get -> int
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SchemaVersion.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SourceRefResources.get -> System.Collections.Generic.IList<string!>!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.Validate() -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.FullControlModulePreviewOptions() -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.ManifestPath.get -> string?
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.ManifestPath.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.SourceRef.get -> string?
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.SourceRef.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.SourceRepository.get -> string?
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.SourceRepository.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.FullControlModulePreviewSource() -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.Ref.get -> string!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.Ref.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource.Validate() -> void
+const Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.CurrentSchemaVersion = 1 -> int
+const Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SchemaUri = "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/full-control-module-preview.schema.json" -> string!
+const Aspire.Hosting.ModularAppHosts.FullControlModulePreviewOptions.ConfigurationSectionName = "Aspire:ModularAppHosts:FullControlPreview" -> string!
+static Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.LoadAsync(System.IO.Stream! stream, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest!>!
+static Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest!>!
+static Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest.SanitizeSourceRef(string! sourceRef) -> string!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyFullControlModulePreview(this Aspire.Hosting.IDistributedApplicationBuilder! builder, Aspire.Hosting.ModularAppHosts.FullControlModulePreviewManifest! manifest, Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource! source) -> Aspire.Hosting.IDistributedApplicationBuilder!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyFullControlModulePreviewAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! manifestPath, Aspire.Hosting.ModularAppHosts.FullControlModulePreviewSource! source, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
+static Aspire.Hosting.ModularAppHosts.ModulePreviewExtensions.ApplyFullControlModulePreviewFromConfigurationAsync(this Aspire.Hosting.IDistributedApplicationBuilder! builder, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.IDistributedApplicationBuilder!>!
 Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleResourceContext.Image.get -> Aspire.Hosting.ModularAppHosts.ModuleResourceImage?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.get -> bool?
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleImageOptions.AutoCloneBuildRepository.set -> void

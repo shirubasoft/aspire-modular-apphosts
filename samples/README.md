@@ -117,6 +117,12 @@ the [sample README](ImagePushE2E/README.md) for commands.
 authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
 image pipeline AppHost. Example repository and registry identities keep the validation offline.
 
+## Full-control preview sample
+
+[`FullControlPreview`](FullControlPreview/README.md) demonstrates the separate tag-only trust mode:
+one caller-owned manifest, trusted caller repository binding, source-ref fan-out, sparse explicit
+tags, repository-free module materialization, and identical publish-time image references.
+
 ## External AppHost workflow sample
 
 [`ExternalAppHostWorkflow`](ExternalAppHostWorkflow/README.md) validates an image-only producer that

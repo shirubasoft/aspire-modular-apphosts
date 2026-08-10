@@ -19,5 +19,8 @@
     <None Include="../../schemas/module-preview-producer.schema.json"
           Link="TestData/module-preview-producer.schema.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../schemas/full-control-module-preview.schema.json"
+          Link="TestData/full-control-module-preview.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,79 @@
+name: Full-control module preview
+
+on:
+  workflow_call:
+    inputs:
+      preview-manifest:
+        description: Repository-relative path to the caller-owned full-control preview manifest.
+        required: true
+        type: string
+      consumer-ref:
+        description: Reviewed consumer repository ref containing the AppHost and tests.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_REPOSITORY: "https://github.com/${{ github.repository }}.git"
+      SOURCE_REF: "${{ github.head_ref || github.ref_name }}"
+
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@v7
+        with:
+          path: preview-source
+
+      - name: Resolve caller-owned manifest
+        id: manifest
+        env:
+          PREVIEW_MANIFEST_INPUT: "${{ inputs.preview-manifest }}"
+        shell: bash
+        run: |
+          case "$PREVIEW_MANIFEST_INPUT" in
+            *$'\n'*|*$'\r'*)
+              echo "The preview manifest path cannot contain control characters." >&2
+              exit 1
+              ;;
+          esac
+          source_root="$(realpath "$GITHUB_WORKSPACE/preview-source")"
+          manifest_path="$(realpath -e "$source_root/$PREVIEW_MANIFEST_INPUT")"
+          case "$manifest_path" in
+            "$source_root"/*) ;;
+            *)
+              echo "The preview manifest must be inside the caller repository." >&2
+              exit 1
+              ;;
+          esac
+          printf 'path=%s\n' "$manifest_path" >> "$GITHUB_OUTPUT"
+
+      - name: Check out consumer repository
+        uses: actions/checkout@v7
+        with:
+          repository: shirubasoft/aspire-modular-apphosts
+          ref: "${{ inputs.consumer-ref }}"
+          path: consumer
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: consumer/global.json
+
+      - name: Restore consumer toolchain
+        working-directory: consumer
+        run: |
+          dotnet tool restore
+          dotnet restore samples/FullControlPreview/FullControlPreview.AppHost/FullControlPreview.AppHost.csproj
+
+      - name: Run consumer-owned preview validation
+        working-directory: consumer
+        env:
+          Aspire__ModularAppHosts__FullControlPreview__ManifestPath: "${{ steps.manifest.outputs.path }}"
+          Aspire__ModularAppHosts__FullControlPreview__SourceRepository: "${{ env.SOURCE_REPOSITORY }}"
+          Aspire__ModularAppHosts__FullControlPreview__SourceRef: "${{ env.SOURCE_REF }}"
+        run: bash samples/FullControlPreview/validate.sh

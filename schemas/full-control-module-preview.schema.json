@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/full-control-module-preview.schema.json",
+  "title": "Full-control module preview manifest",
+  "description": "Sparse, tag-only container overrides whose source identity is supplied separately by trusted CI context.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/full-control-module-preview.schema.json"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRefResources": {
+      "type": "array",
+      "description": "Effective AppHost resource names that receive the sanitized trusted source ref as their image tag.",
+      "items": {
+        "$ref": "#/$defs/resourceName"
+      },
+      "uniqueItems": true
+    },
+    "containerTags": {
+      "type": "object",
+      "description": "Explicit image tags keyed by effective AppHost resource name.",
+      "propertyNames": {
+        "$ref": "#/$defs/resourceName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/containerTag"
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": ["sourceRefResources"],
+      "properties": {
+        "sourceRefResources": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "required": ["containerTags"],
+      "properties": {
+        "containerTags": {
+          "minProperties": 1
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "resourceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "containerTag": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+    }
+  }
+}

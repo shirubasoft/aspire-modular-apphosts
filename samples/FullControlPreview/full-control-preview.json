@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/shirubasoft/aspire-modular-apphosts/main/schemas/full-control-module-preview.schema.json",
+  "schemaVersion": 1,
+  "sourceRefResources": [
+    "catalog-api",
+    "catalog-worker"
+  ],
+  "containerTags": {
+    "shared-cache": "7.2.0"
+  }
+}

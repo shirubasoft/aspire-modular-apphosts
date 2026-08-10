@@ -275,6 +275,8 @@ public static partial class DistributedApplicationModuleExtensions
         CancellationToken cancellationToken = default)
     {
         registry.RefreshConfiguration();
+        var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
+        registry.ApplyFullControlPreviewOptions(module, resourceNames);
         ValidateOptions(registry.Options);
         var materializationKey = GetMaterializationKey(imported, importOptions);
         if (registry.TryGetMaterialization(module.Name, out var existingMaterialization))
@@ -310,7 +312,7 @@ public static partial class DistributedApplicationModuleExtensions
             module.RepositoryRevision;
         var factoryRequiresRepository = module.ExplicitlyRequiresRepositoryContent &&
             module.ResourceDefinitions.Any(resource => resource is IDistributedApplicationModuleFactoryResource);
-        var materializeWithoutRepository = registry.CanMaterializePreviewWithoutRepository(module);
+        var materializeWithoutRepository = registry.CanMaterializePreviewWithoutRepository(module, resourceNames);
         var containerPublishersRequireModuleRepository = !materializeWithoutRepository &&
             await ContainerPublishersRequireModuleRepositoryAsync(
                 builder,
@@ -325,7 +327,6 @@ public static partial class DistributedApplicationModuleExtensions
                 module.ExplicitlyRequiresRepositoryContent ||
                 containerPublishersRequireModuleRepository);
         ValidateModuleConfiguration(module, moduleOptions);
-        var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
 
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
         var useIsolatedRevisionCheckout = imported && !string.IsNullOrWhiteSpace(repositoryRevision);
@@ -1663,18 +1664,28 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleImageDescriptionPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
-        builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
+        builder.Eventing.Subscribe<AfterResourcesCreatedEvent>((@event, _) =>
         {
             registry.RefreshConfiguration();
             ValidateOptions(registry.Options);
             registry.ValidateConfiguredModules();
+            registry.ValidateAndApplyFullControlPreview(@event.Model, builder.AppHostDirectory);
             return Task.CompletedTask;
         });
-        builder.Eventing.Subscribe<BeforePublishEvent>((_, _) =>
+        builder.Eventing.Subscribe<BeforeStartEvent>((@event, _) =>
         {
             registry.RefreshConfiguration();
             ValidateOptions(registry.Options);
             registry.ValidateConfiguredModules();
+            registry.ValidateAndApplyFullControlPreview(@event.Model, builder.AppHostDirectory);
+            return Task.CompletedTask;
+        });
+        builder.Eventing.Subscribe<BeforePublishEvent>((@event, _) =>
+        {
+            registry.RefreshConfiguration();
+            ValidateOptions(registry.Options);
+            registry.ValidateConfiguredModules();
+            registry.ValidateAndApplyFullControlPreview(@event.Model, builder.AppHostDirectory);
             return Task.CompletedTask;
         });
         return registry;
