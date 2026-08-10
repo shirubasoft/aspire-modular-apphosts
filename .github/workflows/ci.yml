@@ -314,7 +314,6 @@ jobs:
           --all
           --tag workflow-e2e
           --output artifacts/workflow-image-manifest.json
-          --github-output image-manifest
 
       - name: Apply the Repo B image manifest for Repo A
         run: >-

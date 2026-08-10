@@ -72,10 +72,51 @@ cd samples/MultiRepoE2E/Spire.Producer.AppHost
 aspire run
 ```
 
-To reproduce the manifest handoff, start a registry at `localhost:5000`, install the
-`modular-apphosts` tool, publish through the producer, apply to a GitHub environment-format file,
-then expose those keys before starting the consumer. The repository CI workflow is the executable
-reference; the cross-repository guide shows the corresponding GitHub Actions flow.
+To reproduce the image handoff from the repository root, start the same local registry used by CI:
+
+```bash
+docker run --detach --rm \
+  --name modular-apphosts-sample-registry \
+  --publish 5000:5000 \
+  registry:2
+```
+
+Restore the sample, then run the tool project directly to publish the producer image and manifest:
+
+```bash
+dotnet restore samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
+dotnet run \
+  --project src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj \
+  -- manifest publish \
+  --apphost samples/MultiRepoE2E/Spire.Producer.AppHost \
+  --all \
+  --tag manual-e2e \
+  --output artifacts/manual-workflow-image-manifest.json
+```
+
+`manifest apply` targets GitHub Actions and therefore requires runner-provided `GITHUB_ENV`. For a
+local run, set the same standard configuration values it would export, make the producer build
+repository unavailable through the test fixture, and run the consumer test:
+
+```bash
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageRegistry=localhost:5000
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageName=multi-repo-e2e-resource
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageTag=manual-e2e
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageSHA256=
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__PublishImage=False
+export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImagePullPolicy=Always
+export WORKFLOW_IMAGE_E2E=1
+dotnet test \
+  samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj \
+  --configuration Release
+```
+
+Inspect `artifacts/manual-workflow-image-manifest.json` to see the exact contract passed between
+the two AppHosts. Stop the registry when finished:
+
+```bash
+docker stop modular-apphosts-sample-registry
+```
 
 For an independent checkout or pinned build, set `BuildRepository` and
 `BuildRepositoryRevision` under

@@ -11,6 +11,11 @@ on:
         description: Optional Repo A tag override for every listed image
         required: false
         type: string
+      resource-tags:
+        description: Optional Repo A tag overrides keyed by module/resource as JSON
+        required: false
+        default: '{}'
+        type: string
       repo-a-ref:
         description: Repo A revision to test
         required: false
@@ -25,6 +30,11 @@ on:
       image-tag:
         description: Optional Repo A tag override for every listed image
         required: false
+        type: string
+      resource-tags:
+        description: Optional Repo A tag overrides keyed by module/resource as JSON
+        required: false
+        default: '{}'
         type: string
       repo-a-ref:
         description: Repo A revision to test
@@ -49,6 +59,8 @@ jobs:
     timeout-minutes: 30
     env:
       IMAGE_MANIFEST: ${{ inputs.image-manifest }}
+      IMAGE_TAG: ${{ inputs.image-tag }}
+      RESOURCE_TAGS: ${{ inputs.resource-tags }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
 
     steps:
@@ -72,19 +84,15 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME || github.actor }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Install the modular AppHost tool
-        run: dotnet tool install --global Shirubasoft.Aspire.ModularAppHosts.Tool
+      - name: Restore pinned repository tools
+        run: dotnet tool restore
 
       - name: Apply producer images
-        if: inputs.image-tag == ''
-        run: modular-apphosts manifest apply --json "$IMAGE_MANIFEST"
-
-      - name: Apply producer images with Repo A tag overrides
-        if: inputs.image-tag != ''
         run: >-
-          modular-apphosts manifest apply
+          dotnet tool run modular-apphosts -- manifest apply
           --json "$IMAGE_MANIFEST"
-          --tag "${{ inputs.image-tag }}"
+          --tag "$IMAGE_TAG"
+          --resource-tags "$RESOURCE_TAGS"
 
       - name: Run Repo A E2E tests
         run: dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release

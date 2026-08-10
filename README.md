@@ -9,7 +9,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
-| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing and applying image manifests for cross-repository E2E workflows. |
+| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying image manifests and dispatching cross-repository E2E workflows. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -105,11 +105,40 @@ Set an exported project's run mode to `Project` for local debugging while keepin
 }
 ```
 
+## Cross-repository E2E in three commands
+
+Pin the tool in both repos with a committed .NET tool manifest. Repo B publishes its selected
+module images and writes a strict manifest:
+
+```bash
+dotnet tool run modular-apphosts -- manifest publish \
+  --apphost src/RepoB.AppHost --selector orders --tag "$GITHUB_SHA"
+```
+
+Repo A applies that manifest in a GitHub Actions step before starting its ordinary E2E AppHost:
+
+```bash
+dotnet tool run modular-apphosts -- manifest apply --json "$IMAGE_MANIFEST"
+```
+
+When Repo B needs a separate Repo A run, one command dispatches the exact run, waits for it, and
+returns its status:
+
+```bash
+dotnet tool run modular-apphosts -- workflow dispatch \
+  --repository your-org/repo-a --workflow external-e2e.yml \
+  --manifest module-image-manifest.json
+```
+
+See the [tool reference](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/src/Aspire.Hosting.ModularAppHosts.Tool/README.md)
+and [cross-repository guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md)
+for pinned setup, tag precedence, complete workflow files, permissions, and troubleshooting.
+
 ## Guides and samples
 
 - [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
-- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): manifest publication, application, reusable-workflow handoff, and native GitHub CLI dispatch.
+- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): manifest publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.

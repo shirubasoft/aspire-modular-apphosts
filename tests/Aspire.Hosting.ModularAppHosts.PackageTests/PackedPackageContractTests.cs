@@ -206,6 +206,20 @@ public sealed class PackedPackageContractTests
     }
 
     [Fact]
+    public async Task Tool_package_ships_its_command_and_workflow_reference()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+
+        var readme = ReadTextEntry(packages.ToolPackagePath, "README.md");
+
+        Assert.Contains("## Repo B: publish images", readme, StringComparison.Ordinal);
+        Assert.Contains("## Repo A: apply images", readme, StringComparison.Ordinal);
+        Assert.Contains("workflow dispatch", readme, StringComparison.Ordinal);
+        Assert.Contains("## Manifest contract", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("Define an Aspire resource graph once", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Core_package_ships_generator_symbols_with_the_analyzer()
     {
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
@@ -549,6 +563,16 @@ public sealed class PackedPackageContractTests
         using var archive = ZipFile.OpenRead(packagePath);
         return archive.Entries.Any(entry =>
             string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ReadTextEntry(string packagePath, string entryPath)
+    {
+        using var archive = ZipFile.OpenRead(packagePath);
+        var entry = Assert.Single(archive.Entries, entry =>
+            string.Equals(entry.FullName, entryPath, StringComparison.OrdinalIgnoreCase));
+        using var stream = entry.Open();
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static Version ReadAssemblyVersion(

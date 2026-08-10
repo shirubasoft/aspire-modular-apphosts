@@ -26,6 +26,6 @@
     <ProjectReference Include="../Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>
