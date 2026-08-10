@@ -9,7 +9,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
-| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying image manifests and waiting for cross-repository E2E workflows. |
+| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing and applying image manifests for cross-repository E2E workflows. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -109,7 +109,7 @@ Set an exported project's run mode to `Project` for local debugging while keepin
 
 - [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
-- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): script-free manifest publication, application, reusable-workflow handoff, and remote dispatch/wait orchestration.
+- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): manifest publication, application, reusable-workflow handoff, and native GitHub CLI dispatch.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.

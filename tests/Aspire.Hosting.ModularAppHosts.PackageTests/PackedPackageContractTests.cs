@@ -178,8 +178,15 @@ public sealed class PackedPackageContractTests
         var environmentFile = await File.ReadAllTextAsync(
             githubEnvironment,
             TestContext.Current.CancellationToken);
-        Assert.Contains("Aspire__ModularAppHosts__WorkflowImageOverrides__0__Module=orders", environmentFile);
-        Assert.Contains("Aspire__ModularAppHosts__WorkflowImageOverrides__0__Tag=candidate", environmentFile);
+        Assert.Contains(
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageRegistry=registry.example.test",
+            environmentFile);
+        Assert.Contains(
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag=candidate",
+            environmentFile);
+        Assert.Contains(
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__PublishImage=False",
+            environmentFile);
     }
 
     [Fact]

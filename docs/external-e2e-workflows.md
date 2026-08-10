@@ -1,13 +1,14 @@
 # Cross-repository E2E image workflows
 
 The `modular-apphosts` .NET tool lets a module-producing repository publish selected images and
-hand their exact identities to a separate repository's E2E AppHost. The receiving workflow writes
-the manifest to `GITHUB_ENV`; the next step starts the existing AppHost without source changes,
-rebuilding producer images, or checking out their repositories.
+hand their fully qualified references to a separate repository's E2E AppHost. The receiving
+workflow writes ordinary `Aspire:ModularAppHosts:Modules` configuration to `GITHUB_ENV`; the next
+step starts the existing AppHost without changing its source or checking out the producer's build
+repository.
 
-Use [workflow dispatch](workflows/repo-b-dispatch.yml) when Repo B must start a true Actions run in
-Repo A and wait for its conclusion. Use a [reusable workflow call](workflows/repo-b-workflow-call.yml)
-when both repositories can participate in GitHub's reusable-workflow model. Both use the same
+Use [workflow dispatch](workflows/repo-b-dispatch.yml) when Repo B must start a separate Actions run
+in Repo A. Use a [reusable workflow call](workflows/repo-b-workflow-call.yml) when both repositories
+can participate in GitHub's reusable-workflow model. Both use the same
 [Repo A workflow](workflows/repo-a-e2e.yml) and manifest contract.
 
 ## Install the tool
@@ -26,14 +27,13 @@ dotnet tool install Shirubasoft.Aspire.ModularAppHosts.Tool
 dotnet tool run modular-apphosts --help
 ```
 
-The publish command also requires the Aspire CLI on `PATH`. Pass `--aspire-path` when it is installed
-elsewhere. The dispatch command requires GitHub CLI 2.97 or newer and uses `GH_TOKEN` or the existing
-`gh` authentication; it never reads, stores, or exchanges credentials itself.
+The publish command also requires the Aspire CLI on `PATH`. Pass `--aspire-path` when it is
+installed elsewhere.
 
 ## Publish in Repo B
 
-Registry login stays in the workflow. Use `docker/login-action` (or the equivalent action for the
-chosen registry), then publish an explicit module/resource selection:
+Registry login stays in the workflow. Use `docker/login-action` or the equivalent action for the
+chosen registry, then publish an explicit module/resource selection:
 
 ```bash
 modular-apphosts manifest publish \
@@ -48,26 +48,33 @@ modular-apphosts manifest publish \
 
 Selectors match a declared module name, `module/resource`, or an unambiguous resource name. Use
 `--all` only when every publishable image is intended. A global tag is applied first and each
-`--resource-tag` wins for its resource. The command asks Aspire to describe the graph, pushes only
-the selected images, then emits their structured remote identities. It does not reparse OCI image
-references. `manifest` and `manifest-path` are written as step outputs when `--github-output` is
-present.
+`--resource-tag` wins for its resource.
 
-The compact manifest is versioned and strict. Each case-insensitive `module/resource` identity has a
-resource kind, registry, repository, and exactly one tag or digest. Duplicate identities, unknown
-selectors, malformed tags, incomplete remote identities, conflicting tag/digest values, unknown
-JSON properties, and payloads over 65,535 characters fail with exit code 2.
+The command asks Aspire for one structured image description, pushes the selected resources, and
+builds the manifest from those same resolved push targets. It does not launch a second AppHost just
+to rediscover the identities. `manifest` and `manifest-path` are written as step outputs when
+`--github-output` is present.
+
+The compact manifest is versioned and strict. Each case-insensitive `module/resource` identity has
+a resource kind, registry, repository, and exactly one tag or digest. The publish command emits
+tags; it does not query a registry for immutable post-push digests. Use a unique tag such as the
+commit SHA when the consumer must be isolated from later pushes. Applying a digest supplied by
+another trusted system is also supported.
+
+Duplicate identities, unknown selectors, malformed tags, incomplete references, conflicting
+tag/digest values, unknown JSON properties, and payloads over 65,535 characters fail with exit code
+2. An Aspire discovery or push failure returns 1, and interruption returns 130.
 
 ## Apply in Repo A
 
-Pass either a file or inline JSON. The command writes standard .NET configuration keys to
-`GITHUB_ENV`, so only subsequent steps receive the overrides:
+Pass either a file or inline JSON. The command writes standard options keys to `GITHUB_ENV`, so
+only subsequent steps receive the configuration:
 
 ```bash
 modular-apphosts manifest apply --json "$IMAGE_MANIFEST"
 ```
 
-Repo A can intentionally retag all producer identities or selected resources:
+Repo A can select alternate tags for all manifest entries or individual resources:
 
 ```bash
 modular-apphosts manifest apply \
@@ -76,67 +83,69 @@ modular-apphosts manifest apply \
   --resource-tag orders/api=validation-api
 ```
 
-For each listed resource, the AppHost forces container mode, disables local image publishing,
-skips an otherwise unnecessary build-repository checkout, and pulls the supplied identity with
-`ImagePullPolicy.Always`. Resources not listed in the manifest keep Repo A's normal configuration.
-CLI tags win over manifest tags. The workflow override configuration is deliberately applied after
-ordinary configuration and `ConfigureModularAppHosts` callbacks.
+These options change the tag that Repo A pulls; they do not create or retag an image in the
+registry. Every selected tag must already exist.
 
-## Dispatch and wait
+For each listed resource, the generated configuration selects container mode for projects,
+disables local publishing, skips an unnecessary build-repository checkout, and uses
+`ImagePullPolicy.Always`. Resources not listed keep their normal configuration. Because the tool
+writes the existing `Modules` option hierarchy, normal .NET configuration and
+`ConfigureModularAppHosts` precedence applies; a later code callback can intentionally replace a
+workflow-provided value.
 
-Repo B can create a Repo A run and return its outcome directly:
+## Dispatch and wait with GitHub CLI
+
+GitHub CLI 2.97 and later returns the created run URL from `gh workflow run`. Use that native
+output with `gh run watch --exit-status`; the tool does not wrap these commands:
 
 ```bash
-modular-apphosts workflow dispatch \
-  --repository your-org/repo-a \
-  --workflow external-e2e.yml \
-  --ref main \
-  --manifest module-image-manifest.json \
-  --input repo-a-ref=main \
-  --timeout 00:30:00
+image_manifest="$(jq --compact-output . module-image-manifest.json)"
+run_url="$(
+  jq --compact-output --null-input \
+    --arg image_manifest "$image_manifest" \
+    --arg repo_a_ref main \
+    '{"image-manifest": $image_manifest, "repo-a-ref": $repo_a_ref}' |
+    gh workflow run external-e2e.yml \
+      --repo your-org/repo-a \
+      --ref main \
+      --json
+)"
+run_id="${run_url##*/}"
+gh run watch "$run_id" --repo your-org/repo-a --compact --exit-status
 ```
 
-The command sends compact JSON to `gh workflow run --json`, obtains the created run URL/ID, streams
-`gh run watch`, and queries the final conclusion. It writes `manifest`, `manifest-path`, `run-id`,
-`run-url`, and `conclusion` to `GITHUB_OUTPUT` when that file is available. Timeout or interruption
-best-effort cancels the external run.
-
-| Exit code | Meaning |
-| ---: | --- |
-| 0 | Repo A concluded successfully. |
-| 1 | Repo A completed with a non-success conclusion. |
-| 2 | Local usage, manifest, or validation failure. |
-| 3 | GitHub CLI/API operational failure. |
-| 4 | GitHub authentication failure. |
-| 124 | The requested timeout elapsed. |
-| 130 | The local command was interrupted. |
+The [dispatch workflow](workflows/repo-b-dispatch.yml) records both values as step outputs and lets
+the job's `timeout-minutes` bound the wait. `gh run watch --exit-status` returns nonzero when Repo A
+fails, so Repo B naturally propagates the conclusion.
 
 ## Authentication and private repositories
 
-- Repo B's built-in `GITHUB_TOKEN` normally cannot dispatch a different repository. Supply a fine-
-  grained token or GitHub App token with access to Repo A and permission to run Actions as
-  `GH_TOKEN` (the examples use `REPO_A_ACTIONS_TOKEN`).
+- Repo B's built-in `GITHUB_TOKEN` normally cannot dispatch a different repository. Supply a token
+  that can access Repo A and run Actions as `GH_TOKEN`.
+- `gh run watch` does not support fine-grained personal access tokens because those tokens cannot
+  currently grant the Checks permission it uses. Use a supported GitHub App installation token or
+  classic token for the dispatch example.
 - Grant `packages: write` while Repo B pushes GHCR images and `packages: read` while Repo A pulls
-  them. Configure the corresponding registry credentials through `docker/login-action`.
+  them. Configure registry credentials through `docker/login-action`.
 - A called reusable workflow executes in the caller context. Its checkout would otherwise select
   Repo B, so the Repo A example explicitly supplies `repository`, `ref`, and an optional
   `REPO_A_CHECKOUT_TOKEN`. Private Repo A checkouts need a token that can read Repo A.
-- Put the dispatch workflow on the target `--ref`. The workflow input name defaults to
-  `image-manifest`; change both sides with `--manifest-input` when necessary.
+- Put the dispatch workflow on the target `--ref`. The workflow input name in the examples is
+  `image-manifest`.
 
 ## Troubleshooting
 
-- **No run URL is returned:** upgrade `gh` to 2.97 or newer. The tool does not guess by selecting a
-  repository's latest run because concurrent dispatches make that unsafe.
-- **Manifest apply has no effect:** it must be a separate step before the E2E command. GitHub does
+- **No run URL is returned:** upgrade `gh` to 2.97 or newer. Do not guess the run by selecting the
+  repository's latest run; concurrent dispatches make that unsafe.
+- **Manifest apply has no effect:** run it in a separate step before the E2E command. GitHub does
   not expose newly appended `GITHUB_ENV` values to the step that wrote them.
-- **A resource is unknown:** selectors and overrides use the declared module/resource identities,
-  not an import alias or prefixed effective Aspire resource name.
+- **An alternate tag cannot be pulled:** `manifest apply --tag` only selects a tag; it does not
+  publish that tag.
+- **A resource is unknown:** selectors and overrides use declared module/resource identities, not
+  an import alias or prefixed effective Aspire resource name.
 - **A private image cannot be pulled:** authenticate the same container runtime used by Aspire on
   the Repo A runner and grant it access to every registry/repository in the manifest.
-- **Dispatch returns 3:** run `gh workflow run` and `gh run view` with the same token/repository to
-  distinguish workflow visibility, Actions permission, and API failures.
 
 The [MultiRepoE2E sample](../samples/MultiRepoE2E/README.md) is the runnable two-AppHost version. CI
 publishes the producer image to a local registry, emits and applies the manifest through GitHub
-files, makes the consumer's source repository deliberately unavailable, and runs its HTTP E2E test.
+files, makes the consumer's build repository deliberately unavailable, and runs its HTTP E2E test.

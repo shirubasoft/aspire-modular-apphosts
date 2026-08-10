@@ -83,7 +83,6 @@ internal sealed class ManifestCommandService(
             var descriptionPath = Path.Combine(temporaryPath, "description");
             var manifestPath = Path.Combine(temporaryPath, "manifest");
             Directory.CreateDirectory(descriptionPath);
-            Directory.CreateDirectory(manifestPath);
 
             var describe = await RunAspireAsync(
                 aspirePath,
@@ -95,14 +94,14 @@ internal sealed class ManifestCommandService(
                 cancellationToken).ConfigureAwait(false);
             if (!describe.IsSuccess)
             {
-                throw new ToolUsageException($"Aspire image discovery failed with exit code {describe.ExitCode}.");
+                return await WriteAspireFailureAsync(describe, "Aspire image discovery").ConfigureAwait(false);
             }
 
             var descriptions = await ModuleImageDescriptionDocument.LoadAsync(
                 Path.Combine(descriptionPath, "module-images.json"),
                 cancellationToken).ConfigureAwait(false);
             var publishable = descriptions.Images
-                .Where(image => image.Build is not null && image.PushReference is not null)
+                .Where(image => image.Build is not null && image.Push is not null)
                 .ToArray();
             var selected = SelectImages(publishable, selectors, all);
             var overrides = new ManifestTagOverrides(tag, resourceTags);
@@ -113,20 +112,7 @@ internal sealed class ManifestCommandService(
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
 
-            var push = await RunAspireAsync(
-                aspirePath,
-                appHostPath,
-                "push",
-                outputPath: null,
-                effectiveSelectors,
-                producerEnvironment,
-                cancellationToken).ConfigureAwait(false);
-            if (!push.IsSuccess)
-            {
-                throw new ToolUsageException($"Aspire image push failed with exit code {push.ExitCode}.");
-            }
-
-            var manifest = await RunAspireAsync(
+            var publish = await RunAspireAsync(
                 aspirePath,
                 appHostPath,
                 "workflow-images",
@@ -134,16 +120,15 @@ internal sealed class ManifestCommandService(
                 effectiveSelectors,
                 producerEnvironment,
                 cancellationToken).ConfigureAwait(false);
-            if (!manifest.IsSuccess)
+            if (!publish.IsSuccess)
             {
-                throw new ToolUsageException(
-                    $"Aspire workflow manifest generation failed with exit code {manifest.ExitCode}.");
+                return await WriteAspireFailureAsync(publish, "Aspire workflow image publish")
+                    .ConfigureAwait(false);
             }
 
             var document = await ModuleImageManifestDocument.LoadAsync(
-                Path.Combine(manifestPath, "module-image-manifest.json"),
+                Path.Combine(manifestPath, ModuleImageManifestPipeline.FileName),
                 cancellationToken).ConfigureAwait(false);
-
             var destination = Path.GetFullPath(
                 outputPath ?? "module-image-manifest.json",
                 environment.CurrentDirectory);
@@ -336,6 +321,15 @@ internal sealed class ManifestCommandService(
             .OrderBy(image => image.Module, StringComparer.Ordinal)
             .ThenBy(image => image.Resource, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private async Task<int> WriteAspireFailureAsync(
+        ProcessExecutionResult result,
+        string operation)
+    {
+        await error.WriteLineAsync($"{operation} failed with exit code {result.ExitCode}.")
+            .ConfigureAwait(false);
+        return ToolExitCode.Failure;
     }
 
     private static void ValidatePublishArguments(

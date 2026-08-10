@@ -105,8 +105,6 @@ public sealed class DistributedApplicationModuleOptions
 /// <summary>Overrides image identity and publishing for one module resource.</summary>
 public abstract class DistributedApplicationModuleImageOptions
 {
-    internal bool HasFullWorkflowImageOverride { get; set; }
-
     /// <summary>Gets or sets the effective container image name.</summary>
     public string? ImageName { get; set; }
 

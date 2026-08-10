@@ -36,6 +36,45 @@ internal sealed class ManifestTagOverrides
 
     public bool HasOverrides => GlobalTag is not null || _resources.Count > 0;
 
+    public IReadOnlyDictionary<string, string?>? CreateProducerEnvironment(
+        IReadOnlyList<ModuleImageDescription> images)
+    {
+        ArgumentNullException.ThrowIfNull(images);
+        if (!HasOverrides)
+        {
+            return null;
+        }
+
+        var matched = new HashSet<(string Module, string Resource)>(ModuleResourceKeyComparer.Instance);
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var image in images
+                     .OrderBy(image => image.Module, StringComparer.Ordinal)
+                     .ThenBy(image => image.Resource, StringComparer.Ordinal))
+        {
+            var tag = GlobalTag;
+            if (_resources.TryGetValue((image.Module, image.Resource), out var resourceTag))
+            {
+                tag = resourceTag.Tag;
+                matched.Add((image.Module, image.Resource));
+            }
+
+            if (tag is null)
+            {
+                continue;
+            }
+
+            var prefix = WorkflowImageEnvironment.GetResourcePrefix(
+                image.Module,
+                image.Resource,
+                image.ResourceKind);
+            values[$"{prefix}__ImageTag"] = tag;
+            values[$"{prefix}__ImageSHA256"] = string.Empty;
+        }
+
+        ThrowForUnmatched(matched);
+        return values;
+    }
+
     public void Apply(ModuleImageManifestDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -59,40 +98,6 @@ internal sealed class ManifestTagOverrides
 
         ThrowForUnmatched(matched);
         document.Validate();
-    }
-
-    public IReadOnlyDictionary<string, string?> CreateProducerEnvironment(
-        IReadOnlyList<ModuleImageDescription> images)
-    {
-        ArgumentNullException.ThrowIfNull(images);
-        var matched = new HashSet<(string Module, string Resource)>(ModuleResourceKeyComparer.Instance);
-        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var index = 0;
-        foreach (var image in images
-                     .OrderBy(image => image.Module, StringComparer.Ordinal)
-                     .ThenBy(image => image.Resource, StringComparer.Ordinal))
-        {
-            var tag = GlobalTag;
-            if (_resources.TryGetValue((image.Module, image.Resource), out var resourceTag))
-            {
-                tag = resourceTag.Tag;
-                matched.Add((image.Module, image.Resource));
-            }
-
-            if (tag is null)
-            {
-                continue;
-            }
-
-            var prefix = WorkflowImageEnvironment.GetPrefix(index++);
-            values[$"{prefix}__Module"] = image.Module;
-            values[$"{prefix}__Resource"] = image.Resource;
-            values[$"{prefix}__ResourceKind"] = image.ResourceKind.ToString();
-            values[$"{prefix}__Tag"] = tag;
-        }
-
-        ThrowForUnmatched(matched);
-        return values;
     }
 
     private static ResourceTagOverride Parse(string value)

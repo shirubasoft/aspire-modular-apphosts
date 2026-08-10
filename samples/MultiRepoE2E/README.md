@@ -49,7 +49,7 @@ checkout's independent producer origin, checks the expected Docker image and pro
 
 A second CI job starts an ordinary local registry service and uses only the packed tool's commands:
 
-1. `manifest publish` runs the producer AppHost pipeline and writes the exact pushed identity plus
+1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged reference plus
    GitHub step outputs.
 2. `manifest apply` writes the consumer configuration to `GITHUB_ENV`.
 3. `Spire.Consumer.Tests` starts the consumer AppHost with a deliberately missing build repository
@@ -75,7 +75,7 @@ aspire run
 To reproduce the manifest handoff, start a registry at `localhost:5000`, install the
 `modular-apphosts` tool, publish through the producer, apply to a GitHub environment-format file,
 then expose those keys before starting the consumer. The repository CI workflow is the executable
-reference; the cross-repository guide shows the script-free GitHub Actions form.
+reference; the cross-repository guide shows the corresponding GitHub Actions flow.
 
 For an independent checkout or pinned build, set `BuildRepository` and
 `BuildRepositoryRevision` under

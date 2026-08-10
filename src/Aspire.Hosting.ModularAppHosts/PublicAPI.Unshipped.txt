@@ -1,32 +1,4 @@
 #nullable enable
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.Images.get -> System.Collections.Generic.IList<Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry!>!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.ModuleImageManifestDocument() -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.SaveAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.SchemaVersion.get -> int
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.SchemaVersion.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.ToJson() -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.Validate() -> void
-const Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.CurrentSchemaVersion = 1 -> int
-static Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument!>!
-static Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument.Parse(string! json) -> Aspire.Hosting.ModularAppHosts.ModuleImageManifestDocument!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Digest.get -> string?
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Digest.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Module.get -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Module.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.ModuleImageManifestEntry() -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Reference.get -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Registry.get -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Registry.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Repository.get -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Repository.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Resource.get -> string!
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Resource.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.ResourceKind.get -> Aspire.Hosting.ModularAppHosts.ModuleResourceKind
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.ResourceKind.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Tag.get -> string?
-Aspire.Hosting.ModularAppHosts.ModuleImageManifestEntry.Tag.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription
 Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Arguments.get -> System.Collections.Generic.IList<string!>!
 Aspire.Hosting.ModularAppHosts.ModuleImageBuildDescription.Command.get -> string!
@@ -52,8 +24,8 @@ Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Module.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.ModuleImageDescription() -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PullReference.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PullReference.set -> void
-Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PushReference.get -> string?
-Aspire.Hosting.ModularAppHosts.ModuleImageDescription.PushReference.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Push.get -> Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription?
+Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Push.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Reference.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Reference.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescription.Registry.get -> string?
@@ -74,7 +46,7 @@ Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SaveAsync(string! 
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.get -> int
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.SchemaVersion.set -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.Validate() -> void
-const Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.CurrentSchemaVersion = 2 -> int
+const Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.CurrentSchemaVersion = 3 -> int
 static Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument.LoadAsync(string! path, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.ModuleImageDescriptionDocument!>!
 Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription
 Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ContractPackageId.get -> string?
@@ -82,6 +54,15 @@ Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ContractPackageId.se
 Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.ModuleImageModuleDescription() -> void
 Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.Name.get -> string!
 Aspire.Hosting.ModularAppHosts.ModuleImageModuleDescription.Name.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.ModuleImagePushDescription() -> void
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Reference.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Registry.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Registry.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Repository.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Repository.set -> void
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Tag.get -> string!
+Aspire.Hosting.ModularAppHosts.ModuleImagePushDescription.Tag.set -> void
 Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference.PackageId.get -> string?
 Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute.PackageId.get -> string?
 Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute.PackageId.set -> void

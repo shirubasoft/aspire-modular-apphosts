@@ -1,6 +1,6 @@
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;
-using System.Text.Json;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
@@ -29,13 +29,18 @@ public sealed class ToolApplicationTests
         Assert.Empty(error);
         Assert.Empty(runner.Invocations);
         var values = await ReadGitHubFileAsync(githubEnvironment);
-        Assert.Equal("catalog", values["Aspire__ModularAppHosts__WorkflowImageOverrides__0__Module"]);
-        Assert.Equal("global", values["Aspire__ModularAppHosts__WorkflowImageOverrides__0__Tag"]);
-        Assert.Equal("orders", values["Aspire__ModularAppHosts__WorkflowImageOverrides__1__Module"]);
-        Assert.Equal("specific", values["Aspire__ModularAppHosts__WorkflowImageOverrides__1__Tag"]);
-        Assert.DoesNotContain(
-            "Aspire__ModularAppHosts__WorkflowImageOverrides__1__Digest",
-            values.Keys);
+        const string catalog =
+            "Aspire__ModularAppHosts__Modules__catalog__Projects__api";
+        const string orders =
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api";
+        Assert.Equal("registry.example.test", values[$"{catalog}__ImageRegistry"]);
+        Assert.Equal("acme/catalog-api", values[$"{catalog}__ImageName"]);
+        Assert.Equal("global", values[$"{catalog}__ImageTag"]);
+        Assert.Equal(string.Empty, values[$"{catalog}__ImageSHA256"]);
+        Assert.Equal("specific", values[$"{orders}__ImageTag"]);
+        Assert.Equal(bool.FalseString, values[$"{orders}__PublishImage"]);
+        Assert.Equal(nameof(ImagePullPolicy.Always), values[$"{orders}__ImagePullPolicy"]);
+        Assert.Equal(nameof(ModuleProjectMode.Container), values[$"{orders}__ProjectMode"]);
     }
 
     [Theory]
@@ -70,7 +75,7 @@ public sealed class ToolApplicationTests
     }
 
     [Fact]
-    public async Task Publish_discovers_selects_pushes_and_emits_exact_manifest_and_github_outputs()
+    public async Task Publish_discovers_selects_pushes_and_emits_resolved_manifest_and_github_outputs()
     {
         using var directory = TestDirectory.Create();
         var destination = Path.Combine(directory.Path, "artifacts", "images.json");
@@ -87,15 +92,21 @@ public sealed class ToolApplicationTests
             }
             else if (string.Equals(step, "workflow-images", StringComparison.Ordinal))
             {
-                var manifest = CreateManifest();
-                manifest.Images.Remove(manifest.Images.Single(image => image.Module == "catalog"));
-                manifest.Images.Single(image => image.Resource == "worker").Tag = "global";
-                manifest.Images.Single(image => image.Resource == "api").Tag = "api-tag";
-                await manifest.SaveAsync(
-                    Path.Combine(outputPath!, "module-image-manifest.json"),
+                var document = new ModuleImageManifestDocument();
+                document.Images.Add(CreateManifestImage(
+                    "orders",
+                    "worker",
+                    ModuleResourceKind.Container,
+                    "global-dirty"));
+                document.Images.Add(CreateManifestImage(
+                    "orders",
+                    "api",
+                    ModuleResourceKind.Project,
+                    "api-tag-dirty"));
+                await document.SaveAsync(
+                    Path.Combine(outputPath!, ModuleImageManifestPipeline.FileName),
                     cancellationToken);
             }
-
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
         var environment = new FakeEnvironment(directory.Path, new Dictionary<string, string>
@@ -131,18 +142,17 @@ public sealed class ToolApplicationTests
                 Assert.Null(invocation.EnvironmentVariables);
                 Assert.False(invocation.CaptureOutput);
             },
-            invocation => AssertProducerInvocation(invocation, "push"),
             invocation => AssertProducerInvocation(invocation, "workflow-images"));
 
         var written = await ModuleImageManifestDocument.LoadAsync(
             destination,
             TestContext.Current.CancellationToken);
-        Assert.Equal("global", written.Images.Single(image => image.Resource == "worker").Tag);
-        Assert.Equal("api-tag", written.Images.Single(image => image.Resource == "api").Tag);
+        Assert.Equal("global-dirty", written.Images.Single(image => image.Resource == "worker").Tag);
+        Assert.Equal("api-tag-dirty", written.Images.Single(image => image.Resource == "api").Tag);
         var outputs = await ReadGitHubFileAsync(githubOutput);
         Assert.Equal(destination, outputs["manifest-path"]);
         var outputManifest = ModuleImageManifestDocument.Parse(outputs["manifest"]);
-        Assert.Equal("api-tag", outputManifest.Images.Single(image => image.Resource == "api").Tag);
+        Assert.Equal("api-tag-dirty", outputManifest.Images.Single(image => image.Resource == "api").Tag);
     }
 
     [Fact]
@@ -156,7 +166,7 @@ public sealed class ToolApplicationTests
             ["manifest", "publish", "--apphost", directory.Path, "--all"],
             failedRunner);
 
-        Assert.Equal(ToolExitCode.Usage, failedExit);
+        Assert.Equal(ToolExitCode.Failure, failedExit);
         Assert.Contains("17", failedError, StringComparison.Ordinal);
         Assert.Single(failedRunner.Invocations);
 
@@ -188,13 +198,15 @@ public sealed class ToolApplicationTests
             }
             else if (step == "workflow-images")
             {
-                var manifest = new ModuleImageManifestDocument();
-                manifest.Images.Add(CreateManifestImage("orders", "api", ModuleResourceKind.Project));
-                await manifest.SaveAsync(
-                    Path.Combine(outputPath!, "module-image-manifest.json"),
+                var document = new ModuleImageManifestDocument();
+                document.Images.Add(CreateManifestImage(
+                    "orders",
+                    "api",
+                    ModuleResourceKind.Project));
+                await document.SaveAsync(
+                    Path.Combine(outputPath!, ModuleImageManifestPipeline.FileName),
                     cancellationToken);
             }
-
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
@@ -263,216 +275,6 @@ public sealed class ToolApplicationTests
         Assert.Empty(error.ToString());
     }
 
-    [Fact]
-    public async Task Dispatch_passes_compact_json_waits_and_writes_fixed_outputs()
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        var githubOutput = Path.Combine(directory.Path, "github-output");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-        var runner = CreateSuccessfulGitHubRunner();
-        var environment = new FakeEnvironment(directory.Path, new Dictionary<string, string>
-        {
-            ["GITHUB_OUTPUT"] = githubOutput
-        });
-
-        var (exitCode, output, error, _) = await RunAsync(
-            directory,
-            [
-                "workflow", "dispatch",
-                "--repository", "acme/repo-a",
-                "--workflow", "e2e.yml",
-                "--ref", "main",
-                "--manifest", manifestPath,
-                "--input", "scenario=smoke",
-                "--gh-path", "custom-gh"
-            ],
-            runner,
-            environment);
-
-        Assert.Equal(ToolExitCode.Success, exitCode);
-        Assert.Empty(error);
-        Assert.Contains("123", output, StringComparison.Ordinal);
-        Assert.Collection(
-            runner.Invocations,
-            invocation => Assert.Equal(["--version"], invocation.Arguments),
-            invocation => Assert.Equal(["auth", "status", "--active"], invocation.Arguments),
-            invocation =>
-            {
-                Assert.Equal("custom-gh", invocation.FileName);
-                Assert.Equal(
-                    ["workflow", "run", "e2e.yml", "--repo", "acme/repo-a", "--ref", "main", "--json"],
-                    invocation.Arguments);
-                using var payload = JsonDocument.Parse(invocation.StandardInput!);
-                Assert.Equal("smoke", payload.RootElement.GetProperty("scenario").GetString());
-                var transmittedManifest = payload.RootElement.GetProperty("image-manifest").GetString();
-                Assert.NotNull(transmittedManifest);
-                Assert.Equal(3, ModuleImageManifestDocument.Parse(transmittedManifest).Images.Count);
-            },
-            invocation => Assert.Equal(
-                ["run", "watch", "123", "--repo", "acme/repo-a", "--compact"],
-                invocation.Arguments),
-            invocation => Assert.Equal(
-                ["run", "view", "123", "--repo", "acme/repo-a", "--json", "conclusion,databaseId,url"],
-                invocation.Arguments));
-        var values = await ReadGitHubFileAsync(githubOutput);
-        Assert.Equal(["conclusion", "manifest", "manifest-path", "run-id", "run-url"], values.Keys.Order());
-        Assert.Equal("success", values["conclusion"]);
-        Assert.Equal("123", values["run-id"]);
-        Assert.Equal("https://github.com/acme/repo-a/actions/runs/123", values["run-url"]);
-        Assert.Equal(Path.GetFullPath(manifestPath), values["manifest-path"]);
-    }
-
-    [Theory]
-    [InlineData("success", ToolExitCode.Success)]
-    [InlineData("failure", ToolExitCode.TargetFailure)]
-    [InlineData("cancelled", ToolExitCode.TargetFailure)]
-    public async Task Dispatch_maps_target_conclusion(string conclusion, int expectedExitCode)
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-        var runner = CreateSuccessfulGitHubRunner(conclusion);
-
-        var (exitCode, _, _, _) = await RunAsync(
-            directory,
-            DispatchArguments(manifestPath),
-            runner);
-
-        Assert.Equal(expectedExitCode, exitCode);
-    }
-
-    [Fact]
-    public async Task Dispatch_maps_usage_authentication_and_github_failures()
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-
-        var oldVersion = new FakeProcessRunner((_, _) => Task.FromResult(
-            new ProcessExecutionResult(0, "gh version 2.96.0", string.Empty)));
-        var (usageExit, _, _, _) = await RunAsync(directory, DispatchArguments(manifestPath), oldVersion);
-        Assert.Equal(ToolExitCode.Usage, usageExit);
-
-        var authentication = new FakeProcessRunner((invocation, _) => Task.FromResult(
-            invocation.Arguments[0] == "--version"
-                ? new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty)
-                : new ProcessExecutionResult(1, string.Empty, "not authenticated")));
-        var (authenticationExit, _, _, _) = await RunAsync(
-            directory,
-            DispatchArguments(manifestPath),
-            authentication);
-        Assert.Equal(ToolExitCode.AuthenticationFailure, authenticationExit);
-
-        var githubFailure = new FakeProcessRunner((invocation, _) => Task.FromResult(
-            invocation.Arguments[0] switch
-            {
-                "--version" => new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty),
-                "auth" => new ProcessExecutionResult(0, string.Empty, string.Empty),
-                _ => new ProcessExecutionResult(1, string.Empty, "dispatch failed")
-            }));
-        var (githubExit, _, _, _) = await RunAsync(
-            directory,
-            DispatchArguments(manifestPath),
-            githubFailure);
-        Assert.Equal(ToolExitCode.GitHubFailure, githubExit);
-    }
-
-    [Fact]
-    public async Task Dispatch_rejects_oversized_total_input_payload_before_github_preflight()
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-        var arguments = DispatchArguments(manifestPath)
-            .Concat(["--input", $"notes={new string('x', 65_535)}"])
-            .ToArray();
-
-        var (exitCode, _, error, runner) = await RunAsync(directory, arguments);
-
-        Assert.Equal(ToolExitCode.Usage, exitCode);
-        Assert.Contains("65535", error, StringComparison.Ordinal);
-        Assert.Empty(runner.Invocations);
-    }
-
-    [Fact]
-    public async Task Dispatch_timeout_cancels_the_external_run()
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
-        {
-            if (invocation.Arguments[0] == "--version")
-            {
-                return new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty);
-            }
-
-            if (invocation.Arguments.Take(2).SequenceEqual(["workflow", "run"]))
-            {
-                return new ProcessExecutionResult(
-                    0,
-                    "https://github.com/acme/repo-a/actions/runs/123",
-                    string.Empty);
-            }
-
-            if (invocation.Arguments.Take(2).SequenceEqual(["run", "watch"]))
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
-        });
-        var arguments = DispatchArguments(manifestPath).Concat(["--timeout", "00:00:00.05"]).ToArray();
-
-        var (exitCode, _, _, _) = await RunAsync(directory, arguments, runner);
-
-        Assert.Equal(ToolExitCode.Timeout, exitCode);
-        Assert.Contains(runner.Invocations, invocation =>
-            invocation.Arguments.Take(2).SequenceEqual(["run", "cancel"]));
-    }
-
-    [Fact]
-    public async Task Dispatch_interruption_cancels_the_external_run()
-    {
-        using var directory = TestDirectory.Create();
-        var manifestPath = Path.Combine(directory.Path, "manifest.json");
-        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
-        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
-        {
-            if (invocation.Arguments[0] == "--version")
-            {
-                return new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty);
-            }
-
-            if (invocation.Arguments.Take(2).SequenceEqual(["workflow", "run"]))
-            {
-                return new ProcessExecutionResult(
-                    0,
-                    "https://github.com/acme/repo-a/actions/runs/123",
-                    string.Empty);
-            }
-
-            if (invocation.Arguments.Take(2).SequenceEqual(["run", "watch"]))
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            }
-
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
-        });
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
-
-        var (exitCode, _, _, _) = await RunAsync(
-            directory,
-            DispatchArguments(manifestPath),
-            runner,
-            cancellationToken: cancellation.Token);
-
-        Assert.Equal(ToolExitCode.Interrupted, exitCode);
-        Assert.Contains(runner.Invocations, invocation =>
-            invocation.Arguments.Take(2).SequenceEqual(["run", "cancel"]));
-    }
-
     private static async Task<(
         int ExitCode,
         string Output,
@@ -499,33 +301,6 @@ public sealed class ToolApplicationTests
         return (exitCode, output.ToString(), error.ToString(), runner);
     }
 
-    private static string[] DispatchArguments(string manifestPath) =>
-    [
-        "workflow", "dispatch",
-        "--repository", "acme/repo-a",
-        "--workflow", "e2e.yml",
-        "--ref", "main",
-        "--manifest", manifestPath
-    ];
-
-    private static FakeProcessRunner CreateSuccessfulGitHubRunner(string conclusion = "success") =>
-        new((invocation, _) => Task.FromResult(invocation.Arguments[0] switch
-        {
-            "--version" => new ProcessExecutionResult(0, "gh version 2.97.0 (2026-07-31)", string.Empty),
-            "auth" => new ProcessExecutionResult(0, string.Empty, string.Empty),
-            "workflow" => new ProcessExecutionResult(
-                0,
-                "https://github.com/acme/repo-a/actions/runs/123",
-                string.Empty),
-            "run" when invocation.Arguments[1] == "watch" =>
-                new ProcessExecutionResult(0, string.Empty, string.Empty),
-            "run" when invocation.Arguments[1] == "view" => new ProcessExecutionResult(
-                0,
-                $$"""{"conclusion":"{{conclusion}}","databaseId":123,"url":"https://github.com/acme/repo-a/actions/runs/123"}""",
-                string.Empty),
-            _ => throw new InvalidOperationException("Unexpected GitHub CLI invocation.")
-        }));
-
     private static ModuleImageManifestDocument CreateManifest()
     {
         var document = new ModuleImageManifestDocument();
@@ -538,14 +313,15 @@ public sealed class ToolApplicationTests
     private static ModuleImageManifestEntry CreateManifestImage(
         string module,
         string resource,
-        ModuleResourceKind kind) => new()
+        ModuleResourceKind kind,
+        string tag = "original") => new()
         {
             Module = module,
             Resource = resource,
             ResourceKind = kind,
             Registry = "registry.example.test",
             Repository = $"acme/{module}-{resource}",
-            Tag = "original"
+            Tag = tag
         };
 
     private static ModuleImageDescriptionDocument CreateDescriptions()
@@ -577,7 +353,12 @@ public sealed class ToolApplicationTests
             Tag = "original",
             Reference = reference,
             PullReference = reference,
-            PushReference = reference,
+            Push = new ModuleImagePushDescription
+            {
+                Registry = "registry.example.test",
+                Repository = $"acme/{module}-{resource}",
+                Tag = "original"
+            },
             Build = new ModuleImageBuildDescription
             {
                 Command = "docker",
@@ -595,10 +376,17 @@ public sealed class ToolApplicationTests
         Assert.NotNull(invocation.EnvironmentVariables);
         Assert.Equal(
             "api-tag",
-            invocation.EnvironmentVariables["Aspire__ModularAppHosts__WorkflowImageOverrides__0__Tag"]);
+            invocation.EnvironmentVariables[
+                "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag"]);
         Assert.Equal(
             "global",
-            invocation.EnvironmentVariables["Aspire__ModularAppHosts__WorkflowImageOverrides__1__Tag"]);
+            invocation.EnvironmentVariables[
+                "Aspire__ModularAppHosts__Modules__orders__Containers__worker__ImageTag"]);
+        Assert.Equal(
+            string.Empty,
+            invocation.EnvironmentVariables[
+                "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageSHA256"]);
+        Assert.NotNull(GetOption(invocation.Arguments, "--output-path"));
     }
 
     private static string? GetOption(IReadOnlyList<string> arguments, string name)

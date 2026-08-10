@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Aspire.Hosting.ModularAppHosts;
 
 /// <summary>Describes the remotely pullable module images shared between repository workflows.</summary>
-public sealed class ModuleImageManifestDocument
+internal sealed class ModuleImageManifestDocument
 {
     internal const int MaximumJsonLength = 65_535;
 
@@ -136,7 +136,7 @@ public sealed class ModuleImageManifestDocument
 }
 
 /// <summary>Maps one declared module resource to a complete remotely pullable image identity.</summary>
-public sealed class ModuleImageManifestEntry
+internal sealed class ModuleImageManifestEntry
 {
     /// <summary>Gets or sets the module name.</summary>
     [JsonPropertyOrder(0)]

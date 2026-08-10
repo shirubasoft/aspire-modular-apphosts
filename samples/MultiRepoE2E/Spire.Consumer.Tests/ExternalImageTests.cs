@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Spire.Consumer.Tests;
 
-public sealed class WorkflowImageOverrideTests
+public sealed class ExternalImageTests
 {
     private static readonly TimeSpan TestTimeout = TimeSpan.FromMinutes(5);
 

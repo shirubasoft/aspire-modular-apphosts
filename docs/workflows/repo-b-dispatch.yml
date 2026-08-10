@@ -58,13 +58,40 @@ jobs:
           --output module-image-manifest.json
           --github-output manifest
 
-      - name: Dispatch Repo A and propagate its conclusion
+      - name: Dispatch Repo A
+        id: dispatch
+        env:
+          IMAGE_MANIFEST_PATH: ${{ steps.images.outputs.manifest-path }}
+          REPO_A_IMAGE_TAG: ${{ inputs.repo-a-image-tag }}
+        run: |
+          set -euo pipefail
+          image_manifest="$(jq --compact-output . "$IMAGE_MANIFEST_PATH")"
+          run_url="$(
+            jq --compact-output --null-input \
+              --arg image_manifest "$image_manifest" \
+              --arg repo_a_ref "$REPO_A_REF" \
+              --arg image_tag "$REPO_A_IMAGE_TAG" \
+              '{
+                "image-manifest": $image_manifest,
+                "repo-a-ref": $repo_a_ref,
+                "image-tag": $image_tag
+              }' |
+              gh workflow run external-e2e.yml \
+                --repo your-org/repo-a \
+                --ref "$REPO_A_REF" \
+                --json
+          )"
+          run_id="${run_url##*/}"
+          test -n "$run_url"
+          test -n "$run_id"
+          {
+            echo "run-url=$run_url"
+            echo "run-id=$run_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Repo A and propagate its conclusion
         run: >-
-          modular-apphosts workflow dispatch
-          --repository your-org/repo-a
-          --workflow external-e2e.yml
-          --ref "$REPO_A_REF"
-          --manifest "${{ steps.images.outputs.manifest-path }}"
-          --input "repo-a-ref=$REPO_A_REF"
-          --input "image-tag=${{ inputs.repo-a-image-tag }}"
-          --timeout 00:30:00
+          gh run watch "${{ steps.dispatch.outputs.run-id }}"
+          --repo your-org/repo-a
+          --compact
+          --exit-status

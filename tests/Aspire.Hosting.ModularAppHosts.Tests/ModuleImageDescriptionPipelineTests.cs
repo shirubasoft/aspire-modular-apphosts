@@ -111,7 +111,7 @@ public sealed class ModuleImageDescriptionPipelineTests
                 Assert.Equal("7", image.Tag);
                 Assert.Equal("registry.example.test/library/redis:7", image.Reference);
                 Assert.Equal(image.Reference, image.PullReference);
-                Assert.Null(image.PushReference);
+                Assert.Null(image.Push);
                 Assert.Null(image.Build);
             },
             image => AssertImage(image, "declared", "acme/declared", "declared-ci", "build-declared"),
@@ -260,7 +260,10 @@ public sealed class ModuleImageDescriptionPipelineTests
         Assert.Null(image.Digest);
         Assert.Equal($"registry.example.test/{repository}:{tag}", image.Reference);
         Assert.Equal(image.Reference, image.PullReference);
-        Assert.Equal(image.Reference, image.PushReference);
+        Assert.Equal("registry.example.test", image.Push!.Registry);
+        Assert.Equal(repository, image.Push.Repository);
+        Assert.Equal(tag, image.Push.Tag);
+        Assert.Equal(image.Reference, image.Push.Reference);
         Assert.Equal(command, image.Build!.Command);
         Assert.Equal($"build-{resource}", image.Build.Step);
     }

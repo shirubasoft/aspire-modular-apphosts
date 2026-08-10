@@ -117,7 +117,14 @@ internal static class ModuleImageDescriptionPipeline
                 Digest = effective.Digest,
                 Reference = effective.Reference,
                 PullReference = effective.PullReference,
-                PushReference = publisher is null ? null : effective.PushReference,
+                Push = publisher is null || effective.PushImage is null
+                    ? null
+                    : new ModuleImagePushDescription
+                    {
+                        Registry = effective.PushImage.Registry,
+                        Repository = effective.PushImage.Repository,
+                        Tag = effective.PushImage.Tag
+                    },
                 Build = publisher is null
                     ? null
                     : new ModuleImageBuildDescription
@@ -160,7 +167,7 @@ internal static class ModuleImageDescriptionPipeline
                 context.Logger,
                 image.EffectiveResource,
                 image.Reference,
-                image.PushReference ?? "none",
+                image.Push?.Reference ?? "none",
                 null);
         }
 

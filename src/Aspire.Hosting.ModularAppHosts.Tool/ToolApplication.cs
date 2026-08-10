@@ -5,11 +5,8 @@ namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 internal static class ToolExitCode
 {
     public const int Success = 0;
-    public const int TargetFailure = 1;
+    public const int Failure = 1;
     public const int Usage = 2;
-    public const int GitHubFailure = 3;
-    public const int AuthenticationFailure = 4;
-    public const int Timeout = 124;
     public const int Interrupted = 130;
 }
 
@@ -48,10 +45,6 @@ internal static class ToolApplication
         manifest.Subcommands.Add(CreatePublishCommand(service));
         manifest.Subcommands.Add(CreateApplyCommand(service));
         root.Subcommands.Add(manifest);
-        var workflow = new Command("workflow", "Orchestrates external GitHub Actions workflows.");
-        workflow.Subcommands.Add(CreateDispatchCommand(
-            new WorkflowDispatchService(processRunner, environment, output, error)));
-        root.Subcommands.Add(workflow);
 
         var parseResult = root.Parse(args);
         var exitCode = await parseResult.InvokeAsync(
@@ -164,67 +157,4 @@ internal static class ToolApplication
         return command;
     }
 
-    private static Command CreateDispatchCommand(WorkflowDispatchService service)
-    {
-        var repository = new Option<string>("--repository")
-        {
-            Description = "Target repository in <owner>/<repository> form.",
-            Required = true
-        };
-        var workflow = new Option<string>("--workflow")
-        {
-            Description = "Target workflow file name or numeric ID.",
-            Required = true
-        };
-        var reference = new Option<string>("--ref")
-        {
-            Description = "Branch or tag containing the target workflow.",
-            Required = true
-        };
-        var manifest = new Option<string>("--manifest")
-        {
-            Description = "Workflow image manifest path.",
-            Required = true
-        };
-        var manifestInput = new Option<string>("--manifest-input")
-        {
-            Description = "Target workflow input receiving manifest JSON.",
-            DefaultValueFactory = _ => "image-manifest"
-        };
-        var inputs = new Option<string[]>("--input")
-        {
-            Description = "Additional workflow input in <name>=<value> form.",
-            AllowMultipleArgumentsPerToken = true
-        };
-        var timeout = new Option<TimeSpan>("--timeout")
-        {
-            Description = "Maximum time to wait for the external run.",
-            DefaultValueFactory = _ => TimeSpan.FromHours(1)
-        };
-        var githubPath = new Option<string>("--gh-path")
-        {
-            Description = "GitHub CLI executable path.",
-            DefaultValueFactory = _ => "gh"
-        };
-        var command = new Command("dispatch", "Dispatches a workflow and returns its final conclusion.");
-        command.Options.Add(repository);
-        command.Options.Add(workflow);
-        command.Options.Add(reference);
-        command.Options.Add(manifest);
-        command.Options.Add(manifestInput);
-        command.Options.Add(inputs);
-        command.Options.Add(timeout);
-        command.Options.Add(githubPath);
-        command.SetAction((parse, cancellationToken) => service.DispatchAsync(
-            parse.GetRequiredValue(repository),
-            parse.GetRequiredValue(workflow),
-            parse.GetRequiredValue(reference),
-            parse.GetRequiredValue(manifest),
-            parse.GetRequiredValue(manifestInput),
-            parse.GetValue(inputs) ?? [],
-            parse.GetRequiredValue(timeout),
-            parse.GetRequiredValue(githubPath),
-            cancellationToken));
-        return command;
-    }
 }

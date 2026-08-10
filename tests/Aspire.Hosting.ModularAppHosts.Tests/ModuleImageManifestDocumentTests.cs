@@ -9,7 +9,7 @@ public sealed class ModuleImageManifestDocumentTests
     [Fact]
     public async Task Save_load_and_compact_round_trip_are_canonical()
     {
-        using var directory = TemporaryDirectory.Create();
+        using var directory = TestDirectory.Create();
         var path = Path.Combine(directory.Path, "workflow-images.json");
         var document = new ModuleImageManifestDocument();
         document.Images.Add(CreateEntry("orders", "worker"));
@@ -91,4 +91,25 @@ public sealed class ModuleImageManifestDocumentTests
     };
 
     private static string GetIdentity(ModuleImageManifestEntry entry) => $"{entry.Module}/{entry.Resource}";
+
+    private sealed class TestDirectory : IDisposable
+    {
+        private TestDirectory(string path)
+        {
+            Path = path;
+        }
+
+        public string Path { get; }
+
+        public static TestDirectory Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"modular-apphosts-manifest-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(path);
+            return new TestDirectory(path);
+        }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
 }

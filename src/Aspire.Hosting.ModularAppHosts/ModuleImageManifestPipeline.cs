@@ -4,6 +4,7 @@
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -35,8 +36,14 @@ internal static class ModuleImageManifestPipeline
         builder.Pipeline.AddStep(new PipelineStep
         {
             Name = StepName,
-            Description = "Writes the exact remote identities of selected module images.",
-            Action = context => WriteAsync(context, selection)
+            Description = "Pushes selected module images and writes their resolved remote identities.",
+            Action = context => WriteAsync(context, selection),
+            DependsOnSteps = [WellKnownPipelineSteps.Push]
+        });
+        builder.Pipeline.AddPipelineConfiguration(context =>
+        {
+            ModuleImagePushPipeline.ApplySelection(context.Steps, selection);
+            return Task.CompletedTask;
         });
     }
 

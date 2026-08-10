@@ -313,7 +313,7 @@ public static partial class DistributedApplicationModuleExtensions
                     cancellationToken)
                 .ConfigureAwait(false);
         var requiresRepository = module.ProjectDefinitions.Any(project =>
-                moduleOptions?.FindProject(project.Name)?.HasFullWorkflowImageOverride != true) ||
+                !UsesExternalImage(moduleOptions?.FindProject(project.Name))) ||
             module.ExplicitlyRequiresRepositoryContent ||
             containerPublishersRequireModuleRepository;
         ValidateModuleConfiguration(module, moduleOptions);
@@ -565,7 +565,7 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         var publishImage = projectOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
-        var prepareImageBuild = projectOptions?.HasFullWorkflowImageOverride != true &&
+        var prepareImageBuild = !UsesExternalImage(projectOptions) &&
             (builder.ExecutionContext.IsRunMode
                 ? publishImage
                 : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
@@ -656,7 +656,7 @@ public static partial class DistributedApplicationModuleExtensions
                 publishPlan.ImageTag,
                 GetConfiguredValue(projectOptions?.ImageSHA256)));
         export.ConfigureContainer?.Invoke(context, container);
-        if (projectOptions?.HasFullWorkflowImageOverride != true)
+        if (!UsesExternalImage(projectOptions))
         {
             container.WithAnnotation(new ModuleImagePublisherAnnotation(
                 module.Name,
@@ -714,7 +714,7 @@ public static partial class DistributedApplicationModuleExtensions
         ValidatePublishOverrides(definition, containerOptions);
         var publishImage = definition.ImagePublishOptions is not null &&
             (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
-        var prepareImageBuild = containerOptions?.HasFullWorkflowImageOverride != true &&
+        var prepareImageBuild = !UsesExternalImage(containerOptions) &&
             (builder.ExecutionContext.IsRunMode
                 ? publishImage
                 : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
@@ -802,7 +802,7 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(containerOptions?.ImageSHA256)));
         definition.ConfigureContainer?.Invoke(context, container);
 
-        if (publishPlan is not null && containerOptions?.HasFullWorkflowImageOverride != true)
+        if (publishPlan is not null && !UsesExternalImage(containerOptions))
         {
             container.WithAnnotation(new ModuleImagePublisherAnnotation(
                 module.Name,
@@ -919,7 +919,7 @@ public static partial class DistributedApplicationModuleExtensions
             nameof(IDistributedApplicationModuleBuilder.AddResource));
         var publishImage = definition.ImagePublishOptions is not null &&
             (configured?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
-        var prepareImageBuild = configured?.HasFullWorkflowImageOverride != true &&
+        var prepareImageBuild = !UsesExternalImage(configured) &&
             (builder.ExecutionContext.IsRunMode
                 ? publishImage
                 : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
@@ -1011,7 +1011,7 @@ public static partial class DistributedApplicationModuleExtensions
                 ApplyImagePullPolicy(
                     container,
                     configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
-                if (configured?.HasFullWorkflowImageOverride != true)
+                if (!UsesExternalImage(configured))
                 {
                     container.WithAnnotation(new ModuleImagePublisherAnnotation(
                         module.Name,
@@ -1886,7 +1886,7 @@ public static partial class DistributedApplicationModuleExtensions
         string repositoryPath)
     {
         foreach (var project in module.ProjectDefinitions.Where(project =>
-                     moduleOptions?.FindProject(project.Name)?.HasFullWorkflowImageOverride != true))
+                     !UsesExternalImage(moduleOptions?.FindProject(project.Name))))
         {
             var relativePath = project.GetRepositoryRelativeProjectPath();
             var materializedPath = PathSafety.GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
@@ -2121,6 +2121,20 @@ public static partial class DistributedApplicationModuleExtensions
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static bool UsesExternalImage(DistributedApplicationModuleImageOptions? options)
+    {
+        if (options?.PublishImage != false ||
+            GetConfiguredValue(options.ImageRegistry) is null ||
+            GetConfiguredValue(options.ImageName) is null)
+        {
+            return false;
+        }
+
+        var hasTag = GetConfiguredValue(options.ImageTag) is not null;
+        var hasDigest = GetConfiguredValue(options.ImageSHA256) is not null;
+        return hasTag != hasDigest;
+    }
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Information, Message = "{Progress}")]
     private static partial void LogRepositoryProgress(ILogger logger, string progress);
