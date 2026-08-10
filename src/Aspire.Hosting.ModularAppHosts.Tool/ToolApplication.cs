@@ -117,10 +117,10 @@ internal static class ToolApplication
         {
             Description = "Tag applied to every selected image."
         };
-        var resourceTags = new Option<string[]>("--resource-tag")
+        var resourceTags = new Option<string>("--resource-tags")
         {
-            Description = "Per-resource tag in <module>/<resource>=<tag> form.",
-            AllowMultipleArgumentsPerToken = true
+            Description = "Per-resource tags as a JSON object keyed by <module>/<resource>.",
+            DefaultValueFactory = _ => "{}"
         };
         var output = new Option<string?>("--output")
         {
@@ -144,7 +144,7 @@ internal static class ToolApplication
             parse.GetValue(selectors) ?? [],
             parse.GetValue(all),
             parse.GetValue(tag),
-            parse.GetValue(resourceTags) ?? [],
+            parse.GetRequiredValue(resourceTags),
             parse.GetValue(output),
             parse.GetRequiredValue(aspirePath),
             cancellationToken));
@@ -165,10 +165,10 @@ internal static class ToolApplication
         {
             Description = "Tag applied to every manifest image."
         };
-        var resourceTags = new Option<string[]>("--resource-tag")
+        var resourceTags = new Option<string>("--resource-tags")
         {
-            Description = "Per-resource tag in <module>/<resource>=<tag> form.",
-            AllowMultipleArgumentsPerToken = true
+            Description = "Per-resource tags as a JSON object keyed by <module>/<resource>.",
+            DefaultValueFactory = _ => "{}"
         };
         var command = new Command("apply", "Applies image identities to subsequent GitHub Actions steps.");
         command.Options.Add(file);
@@ -179,7 +179,7 @@ internal static class ToolApplication
             parse.GetValue(file),
             parse.GetValue(json),
             parse.GetValue(tag),
-            parse.GetValue(resourceTags) ?? [],
+            parse.GetRequiredValue(resourceTags),
             cancellationToken));
         return command;
     }

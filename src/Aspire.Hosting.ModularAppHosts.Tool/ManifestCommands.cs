@@ -16,7 +16,7 @@ internal sealed class ManifestCommandService(
         string? file,
         string? json,
         string? tag,
-        IReadOnlyList<string> resourceTags,
+        string resourceTags,
         CancellationToken cancellationToken)
     {
         if ((file is null) == (json is null))
@@ -55,7 +55,7 @@ internal sealed class ManifestCommandService(
         string[] selectors,
         bool all,
         string? tag,
-        IReadOnlyList<string> resourceTags,
+        string resourceTags,
         string? outputPath,
         string aspirePath,
         CancellationToken cancellationToken)

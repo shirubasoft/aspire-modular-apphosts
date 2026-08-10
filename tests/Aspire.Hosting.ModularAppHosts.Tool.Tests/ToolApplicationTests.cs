@@ -182,7 +182,7 @@ public sealed class ToolApplicationTests
                 "manifest", "apply",
                 "--json", document.ToJson(),
                 "--tag", "global",
-                "--resource-tag", "orders/api=specific"
+                "--resource-tags", "{\"orders/api\":\"specific\"}"
             ],
             githubActions: githubActions);
 
@@ -236,6 +236,26 @@ public sealed class ToolApplicationTests
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
         Assert.Contains("GITHUB_ENV", error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"orders\":\"candidate\"}")]
+    [InlineData("{\"orders/api\":\"invalid/tag\"}")]
+    public async Task Apply_rejects_invalid_resource_tag_maps(string resourceTags)
+    {
+        using var directory = TestDirectory.Create();
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            [
+                "manifest", "apply",
+                "--json", CreateManifest().ToJson(),
+                "--resource-tags", resourceTags
+            ]);
+
+        Assert.Equal(ToolExitCode.Usage, exitCode);
+        Assert.NotEmpty(error);
     }
 
     [Fact]
@@ -308,7 +328,7 @@ public sealed class ToolApplicationTests
                 "--apphost", directory.Path,
                 "--selector", "orders",
                 "--tag", "global",
-                "--resource-tag", "orders/api=api-tag",
+                "--resource-tags", "{\"orders/api\":\"api-tag\"}",
                 "--output", destination,
                 "--aspire-path", "custom-aspire"
             ],

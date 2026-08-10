@@ -41,13 +41,13 @@ modular-apphosts manifest publish \
   --selector orders \
   --selector catalog/api \
   --tag "pr-123" \
-  --resource-tag "orders/worker=worker-pr-123" \
+  --resource-tags '{"orders/worker":"worker-pr-123"}' \
   --output module-image-manifest.json
 ```
 
 Selectors match a declared module name, `module/resource`, or an unambiguous resource name. Use
 `--all` only when every publishable image is intended. A global tag is applied first and each
-`--resource-tag` wins for its resource.
+`--resource-tags` wins for each resource listed in its JSON object.
 
 The command asks Aspire for one structured image description, pushes the selected resources, and
 builds the manifest from those same resolved push targets. It does not launch a second AppHost just
@@ -79,7 +79,7 @@ Repo A can select alternate tags for all manifest entries or individual resource
 modular-apphosts manifest apply \
   --file module-image-manifest.json \
   --tag validation \
-  --resource-tag orders/api=validation-api
+  --resource-tags '{"orders/api":"validation-api"}'
 ```
 
 These options change the tag that Repo A pulls; they do not create or retag an image in the

@@ -1,4 +1,5 @@
 using Aspire.Hosting.ModularAppHosts;
+using System.Text.Json;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
@@ -12,7 +13,7 @@ internal sealed class ManifestTagOverrides
     private readonly Dictionary<string, ResourceTagOverride> _resources =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public ManifestTagOverrides(string? globalTag, IEnumerable<string> resourceTags)
+    public ManifestTagOverrides(string? globalTag, string resourceTags)
     {
         ArgumentNullException.ThrowIfNull(resourceTags);
         GlobalTag = string.IsNullOrWhiteSpace(globalTag) ? null : globalTag;
@@ -21,9 +22,11 @@ internal sealed class ManifestTagOverrides
             ValidateTag(GlobalTag);
         }
 
-        foreach (var value in resourceTags)
+        var parsed = JsonSerializer.Deserialize<Dictionary<string, string>>(resourceTags)
+            ?? throw new ToolUsageException("--resource-tags must be a JSON object.");
+        foreach (var (identity, tag) in parsed)
         {
-            var imageOverride = Parse(value);
+            var imageOverride = Parse(identity, tag);
             if (!_resources.TryAdd(imageOverride.Identity, imageOverride))
             {
                 throw new ToolUsageException(
@@ -102,20 +105,23 @@ internal sealed class ManifestTagOverrides
         document.Validate();
     }
 
-    private static ResourceTagOverride Parse(string value)
+    private static ResourceTagOverride Parse(string identity, string tag)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        var equals = value.IndexOf('=', StringComparison.Ordinal);
-        var slash = value.IndexOf('/', StringComparison.Ordinal);
-        if (slash <= 0 || equals <= slash + 1 || equals == value.Length - 1)
+        if (string.IsNullOrWhiteSpace(identity) || string.IsNullOrWhiteSpace(tag))
         {
             throw new ToolUsageException(
-                $"Resource tag override '{value}' must use the form <module>/<resource>=<tag>.");
+                "Resource tag overrides require non-empty <module>/<resource> keys and tag values.");
         }
 
-        var module = value[..slash];
-        var resource = value[(slash + 1)..equals];
-        var tag = value[(equals + 1)..];
+        var slash = identity.IndexOf('/', StringComparison.Ordinal);
+        if (slash <= 0 || slash == identity.Length - 1 || identity.IndexOf('/', slash + 1) >= 0)
+        {
+            throw new ToolUsageException(
+                $"Resource tag override '{identity}' must use the form <module>/<resource>.");
+        }
+
+        var module = identity[..slash];
+        var resource = identity[(slash + 1)..];
         ValidateTag(tag);
         return new ResourceTagOverride(module, resource, tag);
     }
