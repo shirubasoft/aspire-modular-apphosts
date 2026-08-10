@@ -4,12 +4,18 @@ using CliCommand = global::CliWrap.Cli;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
+internal enum ProcessOutputMode
+{
+    Stream,
+    Capture
+}
+
 internal sealed record ProcessInvocation(
     string FileName,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     IReadOnlyDictionary<string, string?>? EnvironmentVariables = null,
-    bool CaptureOutput = true);
+    ProcessOutputMode OutputMode = ProcessOutputMode.Stream);
 
 internal sealed record ProcessExecutionResult(
     int ExitCode,
@@ -39,16 +45,16 @@ internal sealed class CliWrapProcessRunner(TextWriter output, TextWriter error) 
             .WithArguments(invocation.Arguments)
             .WithWorkingDirectory(invocation.WorkingDirectory)
             .WithValidation(CommandResultValidation.None);
-        if (invocation.CaptureOutput)
+        command = invocation.OutputMode switch
         {
-            command = command
-                .WithStandardOutputPipe(PipeTarget.Merge(
-                    PipeTarget.ToStringBuilder(standardOutput),
-                    PipeTarget.ToDelegate(output.WriteLine)))
-                .WithStandardErrorPipe(PipeTarget.Merge(
-                    PipeTarget.ToStringBuilder(standardError),
-                    PipeTarget.ToDelegate(error.WriteLine)));
-        }
+            ProcessOutputMode.Capture => command
+                .WithStandardOutputPipe(PipeTarget.ToStringBuilder(standardOutput))
+                .WithStandardErrorPipe(PipeTarget.ToStringBuilder(standardError)),
+            ProcessOutputMode.Stream => command
+                .WithStandardOutputPipe(PipeTarget.ToDelegate(output.WriteLine))
+                .WithStandardErrorPipe(PipeTarget.ToDelegate(error.WriteLine)),
+            _ => throw new ArgumentOutOfRangeException(nameof(invocation))
+        };
         if (invocation.EnvironmentVariables is not null)
         {
             command = command.WithEnvironmentVariables(invocation.EnvironmentVariables);

@@ -42,8 +42,7 @@ modular-apphosts manifest publish \
   --selector catalog/api \
   --tag "pr-123" \
   --resource-tag "orders/worker=worker-pr-123" \
-  --output module-image-manifest.json \
-  --github-output manifest
+  --output module-image-manifest.json
 ```
 
 Selectors match a declared module name, `module/resource`, or an unambiguous resource name. Use
@@ -52,8 +51,8 @@ Selectors match a declared module name, `module/resource`, or an unambiguous res
 
 The command asks Aspire for one structured image description, pushes the selected resources, and
 builds the manifest from those same resolved push targets. It does not launch a second AppHost just
-to rediscover the identities. `manifest` and `manifest-path` are written as step outputs when
-`--github-output` is present.
+to rediscover the identities. In GitHub Actions, `manifest` and `manifest-path` are written as step
+outputs automatically.
 
 The compact manifest is versioned and strict. Each case-insensitive `module/resource` identity has
 a resource kind, registry, repository, and exactly one tag or digest. The publish command emits

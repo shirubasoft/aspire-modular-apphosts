@@ -56,7 +56,6 @@ jobs:
           --selector orders
           --tag "$MODULE_IMAGE_TAG"
           --output module-image-manifest.json
-          --github-output manifest
 
       - name: Dispatch Repo A
         id: dispatch

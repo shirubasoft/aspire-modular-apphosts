@@ -1,5 +1,8 @@
+using ActionsToolkit.Core.Services;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ModularAppHosts;
+using Microsoft.Extensions.Configuration;
+using NSubstitute;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;
 using Xunit;
 
@@ -11,24 +14,29 @@ public sealed class ToolApplicationTests
     public async Task Apply_writes_full_environment_with_global_then_resource_tag_precedence()
     {
         using var directory = TestDirectory.Create();
-        var githubEnvironment = Path.Combine(directory.Path, "github-env");
         var document = CreateManifest();
         document.Images[0].Tag = null;
         document.Images[0].Digest = $"sha256:{new string('a', 64)}";
+        var githubActions = Substitute.For<ICoreService>();
         var (exitCode, _, error, runner) = await RunAsync(
             directory,
             [
                 "manifest", "apply",
                 "--json", document.ToJson(),
                 "--tag", "global",
-                "--resource-tag", "orders/api=specific",
-                "--github-env", githubEnvironment
-            ]);
+                "--resource-tag", "orders/api=specific"
+            ],
+            githubActions: githubActions);
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
         Assert.Empty(runner.Invocations);
-        var values = await ReadGitHubFileAsync(githubEnvironment);
+        var values = githubActions.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ICoreService.ExportVariableAsync))
+            .ToDictionary(
+                call => Assert.IsType<string>(call.GetArguments()[0]),
+                call => Assert.IsType<string>(call.GetArguments()[1]),
+                StringComparer.Ordinal);
         const string catalog =
             "Aspire__ModularAppHosts__Modules__catalog__Projects__api";
         const string orders =
@@ -51,13 +59,38 @@ public sealed class ToolApplicationTests
         using var directory = TestDirectory.Create();
         var args = new List<string> { "manifest", "apply" };
         args.AddRange(sourceArguments);
-        args.Add("--github-env");
-        args.Add(Path.Combine(directory.Path, "github-env"));
 
         var (exitCode, _, error, _) = await RunAsync(directory, [.. args]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
         Assert.Contains("exactly one", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Apply_requires_the_GitHub_Actions_environment_file_configuration()
+    {
+        using var directory = TestDirectory.Create();
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            ["manifest", "apply", "--json", CreateManifest().ToJson()],
+            configurationValues: new Dictionary<string, string?>());
+
+        Assert.Equal(ToolExitCode.Usage, exitCode);
+        Assert.Contains("GITHUB_ENV", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Missing_manifest_file_is_an_operational_failure()
+    {
+        using var directory = TestDirectory.Create();
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            ["manifest", "apply", "--file", "missing.json"]);
+
+        Assert.Equal(ToolExitCode.Failure, exitCode);
+        Assert.Contains("missing.json", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -79,7 +112,6 @@ public sealed class ToolApplicationTests
     {
         using var directory = TestDirectory.Create();
         var destination = Path.Combine(directory.Path, "artifacts", "images.json");
-        var githubOutput = Path.Combine(directory.Path, "github-output");
         var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
         {
             var step = invocation.Arguments[1];
@@ -109,10 +141,7 @@ public sealed class ToolApplicationTests
             }
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
-        var environment = new FakeEnvironment(directory.Path, new Dictionary<string, string>
-        {
-            ["GITHUB_OUTPUT"] = githubOutput
-        });
+        var githubActions = Substitute.For<ICoreService>();
 
         var (exitCode, output, error, _) = await RunAsync(
             directory,
@@ -123,11 +152,10 @@ public sealed class ToolApplicationTests
                 "--tag", "global",
                 "--resource-tag", "orders/api=api-tag",
                 "--output", destination,
-                "--github-output", "manifest",
                 "--aspire-path", "custom-aspire"
             ],
             runner,
-            environment);
+            githubActions: githubActions);
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
@@ -140,7 +168,7 @@ public sealed class ToolApplicationTests
                 Assert.Equal("describe-images", invocation.Arguments[1]);
                 Assert.DoesNotContain("--", invocation.Arguments);
                 Assert.Null(invocation.EnvironmentVariables);
-                Assert.False(invocation.CaptureOutput);
+                Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
             },
             invocation => AssertProducerInvocation(invocation, "workflow-images"));
 
@@ -149,7 +177,12 @@ public sealed class ToolApplicationTests
             TestContext.Current.CancellationToken);
         Assert.Equal("global-dirty", written.Images.Single(image => image.Resource == "worker").Tag);
         Assert.Equal("api-tag-dirty", written.Images.Single(image => image.Resource == "api").Tag);
-        var outputs = await ReadGitHubFileAsync(githubOutput);
+        var outputs = githubActions.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ICoreService.SetOutputAsync))
+            .ToDictionary(
+                call => Assert.IsType<string>(call.GetArguments()[0]),
+                call => Assert.IsType<string>(call.GetArguments()[1]),
+                StringComparer.Ordinal);
         Assert.Equal(destination, outputs["manifest-path"]);
         var outputManifest = ModuleImageManifestDocument.Parse(outputs["manifest"]);
         Assert.Equal("api-tag-dirty", outputManifest.Images.Single(image => image.Resource == "api").Tag);
@@ -258,21 +291,33 @@ public sealed class ToolApplicationTests
     }
 
     [Fact]
-    public async Task CliWrap_runner_streams_and_captures_output_cross_platform()
+    public async Task CliWrap_runner_streams_or_captures_output_cross_platform()
     {
         using var directory = TestDirectory.Create();
         var output = new StringWriter();
         var error = new StringWriter();
         var runner = new CliWrapProcessRunner(output, error);
 
-        var result = await runner.RunAsync(
+        var streamed = await runner.RunAsync(
             new ProcessInvocation("dotnet", ["--version"], directory.Path),
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.IsSuccess, result.StandardError);
-        Assert.False(string.IsNullOrWhiteSpace(result.StandardOutput));
-        Assert.Equal(result.StandardOutput.Trim(), output.ToString().Trim());
+        Assert.True(streamed.IsSuccess, streamed.StandardError);
+        Assert.Empty(streamed.StandardOutput);
+        Assert.False(string.IsNullOrWhiteSpace(output.ToString()));
         Assert.Empty(error.ToString());
+
+        var captured = await runner.RunAsync(
+            new ProcessInvocation(
+                "dotnet",
+                ["--version"],
+                directory.Path,
+                OutputMode: ProcessOutputMode.Capture),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(captured.IsSuccess, captured.StandardError);
+        Assert.False(string.IsNullOrWhiteSpace(captured.StandardOutput));
+        Assert.Empty(captured.StandardError);
     }
 
     private static async Task<(
@@ -283,18 +328,29 @@ public sealed class ToolApplicationTests
         TestDirectory directory,
         string[] args,
         FakeProcessRunner? runner = null,
-        FakeEnvironment? environment = null,
+        IReadOnlyDictionary<string, string?>? configurationValues = null,
+        ICoreService? githubActions = null,
         CancellationToken? cancellationToken = null)
     {
         runner ??= new FakeProcessRunner((_, _) =>
             Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty)));
-        environment ??= new FakeEnvironment(directory.Path);
+        configurationValues ??= new Dictionary<string, string?>
+        {
+            ["GITHUB_ENV"] = Path.Combine(directory.Path, "github-env"),
+            ["GITHUB_OUTPUT"] = Path.Combine(directory.Path, "github-output")
+        };
+        githubActions ??= Substitute.For<ICoreService>();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configurationValues)
+            .Build();
         var output = new StringWriter();
         var error = new StringWriter();
         var exitCode = await ToolApplication.RunAsync(
             args,
             runner,
-            environment,
+            configuration,
+            githubActions,
+            directory.Path,
             output,
             error,
             cancellationToken ?? TestContext.Current.CancellationToken);
@@ -371,7 +427,7 @@ public sealed class ToolApplicationTests
     private static void AssertProducerInvocation(ProcessInvocation invocation, string step)
     {
         Assert.Equal(step, invocation.Arguments[1]);
-        Assert.False(invocation.CaptureOutput);
+        Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
         Assert.Equal(["imported-api", "imported-worker"], invocation.Arguments.SkipWhile(value => value != "--").Skip(1));
         Assert.NotNull(invocation.EnvironmentVariables);
         Assert.Equal(
@@ -402,19 +458,6 @@ public sealed class ToolApplicationTests
         return null;
     }
 
-    private static async Task<IReadOnlyDictionary<string, string>> ReadGitHubFileAsync(string path)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in await File.ReadAllLinesAsync(path, TestContext.Current.CancellationToken))
-        {
-            var separator = line.IndexOf('=', StringComparison.Ordinal);
-            Assert.True(separator > 0);
-            values.Add(line[..separator], line[(separator + 1)..]);
-        }
-
-        return values;
-    }
-
     private sealed class FakeProcessRunner(
         Func<ProcessInvocation, CancellationToken, Task<ProcessExecutionResult>> handler) : IProcessRunner
     {
@@ -427,16 +470,6 @@ public sealed class ToolApplicationTests
             Invocations.Add(invocation);
             return handler(invocation, cancellationToken);
         }
-    }
-
-    private sealed class FakeEnvironment(
-        string currentDirectory,
-        IReadOnlyDictionary<string, string>? variables = null) : IEnvironmentAccessor
-    {
-        public string CurrentDirectory { get; } = currentDirectory;
-
-        public string? GetEnvironmentVariable(string name) =>
-            variables?.TryGetValue(name, out var value) == true ? value : null;
     }
 
     private sealed class TestDirectory : IDisposable

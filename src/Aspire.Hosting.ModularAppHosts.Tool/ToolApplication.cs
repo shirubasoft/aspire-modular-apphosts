@@ -1,4 +1,8 @@
+using ActionsToolkit.Core.Services;
+using Microsoft.Extensions.Configuration;
+using System.ComponentModel;
 using System.CommandLine;
+using System.Text.Json;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
@@ -33,13 +37,21 @@ internal static class ToolApplication
     public static async Task<int> RunAsync(
         string[] args,
         IProcessRunner processRunner,
-        IEnvironmentAccessor environment,
+        IConfiguration configuration,
+        ICoreService githubActions,
+        string workingDirectory,
         TextWriter output,
         TextWriter error,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var service = new ManifestCommandService(processRunner, environment, output, error);
+        var service = new ManifestCommandService(
+            processRunner,
+            configuration,
+            githubActions,
+            workingDirectory,
+            output,
+            error);
         var root = new RootCommand("Workflow tooling for Aspire modular AppHosts.");
         var manifest = new Command("manifest", "Creates and consumes workflow image manifests.");
         manifest.Subcommands.Add(CreatePublishCommand(service));
@@ -47,15 +59,32 @@ internal static class ToolApplication
         root.Subcommands.Add(manifest);
 
         var parseResult = root.Parse(args);
-        var exitCode = await parseResult.InvokeAsync(
-            new InvocationConfiguration
-            {
-                EnableDefaultExceptionHandler = false,
-                Output = output,
-                Error = error
-            },
-            cancellationToken).ConfigureAwait(false);
-        return parseResult.Errors.Count > 0 ? ToolExitCode.Usage : exitCode;
+        try
+        {
+            var exitCode = await parseResult.InvokeAsync(
+                new InvocationConfiguration
+                {
+                    EnableDefaultExceptionHandler = false,
+                    Output = output,
+                    Error = error
+                },
+                cancellationToken).ConfigureAwait(false);
+            return parseResult.Errors.Count > 0 ? ToolExitCode.Usage : exitCode;
+        }
+        catch (OperationCanceledException)
+        {
+            return ToolExitCode.Interrupted;
+        }
+        catch (Exception exception) when (IsUsageFailure(exception))
+        {
+            await error.WriteLineAsync(exception.Message).ConfigureAwait(false);
+            return ToolExitCode.Usage;
+        }
+        catch (Exception exception) when (IsRuntimeFailure(exception))
+        {
+            await error.WriteLineAsync(exception.Message).ConfigureAwait(false);
+            return ToolExitCode.Failure;
+        }
     }
 
     private static Command CreatePublishCommand(ManifestCommandService service)
@@ -87,10 +116,6 @@ internal static class ToolApplication
         {
             Description = "Manifest output path."
         };
-        var githubOutput = new Option<string?>("--github-output")
-        {
-            Description = "GitHub step output name that receives compact manifest JSON."
-        };
         var aspirePath = new Option<string>("--aspire-path")
         {
             Description = "Aspire CLI executable path.",
@@ -103,7 +128,6 @@ internal static class ToolApplication
         command.Options.Add(tag);
         command.Options.Add(resourceTags);
         command.Options.Add(output);
-        command.Options.Add(githubOutput);
         command.Options.Add(aspirePath);
         command.SetAction((parse, cancellationToken) => service.PublishAsync(
             parse.GetRequiredValue(appHost),
@@ -112,7 +136,6 @@ internal static class ToolApplication
             parse.GetValue(tag),
             parse.GetValue(resourceTags) ?? [],
             parse.GetValue(output),
-            parse.GetValue(githubOutput),
             parse.GetRequiredValue(aspirePath),
             cancellationToken));
         return command;
@@ -137,24 +160,23 @@ internal static class ToolApplication
             Description = "Per-resource tag in <module>/<resource>=<tag> form.",
             AllowMultipleArgumentsPerToken = true
         };
-        var githubEnvironment = new Option<string?>("--github-env")
-        {
-            Description = "GitHub environment file path. Defaults to GITHUB_ENV."
-        };
         var command = new Command("apply", "Applies image identities to subsequent GitHub Actions steps.");
         command.Options.Add(file);
         command.Options.Add(json);
         command.Options.Add(tag);
         command.Options.Add(resourceTags);
-        command.Options.Add(githubEnvironment);
         command.SetAction((parse, cancellationToken) => service.ApplyAsync(
             parse.GetValue(file),
             parse.GetValue(json),
             parse.GetValue(tag),
             parse.GetValue(resourceTags) ?? [],
-            parse.GetValue(githubEnvironment),
             cancellationToken));
         return command;
     }
 
+    private static bool IsUsageFailure(Exception exception) =>
+        exception is ToolUsageException or InvalidDataException or JsonException;
+
+    private static bool IsRuntimeFailure(Exception exception) =>
+        exception is IOException or Win32Exception or UnauthorizedAccessException;
 }

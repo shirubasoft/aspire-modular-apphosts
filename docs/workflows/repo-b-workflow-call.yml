@@ -50,7 +50,6 @@ jobs:
           --apphost src/RepoB.AppHost
           --selector orders
           --tag "$MODULE_IMAGE_TAG"
-          --github-output manifest
 
   external-e2e:
     needs: publish-images

@@ -1,12 +1,14 @@
+using ActionsToolkit.Core.Services;
 using Aspire.Hosting.ModularAppHosts;
-using System.ComponentModel;
-using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
 internal sealed class ManifestCommandService(
     IProcessRunner processRunner,
-    IEnvironmentAccessor environment,
+    IConfiguration configuration,
+    ICoreService githubActions,
+    string workingDirectory,
     TextWriter output,
     TextWriter error)
 {
@@ -15,47 +17,35 @@ internal sealed class ManifestCommandService(
         string? json,
         string? tag,
         IReadOnlyList<string> resourceTags,
-        string? githubEnvironmentPath,
         CancellationToken cancellationToken)
     {
-        try
+        if ((file is null) == (json is null))
         {
-            if ((file is null) == (json is null))
-            {
-                throw new ToolUsageException("Specify exactly one of --file or --json.");
-            }
+            throw new ToolUsageException("Specify exactly one of --file or --json.");
+        }
 
-            var document = file is not null
-                ? await ModuleImageManifestDocument.LoadAsync(
-                    Path.GetFullPath(file, environment.CurrentDirectory),
-                    cancellationToken).ConfigureAwait(false)
-                : ModuleImageManifestDocument.Parse(json!);
-            new ManifestTagOverrides(tag, resourceTags).Apply(document);
-            var githubEnvironment = githubEnvironmentPath ?? environment.GetEnvironmentVariable("GITHUB_ENV");
-            if (string.IsNullOrWhiteSpace(githubEnvironment))
-            {
-                throw new ToolUsageException(
-                    "Set GITHUB_ENV or pass --github-env so the overrides can be applied to subsequent steps.");
-            }
+        var document = file is not null
+            ? await ModuleImageManifestDocument.LoadAsync(
+                Path.GetFullPath(file, workingDirectory),
+                cancellationToken).ConfigureAwait(false)
+            : ModuleImageManifestDocument.Parse(json!);
+        new ManifestTagOverrides(tag, resourceTags).Apply(document);
+        if (string.IsNullOrWhiteSpace(configuration["GITHUB_ENV"]))
+        {
+            throw new ToolUsageException(
+                "GITHUB_ENV is not configured. Run this command from a GitHub Actions step.");
+        }
 
-            await GitHubFileWriter.AppendAsync(
-                githubEnvironment,
-                WorkflowImageEnvironment.Create(document),
-                cancellationToken).ConfigureAwait(false);
-            await output.WriteLineAsync(
-                $"Applied {document.Images.Count} workflow image override(s) to '{Path.GetFullPath(githubEnvironment)}'.")
-                .ConfigureAwait(false);
-            return ToolExitCode.Success;
-        }
-        catch (OperationCanceledException)
+        foreach (var (name, value) in WorkflowImageEnvironment.Create(document))
         {
-            return ToolExitCode.Interrupted;
+            cancellationToken.ThrowIfCancellationRequested();
+            await githubActions.ExportVariableAsync(name, value).ConfigureAwait(false);
         }
-        catch (Exception exception) when (IsLocalFailure(exception))
-        {
-            await error.WriteLineAsync(exception.Message).ConfigureAwait(false);
-            return ToolExitCode.Usage;
-        }
+
+        await output.WriteLineAsync(
+            $"Applied {document.Images.Count} workflow image override(s) to subsequent steps.")
+            .ConfigureAwait(false);
+        return ToolExitCode.Success;
     }
 
     public async Task<int> PublishAsync(
@@ -65,7 +55,6 @@ internal sealed class ManifestCommandService(
         string? tag,
         IReadOnlyList<string> resourceTags,
         string? outputPath,
-        string? githubOutputName,
         string aspirePath,
         CancellationToken cancellationToken)
     {
@@ -73,7 +62,7 @@ internal sealed class ManifestCommandService(
         try
         {
             ValidatePublishArguments(appHost, selectors, all, aspirePath);
-            var appHostPath = Path.GetFullPath(appHost, environment.CurrentDirectory);
+            var appHostPath = Path.GetFullPath(appHost, workingDirectory);
             if (!File.Exists(appHostPath) && !Directory.Exists(appHostPath))
             {
                 throw new ToolUsageException($"AppHost path '{appHostPath}' does not exist.");
@@ -131,37 +120,16 @@ internal sealed class ManifestCommandService(
                 cancellationToken).ConfigureAwait(false);
             var destination = Path.GetFullPath(
                 outputPath ?? "module-image-manifest.json",
-                environment.CurrentDirectory);
+                workingDirectory);
             await document.SaveAsync(destination, cancellationToken).ConfigureAwait(false);
-            if (githubOutputName is not null)
+            if (!string.IsNullOrWhiteSpace(configuration["GITHUB_OUTPUT"]))
             {
-                var githubOutput = environment.GetEnvironmentVariable("GITHUB_OUTPUT");
-                if (string.IsNullOrWhiteSpace(githubOutput))
-                {
-                    throw new ToolUsageException(
-                        "Set GITHUB_OUTPUT when --github-output is requested.");
-                }
-
-                await GitHubFileWriter.AppendAsync(
-                    githubOutput,
-                    [
-                        new(githubOutputName, document.ToJson()),
-                        new("manifest-path", destination)
-                    ],
-                    cancellationToken).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("manifest", document.ToJson()).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("manifest-path", destination).ConfigureAwait(false);
             }
 
             await output.WriteLineAsync(destination).ConfigureAwait(false);
             return ToolExitCode.Success;
-        }
-        catch (OperationCanceledException)
-        {
-            return ToolExitCode.Interrupted;
-        }
-        catch (Exception exception) when (IsLocalFailure(exception))
-        {
-            await error.WriteLineAsync(exception.Message).ConfigureAwait(false);
-            return ToolExitCode.Usage;
         }
         finally
         {
@@ -214,9 +182,9 @@ internal sealed class ManifestCommandService(
             new ProcessInvocation(
                 aspirePath,
                 arguments,
-                environment.CurrentDirectory,
+                workingDirectory,
                 environmentVariables,
-                CaptureOutput: false),
+                ProcessOutputMode.Stream),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -338,20 +306,19 @@ internal sealed class ManifestCommandService(
         bool all,
         string aspirePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(appHost);
-        ArgumentException.ThrowIfNullOrWhiteSpace(aspirePath);
+        if (string.IsNullOrWhiteSpace(appHost))
+        {
+            throw new ToolUsageException("--apphost cannot be empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(aspirePath))
+        {
+            throw new ToolUsageException("--aspire-path cannot be empty.");
+        }
+
         if (all == (selectors.Length > 0))
         {
             throw new ToolUsageException("Specify one or more --selector values or --all, but not both.");
         }
     }
-
-    private static bool IsLocalFailure(Exception exception) =>
-        exception is ToolUsageException or
-            ArgumentException or
-            InvalidDataException or
-            IOException or
-            JsonException or
-            Win32Exception or
-            UnauthorizedAccessException;
 }

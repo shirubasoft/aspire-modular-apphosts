@@ -164,29 +164,37 @@ public sealed class PackedPackageContractTests
         Assert.Contains("apply", help.StandardOutput, StringComparison.Ordinal);
 
         var githubEnvironment = Path.Combine(toolPath, "github-env");
+        await File.WriteAllTextAsync(
+            githubEnvironment,
+            string.Empty,
+            TestContext.Current.CancellationToken);
         const string manifest =
             "{\"schemaVersion\":1,\"images\":[{\"module\":\"orders\",\"resource\":\"api\"," +
             "\"resourceKind\":\"project\",\"registry\":\"registry.example.test\"," +
             "\"repository\":\"acme/orders\",\"tag\":\"candidate\",\"digest\":null}]}";
         var apply = await RunCommandAsync(
             executable,
-            ["manifest", "apply", "--json", manifest, "--github-env", githubEnvironment],
+            ["manifest", "apply", "--json", manifest],
             toolPath,
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            new Dictionary<string, string?> { ["GITHUB_ENV"] = githubEnvironment });
 
         Assert.True(apply.IsSuccess, apply.StandardError);
         var environmentFile = await File.ReadAllTextAsync(
             githubEnvironment,
             TestContext.Current.CancellationToken);
         Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageRegistry=registry.example.test",
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageRegistry<<",
             environmentFile);
+        Assert.Contains("registry.example.test", environmentFile, StringComparison.Ordinal);
         Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag=candidate",
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag<<",
             environmentFile);
+        Assert.Contains("candidate", environmentFile, StringComparison.Ordinal);
         Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__PublishImage=False",
+            "Aspire__ModularAppHosts__Modules__orders__Projects__api__PublishImage<<",
             environmentFile);
+        Assert.Contains(bool.FalseString, environmentFile, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -720,12 +728,20 @@ public sealed class PackedPackageContractTests
         string executable,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        CancellationToken cancellationToken) =>
-        CliCommand.Wrap(executable)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null)
+    {
+        var command = CliCommand.Wrap(executable)
             .WithArguments(arguments)
             .WithWorkingDirectory(workingDirectory)
-            .WithValidation(CommandResultValidation.None)
-            .ExecuteBufferedAsync(cancellationToken);
+            .WithValidation(CommandResultValidation.None);
+        if (environmentVariables is not null)
+        {
+            command = command.WithEnvironmentVariables(environmentVariables);
+        }
+
+        return command.ExecuteBufferedAsync(cancellationToken);
+    }
 
     private static string FindRepositoryRoot()
     {
