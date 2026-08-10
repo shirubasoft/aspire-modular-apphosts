@@ -127,12 +127,12 @@ public sealed class ModuleImageDescriptionPipelineTests
         {
             Registry = "registry.example.test",
             Image = "acme/api",
-            Tag = "preview"
+            Tag = "candidate"
         });
         var options = new ModuleContainerExportOptions("acme/api", "docker", "build")
         {
             ImageRegistry = "registry.example.test",
-            ImageTag = "preview"
+            ImageTag = "candidate"
         };
         var plan = await ModuleImagePublishPlan.CreateAsync(
             options,
@@ -142,7 +142,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
             "orders",
             "api",
-            ModulePreviewResourceKind.Container,
+            ModuleResourceKind.Container,
             options,
             plan,
             "/work",
@@ -175,7 +175,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         {
             Registry = "registry.example.test",
             Image = "acme/api",
-            Tag = "preview"
+            Tag = "candidate"
         });
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "catalog",
@@ -206,7 +206,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         var resource = builder.AddContainer(
             "imported-api",
             "registry.example.test/acme/api",
-            "preview").Resource;
+            "candidate").Resource;
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "catalog",
             "api",
@@ -242,7 +242,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         var image = Assert.Single(document.Images);
         Assert.Equal("catalog", Assert.Single(document.Modules).Name);
         Assert.Equal("imported-api", image.EffectiveResource);
-        Assert.Equal("registry.example.test/acme/api:preview", image.Reference);
+        Assert.Equal("registry.example.test/acme/api:candidate", image.Reference);
     }
 
     private static void AssertImage(

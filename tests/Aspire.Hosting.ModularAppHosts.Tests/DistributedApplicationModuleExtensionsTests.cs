@@ -248,7 +248,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
             $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:portable:Containers:api";
         builder.Configuration[$"{imageSection}:ImageRegistry"] = "registry.example.test";
         builder.Configuration[$"{imageSection}:ImageName"] = "example/api";
-        builder.Configuration[$"{imageSection}:ImageTag"] = "preview";
+        builder.Configuration[$"{imageSection}:ImageTag"] = "candidate";
         builder.Configuration[$"{imageSection}:ImageSHA256"] = digest;
         IDistributedApplicationModuleResourceContext? materializationContext = null;
         IResourceBuilder<ContainerResource>? configuredDependency = null;
@@ -273,7 +273,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.True(materializationContext.Imported);
         Assert.Equal("registry.example.test", materializationContext.Image?.Registry);
         Assert.Equal("example/api", materializationContext.Image?.Name);
-        Assert.Equal("preview", materializationContext.Image?.Tag);
+        Assert.Equal("candidate", materializationContext.Image?.Tag);
         Assert.Equal(digest, materializationContext.Image?.Digest);
         Assert.Equal($"registry.example.test/example/api@{digest}", materializationContext.Image?.Reference);
         Assert.Equal("shop-dependency", configuredDependency?.Resource.Name);
@@ -880,7 +880,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var builder = CreateBuilder(repository.Path);
         var section = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:static:Containers:static-site";
         builder.Configuration[$"{section}:ImageName"] = "registry.example.test/static-site";
-        builder.Configuration[$"{section}:ImageTag"] = "preview";
+        builder.Configuration[$"{section}:ImageTag"] = "candidate";
         builder.Configuration[$"{section}:PublishImage"] = "false";
         builder.Configuration[$"{section}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
 
@@ -901,7 +901,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         var pullPolicy = Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>());
         Assert.Equal("registry.example.test/static-site", image.Image);
-        Assert.Equal("preview", image.Tag);
+        Assert.Equal("candidate", image.Tag);
         Assert.Equal(ImagePullPolicy.Always, pullPolicy.ImagePullPolicy);
         Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
     }
@@ -1318,7 +1318,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         await builder.ExportModuleAsync("static", definition =>
         {
             definition.WithRepository("https://github.com/acme/module-definition.git");
-            definition.AddContainer("static-site", "registry.example.test/static-site", "preview")
+            definition.AddContainer("static-site", "registry.example.test/static-site", "candidate")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "registry.example.test/static-site",
                     "dotnet",
@@ -1385,14 +1385,14 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var module = await builder.ExportModuleAsync("static", definition =>
         {
             definition.WithRepository(definitionRepository.Path);
-            definition.AddContainer("database", "acme/database", "preview")
+            definition.AddContainer("database", "acme/database", "candidate")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "acme/database",
                     "docker",
                     "build")
                 {
                     BuildRepository = missingBuildRepository,
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
         });
 
@@ -1401,7 +1401,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         var image = Assert.Single(
             Assert.Single(builder.Resources.OfType<ContainerResource>())
                 .Annotations.OfType<ContainerImageAnnotation>());
-        Assert.Equal("preview", image.Tag);
+        Assert.Equal("candidate", image.Tag);
         Assert.False(Directory.Exists(missingBuildRepository));
         Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
     }

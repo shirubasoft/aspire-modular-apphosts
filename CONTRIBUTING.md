@@ -8,7 +8,7 @@
 
 ## Validate the repository
 
-From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all four public packages:
+From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all three public packages:
 
 ```bash
 ./build.sh
@@ -32,14 +32,14 @@ Include the real Docker Compose deployment lifecycle when Docker or Podman is ru
 ./build.ps1 -Containers
 ```
 
-The package contract suite packs the library, testing, tool, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
+The package contract suite packs the library, testing, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
 
 ## Repository layout
 
 - `src/Aspire.Hosting.ModularAppHosts`: core module APIs.
 - `src/Aspire.Hosting.ModularAppHosts.Generators`: source generator packaged with the core library.
 - `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
-- `src/Aspire.Hosting.ModularAppHosts.Tool`: repository preview manifest and workflow-dispatch .NET tool.
+- `src/Aspire.Hosting.ModularAppHosts.Tool`: reserved empty project.
 - `tests`: unit, lifecycle, generator, and package contract tests.
 - `samples`: runnable modular AppHost and E2E examples.
 - `templates`: the packaged `dotnet new` item template for the first module contract.
@@ -65,7 +65,7 @@ comparisons with unrelated or unsupported concepts in reference guides.
 
 ## Releases
 
-After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes the core, testing, tool, and template NuGet packages plus symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually. The .NET SDK, AppHost SDK, NuGet dependencies, and local Aspire CLI are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
+After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes the core, testing, and template NuGet packages plus symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually. The .NET SDK, AppHost SDK, NuGet dependencies, and local Aspire CLI are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
 
 For publish-enabled pushes to `main`, CI calculates that version before its Linux build and stores the resulting NuGet packages as a workflow artifact. The release workflow promotes the packages from that exact successful CI run rather than rebuilding or rerunning tests.
 

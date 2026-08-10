@@ -1,9 +1,0 @@
-<Project Sdk="Aspire.AppHost.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-  </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../../../src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj"
-                      IsAspireProjectResource="false" />
-  </ItemGroup>
-</Project>

@@ -78,7 +78,7 @@ builder.AddContainer("consumer", "example/consumer", "latest")
 
 ## Generated resource API
 
-`GenerateDistributedApplicationModule` generates module-specific builder extensions such as `AddOrdersModuleAsync` and `ImportOrdersModuleAsync`, plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. `PackageId` identifies the NuGet package that publishes the contract and lets preview tooling derive producer descriptors without repeating that identity. Publish the updated contract package and update participating AppHosts together when a version changes.
+`GenerateDistributedApplicationModule` generates module-specific builder extensions such as `AddOrdersModuleAsync` and `ImportOrdersModuleAsync`, plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. `PackageId` identifies the NuGet package that publishes the contract. Publish the updated contract package and update participating AppHosts together when a version changes.
 
 Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModuleAsync`/`ExportModuleAsync`, and pass the resulting definition to the generated `builder.AddOrdersModuleAsync(definition)` overload. Use the overload whose third argument is the package ID when the contract is distributed as a package.
 
@@ -371,7 +371,7 @@ module.AddProject("orders-api", projectPath)
         (_, container) => container
             .WithContainerRegistry(registry)
             .WithRemoteImageName("api")
-            .WithRemoteImageTag("preview"));
+            .WithRemoteImageTag("candidate"));
 #pragma warning restore ASPIRECOMPUTE003, ASPIREPIPELINES003
 ```
 
@@ -404,7 +404,7 @@ aspire do describe-images --output-path artifacts
 aspire do describe-images orders-api orders-worker --output-path artifacts
 ```
 
-The command writes deterministic schema-version-2 JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file is intended for CI workflow generation and other tools that need module and image identities without duplicating contract configuration.
+The command writes deterministic schema-version-2 JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file gives automation the module and image identities without duplicating contract configuration.
 
 ### Pull module images
 
@@ -594,13 +594,6 @@ Managed repository synchronization buffers clone, fetch, checkout, and pull prog
 When an imported module needs repository content, the library clones or fast-forward-pulls its configured Git repository before Aspire starts the resources. Existing managed checkouts are synchronized before image tags and build decisions are selected, preventing a locally cached image from masking a newer checkout. A dirty imported checkout is never pulled or reset.
 
 Pin a branch, tag, or commit with `WithRepository(repository, revision)` or `Modules:<name>:RepositoryRevision`. A pinned imported module always uses a library-owned checkout under `RepositoryBasePath`, even when a matching sibling repository or the AppHost worktree is available. That managed checkout fetches the revision, checks out the resolved commit in detached-head mode, and updates submodules. This isolation prevents materialization commands from detaching or moving a developer's active branch. Existing managed checkouts must have an `origin` matching the configured repository; a mismatched or missing origin fails instead of running unrelated source.
-
-For cross-repository feature testing, prefer a versioned module preview request over passing a
-branch name directly. The consumer-owned policy verifies requested repositories, contract packages,
-and immutable image digests; `ApplyModulePreviewResolutionAsync` then applies the trusted result
-before imports are materialized. A complete image resolution uses Aspire-native SHA-256 pins and can
-avoid a producer runtime checkout. The [cross-repository preview guide](module-previews.md) covers the
-.NET tool, GitHub workflow dispatch, source fallbacks, dependency pins, and the runnable fixture.
 
 Managed repositories default to:
 

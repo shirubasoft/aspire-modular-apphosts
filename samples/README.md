@@ -111,25 +111,6 @@ image from one temporary registry to a local reference in a second registry. `te
 separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
 the [sample README](ImagePushE2E/README.md) for commands.
 
-## Preview workflow sample
-
-[`PreviewWorkflow`](PreviewWorkflow/README.md) validates an image-only request from a separately
-authorized producer and generates a producer GitHub Actions workflow from a descriptor backed by the
-image pipeline AppHost. Example repository and registry identities keep the validation offline.
-
-## External AppHost workflow sample
-
-[`ExternalAppHostWorkflow`](ExternalAppHostWorkflow/README.md) validates an image-only producer that
-owns build inputs but no AppHost. Its consumer-owned AppHost is acquired at a trusted ref, pinned by
-exact commit, and configured to build only descriptor-selected resources from the producer checkout.
-CI executes the real image build and push against a temporary registry.
-
-## Contract dependency preview sample
-
-[`ContractDependencyPreview`](ContractDependencyPreview/README.md) restores a producer contract from
-a tiny local package feed, generates the exact direct dependency lock from NuGet assets, and tests
-both the accepted and rejected policy paths in CI. Its AppHost also runs directly with `aspire`.
-
 ## Multi-repository E2E sample
 
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's

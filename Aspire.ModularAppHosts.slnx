@@ -21,7 +21,6 @@
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tool.Tests/Aspire.Hosting.ModularAppHosts.Tool.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.PackageTests/Aspire.Hosting.ModularAppHosts.PackageTests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
@@ -30,8 +29,6 @@
     <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
   </Folder>
   <Folder Name="/samples/">
-    <Project Path="samples/ContractDependencyPreview/ContractDependencyPreview.AppHost/ContractDependencyPreview.AppHost.csproj" />
-    <Project Path="samples/ExternalAppHostWorkflow/Consumer/ExternalConsumer.AppHost/ExternalConsumer.AppHost.csproj" />
     <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />
     <Project Path="samples/AppHostA/Api/ModularSample.Api.csproj" />
     <Project Path="samples/AppHostA/ModularSample.AppHostA.csproj" />

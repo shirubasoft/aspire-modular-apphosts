@@ -110,7 +110,7 @@ internal static class ModuleImageDescriptionPipeline
                 Module = module.ModuleName,
                 Resource = module.ResourceName,
                 EffectiveResource = item.Resource.Name,
-                ResourceKind = publisher?.ResourceKind ?? ModulePreviewResourceKind.Container,
+                ResourceKind = publisher?.ResourceKind ?? ModuleResourceKind.Container,
                 Registry = effective.Registry,
                 Repository = effective.Repository,
                 Tag = effective.Tag,

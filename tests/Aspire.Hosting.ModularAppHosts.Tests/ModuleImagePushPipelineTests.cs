@@ -23,7 +23,7 @@ public sealed class ModuleImagePushPipelineTests
                 .ExportAsContainer(new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
         });
 
@@ -51,14 +51,14 @@ public sealed class ModuleImagePushPipelineTests
             definition.AddContainer(
                     "declared-static",
                     "registry.example.test/assets/declared-static",
-                    "preview")
+                    "candidate")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "assets/declared-static",
                     "docker",
                     "build")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
             definition.AddResource<ContainerResource>(
                 "factory-static",
@@ -66,7 +66,7 @@ public sealed class ModuleImagePushPipelineTests
                 new ModuleContainerExportOptions("assets/factory-static", "docker", "build")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
         });
 
@@ -102,7 +102,7 @@ public sealed class ModuleImagePushPipelineTests
                     (_, container) => container
                         .WithContainerRegistry(registry)
                         .WithRemoteImageName("services/orders")
-                        .WithRemoteImageTag("preview"));
+                        .WithRemoteImageTag("candidate"));
         });
 
         await builder.AddAsync(module);
@@ -125,7 +125,7 @@ public sealed class ModuleImagePushPipelineTests
         }
 
         Assert.Equal("services/orders", pushOptions.RemoteImageName);
-        Assert.Equal("preview", pushOptions.RemoteImageTag);
+        Assert.Equal("candidate", pushOptions.RemoteImageTag);
         Assert.Single(await CreatePushStepsAsync(container));
     }
 

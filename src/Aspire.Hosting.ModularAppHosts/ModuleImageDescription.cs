@@ -3,6 +3,16 @@ using System.Text.Json.Serialization;
 
 namespace Aspire.Hosting.ModularAppHosts;
 
+/// <summary>Identifies the kind of module resource that publishes a container image.</summary>
+public enum ModuleResourceKind
+{
+    /// <summary>A project exported as a container image.</summary>
+    Project,
+
+    /// <summary>A container resource with an image publisher.</summary>
+    Container
+}
+
 /// <summary>Describes the effective module container images materialized by an AppHost.</summary>
 public sealed class ModuleImageDescriptionDocument
 {
@@ -124,7 +134,7 @@ public sealed class ModuleImageDescriptionDocument
         ReadCommentHandling = JsonCommentHandling.Disallow,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         WriteIndented = true,
-        Converters = { new JsonStringEnumConverter<ModulePreviewResourceKind>(JsonNamingPolicy.CamelCase, false) }
+        Converters = { new JsonStringEnumConverter<ModuleResourceKind>(JsonNamingPolicy.CamelCase, false) }
     };
 }
 
@@ -173,7 +183,7 @@ public sealed class ModuleImageDescription
 
     /// <summary>Gets or sets the kind of module resource that publishes the image.</summary>
     [JsonPropertyOrder(3)]
-    public ModulePreviewResourceKind ResourceKind { get; set; }
+    public ModuleResourceKind ResourceKind { get; set; }
 
     /// <summary>Gets or sets the effective registry, if the run identity is qualified.</summary>
     [JsonPropertyOrder(4)]
