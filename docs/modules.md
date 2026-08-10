@@ -381,15 +381,15 @@ positional selectors:
 ```bash
 aspire do push
 aspire do push orders-api orders-worker
-aspire do push module:orders module:catalog
-aspire do push module:orders catalog-worker
+aspire do push orders catalog/api
+aspire do push module:orders resource:catalog-worker
 ```
 
-Plain selectors always match a declared or effective resource name. Module selection deliberately
-requires `module:<name>` so a typo cannot broaden a state-changing push from one resource to every
-publisher in a module; `resource:<name>` is the corresponding explicit resource form. Mixed
-selectors are unioned and deduplicated. Unknown selectors fail with both the available resources
-and modules.
+Plain selectors match a module, declared resource, or effective resource when the name is
+unambiguous. Use `module:<name>` or `resource:<name>` when a module and resource share a name, and
+use `<module>/<resource>` for one declared resource identity. Ambiguous and unknown selectors fail
+with the available identities instead of broadening the operation. Mixed selectors are unioned and
+deduplicated.
 
 When selectors are present, non-selected image push steps are detached from the `push` aggregate,
 including ordinary Aspire project and Dockerfile steps. Only matching module build dependencies run.

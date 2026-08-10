@@ -136,7 +136,7 @@ public sealed class ToolApplicationTests
                     ModuleResourceKind.Project,
                     "api-tag-dirty"));
                 await document.SaveAsync(
-                    Path.Combine(outputPath!, ModuleImageManifestPipeline.FileName),
+                    Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
                     cancellationToken);
             }
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
@@ -237,7 +237,7 @@ public sealed class ToolApplicationTests
                     "api",
                     ModuleResourceKind.Project));
                 await document.SaveAsync(
-                    Path.Combine(outputPath!, ModuleImageManifestPipeline.FileName),
+                    Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
                     cancellationToken);
             }
             return new ProcessExecutionResult(0, string.Empty, string.Empty);

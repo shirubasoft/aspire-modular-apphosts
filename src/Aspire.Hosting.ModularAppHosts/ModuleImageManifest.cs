@@ -4,9 +4,13 @@ using System.Text.Json.Serialization;
 namespace Aspire.Hosting.ModularAppHosts;
 
 /// <summary>Describes the remotely pullable module images shared between repository workflows.</summary>
-internal sealed class ModuleImageManifestDocument
+public sealed class ModuleImageManifestDocument
 {
-    internal const int MaximumJsonLength = 65_535;
+    /// <summary>The largest manifest accepted as a GitHub workflow input.</summary>
+    public const int MaximumJsonLength = 65_535;
+
+    /// <summary>The default file name written by the workflow image pipeline.</summary>
+    public const string DefaultFileName = "module-image-manifest.json";
 
     /// <summary>The schema version understood by this release.</summary>
     public const int CurrentSchemaVersion = 1;
@@ -136,7 +140,7 @@ internal sealed class ModuleImageManifestDocument
 }
 
 /// <summary>Maps one declared module resource to a complete remotely pullable image identity.</summary>
-internal sealed class ModuleImageManifestEntry
+public sealed class ModuleImageManifestEntry
 {
     /// <summary>Gets or sets the module name.</summary>
     [JsonPropertyOrder(0)]
@@ -176,6 +180,8 @@ internal sealed class ModuleImageManifestEntry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(Module);
         ArgumentException.ThrowIfNullOrWhiteSpace(Resource);
+        ModuleImageWorkflowConfiguration.ValidateSegment(Module, nameof(Module));
+        ModuleImageWorkflowConfiguration.ValidateSegment(Resource, nameof(Resource));
         ArgumentException.ThrowIfNullOrWhiteSpace(Registry);
         ArgumentException.ThrowIfNullOrWhiteSpace(Repository);
         if (!Enum.IsDefined(ResourceKind))
@@ -217,10 +223,13 @@ internal sealed class ModuleImageManifestEntry
     }
 }
 
-internal static class ModuleImageIdentityValidation
+/// <summary>Validates OCI image tags and supported image digests.</summary>
+public static class ModuleImageIdentityValidation
 {
+    /// <summary>Returns whether <paramref name="value"/> is a valid OCI distribution tag.</summary>
     public static bool IsValidTag(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         if (value.Length is 0 or > 128 || !IsTagFirstCharacter(value[0]))
         {
             return false;
@@ -230,8 +239,10 @@ internal static class ModuleImageIdentityValidation
             char.IsAsciiLetterOrDigit(character) || character is '_' or '.' or '-');
     }
 
+    /// <summary>Returns whether <paramref name="value"/> is a supported canonical image digest.</summary>
     public static bool IsValidDigest(string value)
     {
+        ArgumentNullException.ThrowIfNull(value);
         const string prefix = "sha256:";
         return value.StartsWith(prefix, StringComparison.Ordinal) &&
             value.Length == prefix.Length + 64 &&

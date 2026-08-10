@@ -13,7 +13,6 @@ namespace Aspire.Hosting.ModularAppHosts;
 internal static class ModuleImageManifestPipeline
 {
     internal const string StepName = "workflow-images";
-    internal const string FileName = "module-image-manifest.json";
 
     private static readonly Action<ILogger, string, string, Exception?> LogImage =
         LoggerMessage.Define<string, string>(
@@ -105,7 +104,7 @@ internal static class ModuleImageManifestPipeline
             selection,
             context.CancellationToken).ConfigureAwait(false);
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
-        var path = Path.Combine(output, FileName);
+        var path = Path.Combine(output, ModuleImageManifestDocument.DefaultFileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);
         foreach (var image in document.Images)
         {

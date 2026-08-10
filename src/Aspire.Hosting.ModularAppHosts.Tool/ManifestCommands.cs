@@ -36,10 +36,12 @@ internal sealed class ManifestCommandService(
                 "GITHUB_ENV is not configured. Run this command from a GitHub Actions step.");
         }
 
-        foreach (var (name, value) in WorkflowImageEnvironment.Create(document))
+        foreach (var (key, value) in ModuleImageWorkflowConfiguration.Create(document))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await githubActions.ExportVariableAsync(name, value).ConfigureAwait(false);
+            await githubActions.ExportVariableAsync(
+                key.Replace(":", "__", StringComparison.Ordinal),
+                value).ConfigureAwait(false);
         }
 
         await output.WriteLineAsync(
@@ -116,7 +118,7 @@ internal sealed class ManifestCommandService(
             }
 
             var document = await ModuleImageManifestDocument.LoadAsync(
-                Path.Combine(manifestPath, ModuleImageManifestPipeline.FileName),
+                Path.Combine(manifestPath, ModuleImageManifestDocument.DefaultFileName),
                 cancellationToken).ConfigureAwait(false);
             var destination = Path.GetFullPath(
                 outputPath ?? "module-image-manifest.json",
@@ -193,102 +195,20 @@ internal sealed class ManifestCommandService(
         string[] selectors,
         bool all)
     {
-        if (all)
+        try
         {
-            if (publishable.Length == 0)
+            if (all && publishable.Length == 0)
             {
                 throw new ToolUsageException("The AppHost does not expose any publishable module images.");
             }
 
-            return publishable;
+            var selection = all ? ModuleImageSelection.All : new ModuleImageSelection(selectors);
+            return selection.ResolveDescriptions(publishable, "publishable module images").ToArray();
         }
-
-        var selected = new HashSet<ModuleImageDescription>();
-        var unknown = new List<string>();
-        foreach (var selector in selectors.Distinct(StringComparer.OrdinalIgnoreCase))
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
-            var normalized = selector;
-            var moduleOnly = selector.StartsWith("module:", StringComparison.OrdinalIgnoreCase);
-            var resourceOnly = selector.StartsWith("resource:", StringComparison.OrdinalIgnoreCase);
-            if (moduleOnly || resourceOnly)
-            {
-                normalized = selector[(selector.IndexOf(':', StringComparison.Ordinal) + 1)..];
-            }
-
-            var moduleMatches = resourceOnly
-                ? []
-                : publishable.Where(image =>
-                    string.Equals(image.Module, normalized, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (moduleMatches.Length > 0)
-            {
-                selected.UnionWith(moduleMatches);
-                continue;
-            }
-
-            var identitySeparator = normalized.IndexOf('/', StringComparison.Ordinal);
-            if (!moduleOnly && identitySeparator > 0 && identitySeparator < normalized.Length - 1)
-            {
-                var moduleName = normalized[..identitySeparator];
-                var resourceName = normalized[(identitySeparator + 1)..];
-                var identityMatches = publishable.Where(image =>
-                    string.Equals(image.Module, moduleName, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(image.Resource, resourceName, StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (identityMatches.Length > 0)
-                {
-                    selected.UnionWith(identityMatches);
-                }
-                else
-                {
-                    unknown.Add(selector);
-                }
-
-                continue;
-            }
-
-            var resourceMatches = moduleOnly
-                ? []
-                : publishable.Where(image =>
-                    string.Equals(image.Resource, normalized, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(image.EffectiveResource, normalized, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (resourceMatches.Length > 1)
-            {
-                var identities = resourceMatches
-                    .Select(image => $"{image.Module}/{image.Resource}")
-                    .Order(StringComparer.OrdinalIgnoreCase);
-                throw new ToolUsageException(
-                    $"Image selector '{selector}' is ambiguous. Use one of: {string.Join(", ", identities)}.");
-            }
-
-            if (resourceMatches.Length > 0)
-            {
-                selected.UnionWith(resourceMatches);
-            }
-            else
-            {
-                unknown.Add(selector);
-            }
+            throw new ToolUsageException(exception.Message, exception);
         }
-
-        if (unknown.Count > 0)
-        {
-            var availableModules = publishable
-                .Select(image => image.Module)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase);
-            var availableResources = publishable
-                .SelectMany(image => new[] { image.Resource, image.EffectiveResource })
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase);
-            throw new ToolUsageException(
-                $"Unknown image selectors: {string.Join(", ", unknown)}. " +
-                $"Available modules: {string.Join(", ", availableModules)}. " +
-                $"Available resources: {string.Join(", ", availableResources)}.");
-        }
-
-        return selected
-            .OrderBy(image => image.Module, StringComparer.Ordinal)
-            .ThenBy(image => image.Resource, StringComparer.Ordinal)
-            .ToArray();
     }
 
     private async Task<int> WriteAspireFailureAsync(

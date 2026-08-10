@@ -9,8 +9,8 @@ internal sealed record ResourceTagOverride(string Module, string Resource, strin
 
 internal sealed class ManifestTagOverrides
 {
-    private readonly Dictionary<(string Module, string Resource), ResourceTagOverride> _resources =
-        new(ModuleResourceKeyComparer.Instance);
+    private readonly Dictionary<string, ResourceTagOverride> _resources =
+        new(StringComparer.OrdinalIgnoreCase);
 
     public ManifestTagOverrides(string? globalTag, IEnumerable<string> resourceTags)
     {
@@ -24,7 +24,7 @@ internal sealed class ManifestTagOverrides
         foreach (var value in resourceTags)
         {
             var imageOverride = Parse(value);
-            if (!_resources.TryAdd((imageOverride.Module, imageOverride.Resource), imageOverride))
+            if (!_resources.TryAdd(imageOverride.Identity, imageOverride))
             {
                 throw new ToolUsageException(
                     $"Resource tag override '{imageOverride.Identity}' is specified more than once.");
@@ -45,17 +45,18 @@ internal sealed class ManifestTagOverrides
             return null;
         }
 
-        var matched = new HashSet<(string Module, string Resource)>(ModuleResourceKeyComparer.Instance);
+        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var values = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var image in images
                      .OrderBy(image => image.Module, StringComparer.Ordinal)
                      .ThenBy(image => image.Resource, StringComparer.Ordinal))
         {
             var tag = GlobalTag;
-            if (_resources.TryGetValue((image.Module, image.Resource), out var resourceTag))
+            var identity = GetIdentity(image.Module, image.Resource);
+            if (_resources.TryGetValue(identity, out var resourceTag))
             {
                 tag = resourceTag.Tag;
-                matched.Add((image.Module, image.Resource));
+                matched.Add(identity);
             }
 
             if (tag is null)
@@ -63,10 +64,10 @@ internal sealed class ManifestTagOverrides
                 continue;
             }
 
-            var prefix = WorkflowImageEnvironment.GetResourcePrefix(
+            var prefix = ModuleImageWorkflowConfiguration.GetResourceKey(
                 image.Module,
                 image.Resource,
-                image.ResourceKind);
+                image.ResourceKind).Replace(":", "__", StringComparison.Ordinal);
             values[$"{prefix}__ImageTag"] = tag;
             values[$"{prefix}__ImageSHA256"] = string.Empty;
         }
@@ -79,14 +80,15 @@ internal sealed class ManifestTagOverrides
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Validate();
-        var matched = new HashSet<(string Module, string Resource)>(ModuleResourceKeyComparer.Instance);
+        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var image in document.Images)
         {
             var tag = GlobalTag;
-            if (_resources.TryGetValue((image.Module, image.Resource), out var resourceTag))
+            var identity = GetIdentity(image.Module, image.Resource);
+            if (_resources.TryGetValue(identity, out var resourceTag))
             {
                 tag = resourceTag.Tag;
-                matched.Add((image.Module, image.Resource));
+                matched.Add(identity);
             }
 
             if (tag is not null)
@@ -120,31 +122,18 @@ internal sealed class ManifestTagOverrides
 
     private static void ValidateTag(string tag)
     {
-        var document = new ModuleImageManifestDocument();
-        document.Images.Add(new ModuleImageManifestEntry
+        if (!ModuleImageIdentityValidation.IsValidTag(tag))
         {
-            Module = "validation",
-            Resource = "validation",
-            ResourceKind = ModuleResourceKind.Container,
-            Registry = "registry.invalid",
-            Repository = "validation",
-            Tag = tag
-        });
-        try
-        {
-            document.Validate();
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidDataException)
-        {
-            throw new ToolUsageException(exception.Message, exception);
+            throw new ToolUsageException($"Image tag '{tag}' is not a valid OCI distribution tag.");
         }
     }
 
-    private void ThrowForUnmatched(HashSet<(string Module, string Resource)> matched)
+    private static string GetIdentity(string module, string resource) => $"{module}/{resource}";
+
+    private void ThrowForUnmatched(HashSet<string> matched)
     {
         var unmatched = _resources.Keys
             .Where(key => !matched.Contains(key))
-            .Select(key => $"{key.Module}/{key.Resource}")
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         if (unmatched.Length > 0)
@@ -153,20 +142,4 @@ internal sealed class ManifestTagOverrides
                 $"Resource tag overrides do not match selected images: {string.Join(", ", unmatched)}.");
         }
     }
-}
-
-internal sealed class ModuleResourceKeyComparer : IEqualityComparer<(string Module, string Resource)>
-{
-    public static ModuleResourceKeyComparer Instance { get; } = new();
-
-    public bool Equals(
-        (string Module, string Resource) x,
-        (string Module, string Resource) y) =>
-        string.Equals(x.Module, y.Module, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(x.Resource, y.Resource, StringComparison.OrdinalIgnoreCase);
-
-    public int GetHashCode((string Module, string Resource) obj) =>
-        HashCode.Combine(
-            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Module),
-            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Resource));
 }

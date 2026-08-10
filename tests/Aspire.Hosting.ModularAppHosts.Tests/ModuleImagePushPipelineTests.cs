@@ -254,14 +254,20 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
-    public void Plain_selectors_are_always_resources_and_modules_require_the_explicit_prefix()
+    public void Plain_selectors_resolve_unambiguous_names_and_require_prefixes_for_collisions()
     {
         var collidingResource = CreatePushStep("orders", "catalog", "orders");
         var moduleResource = CreatePushStep("orders-worker", "orders", "worker");
 
+        var ambiguous = Assert.Throws<InvalidOperationException>(() =>
+            ModuleImagePushPipeline.ApplySelection(
+                [collidingResource, moduleResource],
+                new ModuleImageSelection(["orders"])));
+        Assert.Contains("ambiguous", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
+
         ModuleImagePushPipeline.ApplySelection(
             [collidingResource, moduleResource],
-            new ModuleImageSelection(["orders"]));
+            new ModuleImageSelection(["resource:orders"]));
 
         Assert.Contains(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
         Assert.DoesNotContain(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
@@ -275,11 +281,11 @@ public sealed class ModuleImagePushPipelineTests
         Assert.DoesNotContain(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
         Assert.Contains(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImagePushPipeline.ApplySelection(
-                [CreatePushStep("orders-worker", "orders", "worker")],
-                new ModuleImageSelection(["orders"])));
-        Assert.Contains("resource:orders", exception.Message, StringComparison.Ordinal);
+        moduleResource = CreatePushStep("orders-worker", "orders", "worker");
+        ModuleImagePushPipeline.ApplySelection(
+            [moduleResource],
+            new ModuleImageSelection(["orders"]));
+        Assert.Contains(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
     }
 
     [Fact]
