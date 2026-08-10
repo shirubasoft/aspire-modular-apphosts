@@ -21,7 +21,7 @@
       {
         "verifyConditionsCmd": "if [ -z \"$NEXT_RELEASE_VERSION_FILE\" ] && [ -z \"$NUGET_API_KEY\" ]; then echo \"NUGET_API_KEY is required.\"; exit 1; fi",
         "verifyReleaseCmd": "if [ -n \"$NEXT_RELEASE_VERSION_FILE\" ]; then printf '%s\\n' '${nextRelease.version}' > \"$NEXT_RELEASE_VERSION_FILE\"; else bash .github/release/verify-release-assets.sh '${nextRelease.version}'; fi",
-        "publishCmd": "dotnet nuget push \"artifacts/Shirubasoft.Aspire.ModularAppHosts.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Testing.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Tool.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Templates.${nextRelease.version}.nupkg\" --source https://api.nuget.org/v3/index.json --api-key \"$NUGET_API_KEY\" --skip-duplicate"
+        "publishCmd": "dotnet nuget push \"artifacts/Shirubasoft.Aspire.ModularAppHosts.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Testing.${nextRelease.version}.nupkg\" \"artifacts/Shirubasoft.Aspire.ModularAppHosts.Templates.${nextRelease.version}.nupkg\" --source https://api.nuget.org/v3/index.json --api-key \"$NUGET_API_KEY\" --skip-duplicate"
       }
     ],
     [

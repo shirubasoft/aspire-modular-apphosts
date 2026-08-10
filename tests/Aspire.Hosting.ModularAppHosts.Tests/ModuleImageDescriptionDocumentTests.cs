@@ -39,14 +39,14 @@ public sealed class ModuleImageDescriptionDocumentTests
         Assert.Equal("catalog", image.Module);
         Assert.Equal("api", image.Resource);
         Assert.Equal("imported-api", image.EffectiveResource);
-        Assert.Equal(ModulePreviewResourceKind.Project, image.ResourceKind);
+        Assert.Equal(ModuleResourceKind.Project, image.ResourceKind);
         Assert.Equal("registry.example.test", image.Registry);
         Assert.Equal("acme/catalog", image.Repository);
-        Assert.Equal("preview", image.Tag);
+        Assert.Equal("candidate", image.Tag);
         Assert.Null(image.Digest);
-        Assert.Equal("registry.example.test/acme/catalog:preview", image.Reference);
-        Assert.Equal("mirror.example.test/acme/catalog:preview", image.PullReference);
-        Assert.Equal("registry.example.test/acme/catalog:preview", image.PushReference);
+        Assert.Equal("registry.example.test/acme/catalog:candidate", image.Reference);
+        Assert.Equal("mirror.example.test/acme/catalog:candidate", image.PullReference);
+        Assert.Equal("registry.example.test/acme/catalog:candidate", image.PushReference);
         Assert.Equal("dotnet", image.Build!.Command);
         Assert.Equal(["publish", "Catalog.csproj"], image.Build.Arguments);
         Assert.Equal("/work/catalog", image.Build.WorkingDirectory);
@@ -71,7 +71,7 @@ public sealed class ModuleImageDescriptionDocumentTests
         Assert.Throws<ArgumentNullException>(nullImage.Validate);
 
         var unknownKind = CreateDocument();
-        unknownKind.Images[0].ResourceKind = (ModulePreviewResourceKind)42;
+        unknownKind.Images[0].ResourceKind = (ModuleResourceKind)42;
         Assert.Contains("Unsupported resource kind", Assert.Throws<InvalidDataException>(unknownKind.Validate).Message);
 
         var invalidPackage = CreateDocument();
@@ -186,13 +186,13 @@ public sealed class ModuleImageDescriptionDocumentTests
             Module = "catalog",
             Resource = "api",
             EffectiveResource = effectiveResource,
-            ResourceKind = ModulePreviewResourceKind.Project,
+            ResourceKind = ModuleResourceKind.Project,
             Registry = "registry.example.test",
             Repository = "acme/catalog",
-            Tag = "preview",
-            Reference = "registry.example.test/acme/catalog:preview",
-            PullReference = "mirror.example.test/acme/catalog:preview",
-            PushReference = "registry.example.test/acme/catalog:preview",
+            Tag = "candidate",
+            Reference = "registry.example.test/acme/catalog:candidate",
+            PullReference = "mirror.example.test/acme/catalog:candidate",
+            PushReference = "registry.example.test/acme/catalog:candidate",
             Build = build
         };
     }

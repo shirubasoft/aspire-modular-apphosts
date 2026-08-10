@@ -1,38 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <AssemblyName>dotnet-modular-apphosts</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>Shirubasoft.Aspire.ModularAppHosts.Tool</AssemblyName>
     <RootNamespace>Shirubasoft.Aspire.ModularAppHosts.Tool</RootNamespace>
-    <PackAsTool>true</PackAsTool>
-    <ToolCommandName>dotnet-modular-apphosts</ToolCommandName>
-    <PackageId>Shirubasoft.Aspire.ModularAppHosts.Tool</PackageId>
-    <Title>Shirubasoft Aspire Modular AppHosts Tool</Title>
-    <Authors>Shirubasoft</Authors>
-    <Description>Exports immutable module preview manifests and dispatches cross-repository E2E workflows.</Description>
-    <PackageTags>aspire;apphost;modules;preview;dotnet-tool</PackageTags>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/Shirubasoft/aspire-modular-apphosts.git</RepositoryUrl>
-    <RepositoryType>git</RepositoryType>
-    <NoWarn>$(NoWarn);RS0016;RS0037;CA1303;CA1515</NoWarn>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="CliWrap" />
-    <PackageReference Include="NuGet.Versioning" />
-  </ItemGroup>
-  <ItemGroup>
-    <!-- Share the wire contract without pulling the complete Aspire hosting runtime into the tool package. -->
-    <Compile Include="../Aspire.Hosting.ModularAppHosts/ModulePreviewManifest.cs"
-             Link="ModulePreviewManifest.cs" />
-    <Compile Include="../Aspire.Hosting.ModularAppHosts/ModulePreviewResolution.cs"
-             Link="ModulePreviewResolution.cs" />
-    <Compile Include="../Aspire.Hosting.ModularAppHosts/ModuleImageDescription.cs"
-             Link="ModuleImageDescription.cs" />
-    <Compile Include="../Aspire.Hosting.ModularAppHosts/GitHubGitAuthentication.cs"
-             Link="GitHubGitAuthentication.cs" />
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
-    <None Include="../../schemas/module-preview-producer.schema.json"
-          Pack="true"
-          PackagePath="schemas/" />
-  </ItemGroup>
 </Project>

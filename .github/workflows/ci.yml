@@ -237,8 +237,6 @@ jobs:
         run: |
           dotnet tool restore
           dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
-          dotnet restore samples/ExternalAppHostWorkflow/Consumer/ExternalConsumer.AppHost/ExternalConsumer.AppHost.csproj
-          dotnet restore src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj
 
       - name: Describe effective module image identities
         run: bash samples/ImagePushE2E/test-image-describe.sh
@@ -248,37 +246,6 @@ jobs:
 
       - name: Pull scoped and complete image sets from a local registry
         run: bash samples/ImagePushE2E/test-image-pull.sh
-
-      - name: Build from a producer without an AppHost
-        run: bash samples/ExternalAppHostWorkflow/validate.sh
-
-  e2e-preview-workflow-sample:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      ASPIRE_CONTAINER_RUNTIME: docker
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: global.json
-
-      - name: Restore the preview sample toolchain
-        run: |
-          dotnet tool restore
-          dotnet restore src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj
-          dotnet restore samples/ImagePushE2E/ImagePush.E2E.AppHost/ImagePush.E2E.AppHost.csproj
-          dotnet restore samples/ContractDependencyPreview/ContractDependencyPreview.AppHost/ContractDependencyPreview.AppHost.csproj
-
-      - name: Validate preview policy and producer workflow generation
-        run: bash samples/PreviewWorkflow/validate.sh
-
-      - name: Validate exact preview contract dependency locks
-        run: bash samples/ContractDependencyPreview/validate.sh
 
   e2e-multi-repo:
     runs-on: ubuntu-latest

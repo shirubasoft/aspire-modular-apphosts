@@ -25,7 +25,7 @@ public sealed class ModuleImagePullPipelineTests
                 .ExportAsContainer(new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
         });
 
@@ -52,14 +52,14 @@ public sealed class ModuleImagePullPipelineTests
             definition.AddContainer(
                     "declared-static",
                     "registry.example.test/assets/declared-static",
-                    "preview")
+                    "candidate")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "assets/declared-static",
                     "docker",
                     "build")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
             definition.AddResource<ContainerResource>(
                 "factory-static",
@@ -67,7 +67,7 @@ public sealed class ModuleImagePullPipelineTests
                 new ModuleContainerExportOptions("assets/factory-static", "docker", "build")
                 {
                     ImageRegistry = "registry.example.test",
-                    ImageTag = "preview"
+                    ImageTag = "candidate"
                 });
         });
 
@@ -103,7 +103,7 @@ public sealed class ModuleImagePullPipelineTests
                     (_, container) => container
                         .WithContainerRegistry(registry)
                         .WithRemoteImageName("services/orders")
-                        .WithRemoteImageTag("preview"));
+                        .WithRemoteImageTag("candidate"));
         });
 
         await builder.AddAsync(module);
@@ -113,7 +113,7 @@ public sealed class ModuleImagePullPipelineTests
             container,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("registry.example.test/acme/services/orders:preview", references.RemoteImage);
+        Assert.Equal("registry.example.test/acme/services/orders:candidate", references.RemoteImage);
         Assert.Equal("orders-api:local", references.LocalImage);
     }
 
@@ -288,7 +288,7 @@ public sealed class ModuleImagePullPipelineTests
     {
         var builder = DistributedApplication.CreateBuilder();
         var container = builder
-            .AddContainer("orders-api", "orders-api", "preview")
+            .AddContainer("orders-api", "orders-api", "candidate")
             .WithImageRegistry("registry.example.test")
             .Resource;
 
@@ -296,7 +296,7 @@ public sealed class ModuleImagePullPipelineTests
             container,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("registry.example.test/orders-api:preview", references.RemoteImage);
+        Assert.Equal("registry.example.test/orders-api:candidate", references.RemoteImage);
         Assert.Equal(references.RemoteImage, references.LocalImage);
     }
 
@@ -306,7 +306,7 @@ public sealed class ModuleImagePullPipelineTests
         var digest = new string('a', 64);
         var builder = DistributedApplication.CreateBuilder();
         var container = builder
-            .AddContainer("orders-api", "orders-api", "preview")
+            .AddContainer("orders-api", "orders-api", "candidate")
             .WithImageRegistry("registry.example.test")
             .WithImageSHA256(digest)
             .Resource;
@@ -325,7 +325,7 @@ public sealed class ModuleImagePullPipelineTests
         var builder = DistributedApplication.CreateBuilder();
         var registry = builder.AddContainerRegistry("registry", "registry.example.test");
         var container = builder
-            .AddContainer("orders-api", "orders-api", "preview")
+            .AddContainer("orders-api", "orders-api", "candidate")
             .WithImageSHA256(new string('a', 64))
             .WithContainerRegistry(registry);
 
@@ -342,7 +342,7 @@ public sealed class ModuleImagePullPipelineTests
             "registry",
             "registry.example.test",
             "acme");
-        var container = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        var container = builder.AddContainer("orders-api", "orders-api", "candidate").Resource;
         container.Annotations.Add(new RegistryTargetAnnotation(registry.Resource));
 
         var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
@@ -350,7 +350,7 @@ public sealed class ModuleImagePullPipelineTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("registry.example.test/acme/orders-api:latest", references.RemoteImage);
-        Assert.Equal("orders-api:preview", references.LocalImage);
+        Assert.Equal("orders-api:candidate", references.LocalImage);
     }
 
     [Fact]
@@ -409,7 +409,7 @@ public sealed class ModuleImagePullPipelineTests
     public async Task Pull_reference_resolution_rejects_an_image_without_a_registry()
     {
         var builder = DistributedApplication.CreateBuilder();
-        var resource = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        var resource = builder.AddContainer("orders-api", "orders-api", "candidate").Resource;
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ModuleImagePullPipeline.ResolveImageReferencesAsync(
@@ -425,7 +425,7 @@ public sealed class ModuleImagePullPipelineTests
         var builder = DistributedApplication.CreateBuilder();
         var firstRegistry = builder.AddContainerRegistry("first", "first.example.test");
         var secondRegistry = builder.AddContainerRegistry("second", "second.example.test");
-        var container = builder.AddContainer("orders-api", "orders-api", "preview");
+        var container = builder.AddContainer("orders-api", "orders-api", "candidate");
         container.Resource.Annotations.Add(new RegistryTargetAnnotation(firstRegistry.Resource));
         container.Resource.Annotations.Add(new RegistryTargetAnnotation(secondRegistry.Resource));
         ModuleImagePullPipeline.AddPullStep(container);
@@ -445,7 +445,7 @@ public sealed class ModuleImagePullPipelineTests
             "registry",
             "registry.example.test",
             "acme");
-        var container = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        var container = builder.AddContainer("orders-api", "orders-api", "candidate").Resource;
         container.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
         {
             ContainerRegistry = registry.Resource
@@ -456,7 +456,7 @@ public sealed class ModuleImagePullPipelineTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("registry.example.test/acme/orders-api:latest", references.RemoteImage);
-        Assert.Equal("orders-api:preview", references.LocalImage);
+        Assert.Equal("orders-api:candidate", references.LocalImage);
     }
 
     [Fact]
@@ -468,7 +468,7 @@ public sealed class ModuleImagePullPipelineTests
             "environment.example.test",
             "environment");
         var resource = builder
-            .AddContainer("orders-api", "acme/orders", "preview")
+            .AddContainer("orders-api", "acme/orders", "candidate")
             .WithImageRegistry("module.example.test")
             .Resource;
         resource.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
@@ -480,7 +480,7 @@ public sealed class ModuleImagePullPipelineTests
             resource,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal("module.example.test/acme/orders:candidate", resolved.PullReference);
         Assert.Equal(resolved.PullReference, resolved.PushReference);
         Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
     }
@@ -490,7 +490,7 @@ public sealed class ModuleImagePullPipelineTests
     {
         var builder = DistributedApplication.CreateBuilder();
         var resource = builder
-            .AddContainer("orders-api", "acme/orders", "preview")
+            .AddContainer("orders-api", "acme/orders", "candidate")
             .WithImageRegistry("module.example.test")
             .Resource;
         resource.Annotations.Add(new DeploymentTargetAnnotation(new ContainerResource("deployment"))
@@ -502,7 +502,7 @@ public sealed class ModuleImagePullPipelineTests
             resource,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal("module.example.test/acme/orders:candidate", resolved.PullReference);
         Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
     }
 
@@ -511,7 +511,7 @@ public sealed class ModuleImagePullPipelineTests
     {
         var builder = DistributedApplication.CreateBuilder();
         var resource = builder
-            .AddContainer("orders-api", "acme/orders", "preview")
+            .AddContainer("orders-api", "acme/orders", "candidate")
             .WithImageRegistry("module.example.test")
             .Resource;
         resource.Annotations.Add(new ContainerRegistryReferenceAnnotation(CreateEmptyRegistry()));
@@ -520,7 +520,7 @@ public sealed class ModuleImagePullPipelineTests
             resource,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("module.example.test/acme/orders:preview", resolved.PullReference);
+        Assert.Equal("module.example.test/acme/orders:candidate", resolved.PullReference);
         Assert.Equal(ModuleImagePushTargetKind.ContainerRuntime, resolved.PushTargetKind);
     }
 
@@ -537,7 +537,7 @@ public sealed class ModuleImagePullPipelineTests
             "environment.example.test",
             "environment");
         var resource = builder
-            .AddContainer("orders-api", "acme/orders", "preview")
+            .AddContainer("orders-api", "acme/orders", "candidate")
             .WithImageRegistry("module.example.test")
             .WithContainerRegistry(explicitRegistry)
             .WithRemoteImageName("orders")
@@ -565,7 +565,7 @@ public sealed class ModuleImagePullPipelineTests
             "remote-registry",
             "remote.example.test",
             "acme");
-        var resource = builder.AddContainer("orders-api", "orders-api", "preview").Resource;
+        var resource = builder.AddContainer("orders-api", "orders-api", "candidate").Resource;
         resource.Annotations.Add(new RegistryTargetAnnotation(CreateEmptyRegistry()));
         resource.Annotations.Add(new RegistryTargetAnnotation(remoteRegistry.Resource));
 

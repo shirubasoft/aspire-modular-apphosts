@@ -8,7 +8,7 @@ namespace Aspire.Hosting.ModularAppHosts;
 internal sealed class ModuleImagePublisherAnnotation(
     string moduleName,
     string resourceName,
-    ModulePreviewResourceKind resourceKind,
+    ModuleResourceKind resourceKind,
     ModuleContainerExportOptions options,
     ModuleImagePublishPlan plan,
     string workingDirectory,
@@ -19,7 +19,7 @@ internal sealed class ModuleImagePublisherAnnotation(
 
     public string ResourceName { get; } = resourceName;
 
-    public ModulePreviewResourceKind ResourceKind { get; } = resourceKind;
+    public ModuleResourceKind ResourceKind { get; } = resourceKind;
 
     public ModuleContainerExportOptions Options { get; } = options;
 

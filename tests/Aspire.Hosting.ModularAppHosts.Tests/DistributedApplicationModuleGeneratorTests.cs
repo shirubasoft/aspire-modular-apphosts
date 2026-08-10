@@ -593,7 +593,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
             {
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
-                    module.AddResource<ExperimentalResource>("preview", context =>
+                    module.AddResource<ExperimentalResource>("candidate", context =>
                         context.ApplicationBuilder.AddResource(new ExperimentalResource(context.ResourceName)));
                 }
             }
@@ -603,7 +603,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
 
         var generated = Assert.Single(result.GeneratedSources);
         var disable = generated.IndexOf("#pragma warning disable SAMPLE001", StringComparison.Ordinal);
-        var resource = generated.IndexOf("IResourceBuilder<global::ExperimentalResource> Preview", StringComparison.Ordinal);
+        var resource = generated.IndexOf("IResourceBuilder<global::ExperimentalResource> Candidate", StringComparison.Ordinal);
         var restore = generated.IndexOf("#pragma warning restore SAMPLE001", StringComparison.Ordinal);
         Assert.True(disable >= 0);
         Assert.True(resource > disable);

@@ -240,7 +240,7 @@ public sealed class ModuleImageBuildPipelineTests
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
             "images",
             "api",
-            ModulePreviewResourceKind.Container,
+            ModuleResourceKind.Container,
             options,
             plan,
             "/work",
@@ -280,7 +280,7 @@ public sealed class ModuleImageBuildPipelineTests
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
             "images",
             declaredName,
-            ModulePreviewResourceKind.Container,
+            ModuleResourceKind.Container,
             options,
             plan,
             "/work",
