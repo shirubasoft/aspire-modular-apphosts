@@ -162,6 +162,14 @@ public sealed class PackedPackageContractTests
         Assert.True(help.IsSuccess, help.StandardError);
         Assert.Contains("publish", help.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("apply", help.StandardOutput, StringComparison.Ordinal);
+        var workflowHelp = await RunCommandAsync(
+            executable,
+            ["workflow", "dispatch", "--help"],
+            toolPath,
+            TestContext.Current.CancellationToken);
+        Assert.True(workflowHelp.IsSuccess, workflowHelp.StandardError);
+        Assert.Contains("--repository", workflowHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("--manifest", workflowHelp.StandardOutput, StringComparison.Ordinal);
 
         var githubEnvironment = Path.Combine(toolPath, "github-env");
         await File.WriteAllTextAsync(

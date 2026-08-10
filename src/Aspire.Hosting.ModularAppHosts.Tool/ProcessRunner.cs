@@ -15,7 +15,8 @@ internal sealed record ProcessInvocation(
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
     IReadOnlyDictionary<string, string?>? EnvironmentVariables = null,
-    ProcessOutputMode OutputMode = ProcessOutputMode.Stream);
+    ProcessOutputMode OutputMode = ProcessOutputMode.Stream,
+    string? StandardInput = null);
 
 internal sealed record ProcessExecutionResult(
     int ExitCode,
@@ -58,6 +59,10 @@ internal sealed class CliWrapProcessRunner(TextWriter output, TextWriter error) 
         if (invocation.EnvironmentVariables is not null)
         {
             command = command.WithEnvironmentVariables(invocation.EnvironmentVariables);
+        }
+        if (invocation.StandardInput is not null)
+        {
+            command = command.WithStandardInputPipe(PipeSource.FromString(invocation.StandardInput));
         }
 
         var result = await command.ExecuteAsync(cancellationToken).ConfigureAwait(false);

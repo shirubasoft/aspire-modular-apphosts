@@ -94,28 +94,23 @@ workflow-provided value.
 
 ## Dispatch and wait with GitHub CLI
 
-GitHub CLI 2.97 and later returns the created run URL from `gh workflow run`. Use that native
-output with `gh run watch --exit-status`; the tool does not wrap these commands:
+GitHub CLI 2.87 and later returns the created run URL from `gh workflow run`. The tool uses that
+native output, sends the manifest as JSON over standard input, and waits with
+`gh run watch --exit-status`:
 
 ```bash
-image_manifest="$(jq --compact-output . module-image-manifest.json)"
-run_url="$(
-  jq --compact-output --null-input \
-    --arg image_manifest "$image_manifest" \
-    --arg repo_a_ref main \
-    '{"image-manifest": $image_manifest, "repo-a-ref": $repo_a_ref}' |
-    gh workflow run external-e2e.yml \
-      --repo your-org/repo-a \
-      --ref main \
-      --json
-)"
-run_id="${run_url##*/}"
-gh run watch "$run_id" --repo your-org/repo-a --compact --exit-status
+modular-apphosts workflow dispatch \
+  --repository your-org/repo-a \
+  --workflow external-e2e.yml \
+  --ref main \
+  --manifest module-image-manifest.json \
+  --input repo-a-ref=main
 ```
 
-The [dispatch workflow](workflows/repo-b-dispatch.yml) records both values as step outputs and lets
-the job's `timeout-minutes` bound the wait. `gh run watch --exit-status` returns nonzero when Repo A
-fails, so Repo B naturally propagates the conclusion.
+The [dispatch workflow](workflows/repo-b-dispatch.yml) contains no custom orchestration script. The
+command writes `run-id`, `run-url`, and `conclusion` as step outputs, while the job's
+`timeout-minutes` bounds the wait. It returns the status from `gh run watch --exit-status`, so Repo
+B naturally propagates Repo A's conclusion.
 
 ## Authentication and private repositories
 
@@ -134,7 +129,7 @@ fails, so Repo B naturally propagates the conclusion.
 
 ## Troubleshooting
 
-- **No run URL is returned:** upgrade `gh` to 2.97 or newer. Do not guess the run by selecting the
+- **No run URL is returned:** upgrade `gh` to 2.87 or newer. Do not guess the run by selecting the
   repository's latest run; concurrent dispatches make that unsafe.
 - **Manifest apply has no effect:** run it in a separate step before the E2E command. GitHub does
   not expose newly appended `GITHUB_ENV` values to the step that wrote them.

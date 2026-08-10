@@ -4,12 +4,184 @@ using Aspire.Hosting.ModularAppHosts;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;
+using System.Text.Json;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
 
 public sealed class ToolApplicationTests
 {
+    [Fact]
+    public async Task Dispatch_passes_manifest_as_json_waits_and_emits_the_external_result()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "images.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner((invocation, _) => Task.FromResult(
+            invocation.Arguments.Take(2).ToArray() switch
+            {
+                ["workflow", "run"] => new ProcessExecutionResult(
+                    0,
+                    "https://github.com/acme/repo-a/actions/runs/12345\n",
+                    string.Empty),
+                ["run", "watch"] => new ProcessExecutionResult(0, string.Empty, string.Empty),
+                ["run", "view"] => new ProcessExecutionResult(
+                    0,
+                    "{\"status\":\"completed\",\"conclusion\":\"success\"," +
+                    "\"url\":\"https://github.com/acme/repo-a/actions/runs/12345\"}",
+                    string.Empty),
+                _ => throw new InvalidOperationException("Unexpected process invocation.")
+            }));
+        var githubActions = Substitute.For<ICoreService>();
+
+        var (exitCode, output, error, _) = await RunAsync(
+            directory,
+            [
+                "workflow", "dispatch",
+                "--repository", "acme/repo-a",
+                "--workflow", "external-e2e.yml",
+                "--ref", "main",
+                "--manifest", manifestPath,
+                "--input", "repo-a-ref=candidate"
+            ],
+            runner,
+            new Dictionary<string, string?>
+            {
+                ["GITHUB_OUTPUT"] = Path.Combine(directory.Path, "github-output"),
+                [$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] = "configured-gh"
+            },
+            githubActions);
+
+        Assert.Equal(ToolExitCode.Success, exitCode);
+        Assert.Empty(error);
+        Assert.Contains("12345", output, StringComparison.Ordinal);
+        Assert.Collection(
+            runner.Invocations,
+            dispatch =>
+            {
+                Assert.Equal("configured-gh", dispatch.FileName);
+                Assert.Equal(ProcessOutputMode.Capture, dispatch.OutputMode);
+                Assert.Equal(
+                    [
+                        "workflow", "run", "external-e2e.yml",
+                        "--repo", "acme/repo-a",
+                        "--json", "--ref", "main"
+                    ],
+                    dispatch.Arguments);
+                using var payload = JsonDocument.Parse(Assert.IsType<string>(dispatch.StandardInput));
+                Assert.Equal("candidate", payload.RootElement.GetProperty("repo-a-ref").GetString());
+                var manifest = ModuleImageManifestDocument.Parse(
+                    payload.RootElement.GetProperty("image-manifest").GetString()!);
+                Assert.Equal(3, manifest.Images.Count);
+            },
+            watch =>
+            {
+                Assert.Equal(
+                    ["run", "watch", "12345", "--repo", "acme/repo-a", "--compact", "--exit-status"],
+                    watch.Arguments);
+                Assert.Equal(ProcessOutputMode.Stream, watch.OutputMode);
+            },
+            view => Assert.Equal(
+                ["run", "view", "12345", "--repo", "acme/repo-a", "--json", "status,conclusion,url"],
+                view.Arguments));
+        var outputs = githubActions.ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(ICoreService.SetOutputAsync))
+            .ToDictionary(
+                call => Assert.IsType<string>(call.GetArguments()[0]),
+                call => Assert.IsType<string>(call.GetArguments()[1]),
+                StringComparer.Ordinal);
+        Assert.Equal("12345", outputs["run-id"]);
+        Assert.Equal("success", outputs["conclusion"]);
+    }
+
+    [Fact]
+    public async Task Dispatch_returns_the_external_workflow_failure_status()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "images.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner((invocation, _) => Task.FromResult(
+            invocation.Arguments.Take(2).ToArray() switch
+            {
+                ["workflow", "run"] => new ProcessExecutionResult(
+                    0,
+                    "https://github.com/acme/repo-a/actions/runs/88",
+                    string.Empty),
+                ["run", "watch"] => new ProcessExecutionResult(1, string.Empty, string.Empty),
+                ["run", "view"] => new ProcessExecutionResult(
+                    0,
+                    "{\"status\":\"completed\",\"conclusion\":\"failure\"," +
+                    "\"url\":\"https://github.com/acme/repo-a/actions/runs/88\"}",
+                    string.Empty),
+                _ => throw new InvalidOperationException("Unexpected process invocation.")
+            }));
+
+        var (exitCode, output, error, _) = await RunAsync(
+            directory,
+            [
+                "workflow", "dispatch",
+                "--repository", "acme/repo-a",
+                "--workflow", "external-e2e.yml",
+                "--manifest", manifestPath
+            ],
+            runner);
+
+        Assert.Equal(1, exitCode);
+        Assert.Empty(error);
+        Assert.Contains("failure", output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1, "", "dispatch rejected")]
+    [InlineData(0, "workflow created", "")]
+    public async Task Dispatch_reports_operational_failures(
+        int dispatchExitCode,
+        string standardOutput,
+        string standardError)
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "images.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner((_, _) => Task.FromResult(
+            new ProcessExecutionResult(dispatchExitCode, standardOutput, standardError)));
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            [
+                "workflow", "dispatch",
+                "--repository", "acme/repo-a",
+                "--workflow", "external-e2e.yml",
+                "--manifest", manifestPath
+            ],
+            runner);
+
+        Assert.Equal(ToolExitCode.Failure, exitCode);
+        Assert.NotEmpty(error);
+        Assert.Single(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task Dispatch_validates_the_complete_GitHub_input_payload()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "images.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+
+        var (exitCode, _, error, runner) = await RunAsync(
+            directory,
+            [
+                "workflow", "dispatch",
+                "--repository", "acme/repo-a",
+                "--workflow", "external-e2e.yml",
+                "--manifest", manifestPath,
+                "--input", $"extra={new string('x', ModuleImageManifestDocument.MaximumJsonLength)}"
+            ]);
+
+        Assert.Equal(ToolExitCode.Usage, exitCode);
+        Assert.Contains("complete workflow input payload", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(runner.Invocations);
+    }
+
     [Fact]
     public async Task Apply_writes_full_environment_with_global_then_resource_tag_precedence()
     {

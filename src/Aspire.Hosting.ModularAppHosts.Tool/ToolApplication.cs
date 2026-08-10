@@ -52,11 +52,21 @@ internal static class ToolApplication
             workingDirectory,
             output,
             error);
+        var workflowService = new WorkflowCommandService(
+            processRunner,
+            configuration,
+            githubActions,
+            workingDirectory,
+            output,
+            error);
         var root = new RootCommand("Workflow tooling for Aspire modular AppHosts.");
         var manifest = new Command("manifest", "Creates and consumes workflow image manifests.");
         manifest.Subcommands.Add(CreatePublishCommand(service));
         manifest.Subcommands.Add(CreateApplyCommand(service));
         root.Subcommands.Add(manifest);
+        var workflow = new Command("workflow", "Orchestrates external GitHub Actions workflows.");
+        workflow.Subcommands.Add(CreateDispatchCommand(workflowService));
+        root.Subcommands.Add(workflow);
 
         var parseResult = root.Parse(args);
         try
@@ -170,6 +180,62 @@ internal static class ToolApplication
             parse.GetValue(json),
             parse.GetValue(tag),
             parse.GetValue(resourceTags) ?? [],
+            cancellationToken));
+        return command;
+    }
+
+    private static Command CreateDispatchCommand(WorkflowCommandService service)
+    {
+        var repository = new Option<string>("--repository")
+        {
+            Description = "Target repository in [HOST/]OWNER/REPO form.",
+            Required = true
+        };
+        var workflow = new Option<string>("--workflow")
+        {
+            Description = "Target workflow file name, ID, or name.",
+            Required = true
+        };
+        var reference = new Option<string?>("--ref")
+        {
+            Description = "Target branch or tag containing the workflow. Defaults to the repository default branch."
+        };
+        var manifest = new Option<string>("--manifest")
+        {
+            Description = "Module image manifest file passed to the target workflow.",
+            Required = true
+        };
+        var manifestInput = new Option<string>("--manifest-input")
+        {
+            Description = "Target workflow input that receives the manifest.",
+            DefaultValueFactory = _ => "image-manifest"
+        };
+        var inputs = new Option<string[]>("--input")
+        {
+            Description = "Additional workflow input in <name>=<value> form. Repeat for multiple inputs.",
+            AllowMultipleArgumentsPerToken = true
+        };
+        var githubCliPath = new Option<string>("--gh-path")
+        {
+            Description = "GitHub CLI executable path.",
+            DefaultValueFactory = _ => service.DefaultGitHubCliPath
+        };
+        var command = new Command("dispatch", "Dispatches a workflow, waits for it, and returns its result.");
+        command.Options.Add(repository);
+        command.Options.Add(workflow);
+        command.Options.Add(reference);
+        command.Options.Add(manifest);
+        command.Options.Add(manifestInput);
+        command.Options.Add(inputs);
+        command.Options.Add(githubCliPath);
+        command.SetAction((parse, cancellationToken) => service.DispatchAsync(
+            parse.GetRequiredValue(repository),
+            parse.GetRequiredValue(workflow),
+            parse.GetValue(reference),
+            parse.GetRequiredValue(manifest),
+            parse.GetRequiredValue(manifestInput),
+            parse.GetValue(inputs) ?? [],
+            parse.GetRequiredValue(githubCliPath),
             cancellationToken));
         return command;
     }
