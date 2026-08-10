@@ -128,6 +128,11 @@ internal sealed class ModuleApplicationRegistry(
         {
             configure(Options);
         }
+
+        if (configuration is not null)
+        {
+            WorkflowImageOverrideLoader.Apply(configuration, Options);
+        }
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)

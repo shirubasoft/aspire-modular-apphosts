@@ -907,6 +907,152 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Workflow_image_identity_wins_last_and_avoids_the_imported_project_repository()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        var workflow =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:{WorkflowImageOverrideLoader.SectionName}:0";
+        builder.Configuration[$"{workflow}:Module"] = "orders";
+        builder.Configuration[$"{workflow}:Resource"] = "orders-api";
+        builder.Configuration[$"{workflow}:ResourceKind"] = nameof(ModuleResourceKind.Project);
+        builder.Configuration[$"{workflow}:Registry"] = "workflow.example.test";
+        builder.Configuration[$"{workflow}:Repository"] = "acme/orders-api";
+        builder.Configuration[$"{workflow}:Tag"] = "candidate";
+        var configured = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api";
+        builder.Configuration[$"{configured}:ImageRegistry"] = "configuration.example.test";
+        builder.Configuration[$"{configured}:ImageName"] = "configuration/orders-api";
+        builder.Configuration[$"{configured}:ImageTag"] = "configuration";
+        builder.Configuration[$"{configured}:ProjectMode"] = nameof(ModuleProjectMode.Project);
+        builder.Configuration[$"{configured}:PublishImage"] = "true";
+        builder.ConfigureModularAppHosts(options =>
+        {
+            var module = options.FindModule("orders")!;
+            var project = module.FindProject("orders-api")!;
+            project.ImageRegistry = "callback.example.test";
+            project.ImageName = "callback/orders-api";
+            project.ImageTag = "callback";
+            project.ProjectMode = ModuleProjectMode.Project;
+            project.PublishImage = true;
+        });
+        await builder.DefineModuleAsync("orders", "1", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/orders.git");
+            definition.AddProject(
+                    "orders-api",
+                    "src/Orders.Api/Orders.Api.csproj",
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("declared/orders-api", "dotnet", ["publish"]);
+            definition.AddContainer("cache", "redis", "7");
+        });
+        var importOptions = new ModuleImportOptions { ResourcePrefix = "external-" };
+        importOptions.ResourceAliases["orders-api"] = "external-api";
+
+        await builder.ImportModuleAsync("orders", importOptions);
+
+        Assert.Empty(builder.Resources.OfType<ProjectResource>());
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var containers = builder.Resources.OfType<ContainerResource>().ToDictionary(resource => resource.Name);
+        var api = containers["external-api"];
+        var image = Assert.Single(api.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("workflow.example.test", image.Registry);
+        Assert.Equal("acme/orders-api", image.Image);
+        Assert.Equal("candidate", image.Tag);
+        Assert.Equal(
+            ImagePullPolicy.Always,
+            Assert.Single(api.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        Assert.Empty(api.Annotations.OfType<ModuleImagePublisherAnnotation>());
+
+        var cacheImage = Assert.Single(containers["external-cache"].Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Null(cacheImage.Registry);
+        Assert.Equal("redis", cacheImage.Image);
+        Assert.Equal("7", cacheImage.Tag);
+    }
+
+    [Fact]
+    public async Task Workflow_image_identities_disable_declared_and_factory_container_publishers()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        ConfigureWorkflowImage(0, "declared", "acme/declared");
+        ConfigureWorkflowImage(1, "factory", "acme/factory");
+        var module = await builder.ExportModuleAsync("assets", definition =>
+        {
+            definition.AddContainer("declared", "local/declared", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "local/declared",
+                    "docker",
+                    "build")
+                {
+                    ImageTag = "dev"
+                });
+            definition.AddResource<ContainerResource>(
+                "factory",
+                context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+                new ModuleContainerExportOptions("local/factory", "docker", "build")
+                {
+                    ImageTag = "dev"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var containers = builder.Resources.OfType<ContainerResource>().OrderBy(resource => resource.Name).ToArray();
+        Assert.Collection(
+            containers,
+            container => AssertWorkflowContainer(container, "acme/declared"),
+            container => AssertWorkflowContainer(container, "acme/factory"));
+        return;
+
+        void ConfigureWorkflowImage(int index, string resource, string repository)
+        {
+            var section =
+                $"{ModularAppHostsOptions.ConfigurationSectionName}:" +
+                $"{WorkflowImageOverrideLoader.SectionName}:{index}";
+            builder.Configuration[$"{section}:Module"] = "assets";
+            builder.Configuration[$"{section}:Resource"] = resource;
+            builder.Configuration[$"{section}:ResourceKind"] = nameof(ModuleResourceKind.Container);
+            builder.Configuration[$"{section}:Registry"] = "workflow.example.test";
+            builder.Configuration[$"{section}:Repository"] = repository;
+            builder.Configuration[$"{section}:Tag"] = "candidate";
+        }
+
+        static void AssertWorkflowContainer(ContainerResource container, string repository)
+        {
+            var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+            Assert.Equal("workflow.example.test", image.Registry);
+            Assert.Equal(repository, image.Image);
+            Assert.Equal("candidate", image.Tag);
+            Assert.Empty(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+            Assert.Equal(
+                ImagePullPolicy.Always,
+                Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        }
+    }
+
+    [Fact]
+    public async Task Workflow_image_override_rejects_an_unknown_declared_resource()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:{WorkflowImageOverrideLoader.SectionName}:0";
+        builder.Configuration[$"{section}:Module"] = "assets";
+        builder.Configuration[$"{section}:Resource"] = "missing";
+        builder.Configuration[$"{section}:ResourceKind"] = nameof(ModuleResourceKind.Container);
+        builder.Configuration[$"{section}:Tag"] = "candidate";
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.ExportModuleAsync("assets", definition =>
+                definition.AddContainer("declared", "redis", "7")));
+
+        Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Available containers", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Configuration_cannot_introduce_an_undeclared_container_publisher()
     {
         using var repository = await TestRepository.CreateAsync();

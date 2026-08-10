@@ -312,7 +312,8 @@ public static partial class DistributedApplicationModuleExtensions
                     repositoryRevision,
                     cancellationToken)
                 .ConfigureAwait(false);
-        var requiresRepository = module.ProjectDefinitions.Count > 0 ||
+        var requiresRepository = module.ProjectDefinitions.Any(project =>
+                moduleOptions?.FindProject(project.Name)?.HasFullWorkflowImageOverride != true) ||
             module.ExplicitlyRequiresRepositoryContent ||
             containerPublishersRequireModuleRepository;
         ValidateModuleConfiguration(module, moduleOptions);
@@ -460,7 +461,7 @@ public static partial class DistributedApplicationModuleExtensions
             definitionRepository);
         if (repositoryResolution is not null || existingSameWorktreeRepository is not null || !imported)
         {
-            ValidateProjectFiles(module, repositoryPath);
+            ValidateProjectFiles(module, moduleOptions, repositoryPath);
         }
 
         ConfigureRepositorySynchronization(
@@ -564,13 +565,14 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         var publishImage = projectOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages;
-        var prepareImageBuild = builder.ExecutionContext.IsRunMode
-            ? publishImage
-            : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-                Environment.GetCommandLineArgs(),
-                module.Name,
-                project.Name,
-                resourceName);
+        var prepareImageBuild = projectOptions?.HasFullWorkflowImageOverride != true &&
+            (builder.ExecutionContext.IsRunMode
+                ? publishImage
+                : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
+                    Environment.GetCommandLineArgs(),
+                    module.Name,
+                    project.Name,
+                    resourceName));
         var acquisition = await TryAcquireImageBeforeBuildRepositoryAsync(
             builder,
             module,
@@ -654,17 +656,21 @@ public static partial class DistributedApplicationModuleExtensions
                 publishPlan.ImageTag,
                 GetConfiguredValue(projectOptions?.ImageSHA256)));
         export.ConfigureContainer?.Invoke(context, container);
-        container.WithAnnotation(new ModuleImagePublisherAnnotation(
-            module.Name,
-            project.Name,
-            ModuleResourceKind.Project,
-            effectiveExportOptions,
-            publishPlan,
-            publishWorkingDirectory,
-            effectiveExportOptions.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
-            effectiveExportOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
-        ModuleImageBuildPipeline.AddBuildStep(container);
-        ModuleImagePushPipeline.AddPushStep(container);
+        if (projectOptions?.HasFullWorkflowImageOverride != true)
+        {
+            container.WithAnnotation(new ModuleImagePublisherAnnotation(
+                module.Name,
+                project.Name,
+                ModuleResourceKind.Project,
+                effectiveExportOptions,
+                publishPlan,
+                publishWorkingDirectory,
+                effectiveExportOptions.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
+                effectiveExportOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
+            ModuleImageBuildPipeline.AddBuildStep(container);
+            ModuleImagePushPipeline.AddPushStep(container);
+        }
+
         ModuleImagePullPipeline.AddPullStep(container);
 
         ApplyImageSHA256(container, projectOptions?.ImageSHA256);
@@ -708,13 +714,14 @@ public static partial class DistributedApplicationModuleExtensions
         ValidatePublishOverrides(definition, containerOptions);
         var publishImage = definition.ImagePublishOptions is not null &&
             (containerOptions?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
-        var prepareImageBuild = builder.ExecutionContext.IsRunMode
-            ? publishImage
-            : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-                Environment.GetCommandLineArgs(),
-                module.Name,
-                definition.Name,
-                resourceName);
+        var prepareImageBuild = containerOptions?.HasFullWorkflowImageOverride != true &&
+            (builder.ExecutionContext.IsRunMode
+                ? publishImage
+                : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
+                    Environment.GetCommandLineArgs(),
+                    module.Name,
+                    definition.Name,
+                    resourceName));
         var acquisition = definition.ImagePublishOptions is null
             ? null
             : await TryAcquireImageBeforeBuildRepositoryAsync(
@@ -795,7 +802,7 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(containerOptions?.ImageSHA256)));
         definition.ConfigureContainer?.Invoke(context, container);
 
-        if (publishPlan is not null)
+        if (publishPlan is not null && containerOptions?.HasFullWorkflowImageOverride != true)
         {
             container.WithAnnotation(new ModuleImagePublisherAnnotation(
                 module.Name,
@@ -912,13 +919,14 @@ public static partial class DistributedApplicationModuleExtensions
             nameof(IDistributedApplicationModuleBuilder.AddResource));
         var publishImage = definition.ImagePublishOptions is not null &&
             (configured?.PublishImage ?? moduleOptions?.PublishImages ?? options.PublishImages);
-        var prepareImageBuild = builder.ExecutionContext.IsRunMode
-            ? publishImage
-            : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-                Environment.GetCommandLineArgs(),
-                module.Name,
-                definition.Name,
-                resourceName);
+        var prepareImageBuild = configured?.HasFullWorkflowImageOverride != true &&
+            (builder.ExecutionContext.IsRunMode
+                ? publishImage
+                : ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
+                    Environment.GetCommandLineArgs(),
+                    module.Name,
+                    definition.Name,
+                    resourceName));
         var acquisition = definition.ImagePublishOptions is null
             ? null
             : await TryAcquireImageBeforeBuildRepositoryAsync(
@@ -1003,17 +1011,20 @@ public static partial class DistributedApplicationModuleExtensions
                 ApplyImagePullPolicy(
                     container,
                     configured?.ImagePullPolicy ?? (publishImage ? ImagePullPolicy.Never : null));
-                container.WithAnnotation(new ModuleImagePublisherAnnotation(
-                    module.Name,
-                    definition.Name,
-                    ModuleResourceKind.Container,
-                    publishOptions!,
-                    publishPlan,
-                    publishWorkingDirectory!,
-                    publishOptions!.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
-                    publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
-                ModuleImageBuildPipeline.AddBuildStep(container);
-                ModuleImagePushPipeline.AddPushStep(container);
+                if (configured?.HasFullWorkflowImageOverride != true)
+                {
+                    container.WithAnnotation(new ModuleImagePublisherAnnotation(
+                        module.Name,
+                        definition.Name,
+                        ModuleResourceKind.Container,
+                        publishOptions!,
+                        publishPlan,
+                        publishWorkingDirectory!,
+                        publishOptions!.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
+                        publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
+                    ModuleImageBuildPipeline.AddBuildStep(container);
+                    ModuleImagePushPipeline.AddPushStep(container);
+                }
             }
 
             ModuleImagePullPipeline.AddPullStep(container);
@@ -1618,7 +1629,7 @@ public static partial class DistributedApplicationModuleExtensions
                     progress),
                 progress => LogRepositoryProgress(logger, progress)).ConfigureAwait(false);
 
-            ValidateProjectFiles(module, repositoryPath);
+            ValidateProjectFiles(module, registry.Options.FindModule(module.Name), repositoryPath);
         });
     }
 
@@ -1640,6 +1651,7 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleImagePushPipeline.ConfigureResourceSelection(builder);
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
+        ModuleImageManifestPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
         builder.Eventing.Subscribe<BeforeStartEvent>((_, _) =>
@@ -1870,9 +1882,11 @@ public static partial class DistributedApplicationModuleExtensions
 
     private static void ValidateProjectFiles(
         DistributedApplicationModule module,
+        DistributedApplicationModuleOptions? moduleOptions,
         string repositoryPath)
     {
-        foreach (var project in module.ProjectDefinitions)
+        foreach (var project in module.ProjectDefinitions.Where(project =>
+                     moduleOptions?.FindProject(project.Name)?.HasFullWorkflowImageOverride != true))
         {
             var relativePath = project.GetRepositoryRelativeProjectPath();
             var materializedPath = PathSafety.GetContainedPath(repositoryPath, relativePath, nameof(project.ProjectPath));
