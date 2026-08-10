@@ -1,4 +1,4 @@
-# Multi-repository E2E sample
+# Multi-repository and workflow-image E2E sample
 
 This sample proves that an Aspire module contract can define a container whose Docker build inputs
 live in a different Git repository. CI packs `Spire.ModuleContract`, removes its source and the
@@ -11,6 +11,13 @@ The contract declares:
 - `bash build-image.sh <resolved-image-reference>` as its image build command;
 - module-scoped `IOptions<SpireModuleOptions>` for the build repository and optional revision; and
 - an `appsettings.json` default that uses the checked-in build fixture without environment variables.
+
+It also provides two AppHosts for the cross-repository workflow:
+
+- `Spire.Producer.AppHost` represents Repo B, builds the module image, and exposes its remote
+  registry identity to `modular-apphosts manifest publish`.
+- `Spire.Consumer.AppHost` represents Repo A. A full workflow manifest makes it pull the producer's
+  image even when the producer build repository is unavailable.
 
 [`ResourceBuildRepository`](ResourceBuildRepository) is source material for the independent
 repository used by the fixture. It owns only a Dockerfile, its build script, and the HTTP health and
@@ -40,6 +47,14 @@ The validation restores the contract package into an isolated consumer, verifies
 checkout's independent producer origin, checks the expected Docker image and producer-owned
 `/health.txt` marker, and stops the AppHost cleanly.
 
+A second CI job starts an ordinary local registry service and uses only the packed tool's commands:
+
+1. `manifest publish` runs the producer AppHost pipeline and writes the exact pushed identity plus
+   GitHub step outputs.
+2. `manifest apply` writes the consumer configuration to `GITHUB_ENV`.
+3. `Spire.Consumer.Tests` starts the consumer AppHost with a deliberately missing build repository
+   and verifies `/marker.txt` from the image that Repo B published.
+
 ## Run manually
 
 From the repository root, start the AppHost. Its normal configuration points the module at the
@@ -49,6 +64,18 @@ checked-in build fixture, and the build script selects a running Docker or Podma
 cd samples/MultiRepoE2E/Spire.Consumer.AppHost
 aspire run
 ```
+
+The producer AppHost is independently runnable in the same way:
+
+```bash
+cd samples/MultiRepoE2E/Spire.Producer.AppHost
+aspire run
+```
+
+To reproduce the manifest handoff, start a registry at `localhost:5000`, install the
+`modular-apphosts` tool, publish through the producer, apply to a GitHub environment-format file,
+then expose those keys before starting the consumer. The repository CI workflow is the executable
+reference; the cross-repository guide shows the script-free GitHub Actions form.
 
 For an independent checkout or pinned build, set `BuildRepository` and
 `BuildRepositoryRevision` under

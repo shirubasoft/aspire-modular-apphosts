@@ -11,6 +11,24 @@ permissions:
   contents: read
 
 jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate workflows with actionlint 1.7.12
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: >-
+            -color
+            .github/workflows/ci.yml
+            .github/workflows/publish.yml
+            docs/workflows/repo-a-e2e.yml
+            docs/workflows/repo-b-dispatch.yml
+            docs/workflows/repo-b-workflow-call.yml
+
   release-version:
     if: >-
       vars.NUGET_PUBLISH_ENABLED == 'true' &&
@@ -247,6 +265,69 @@ jobs:
       - name: Pull scoped and complete image sets from a local registry
         run: bash samples/ImagePushE2E/test-image-pull.sh
 
+  e2e-workflow-image-handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ASPIRE_CONTAINER_RUNTIME: docker
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Install the pinned Aspire CLI
+        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+
+      - name: Restore the producer and consumer sample
+        run: dotnet restore samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
+
+      - name: Pack the workflow tool
+        run: >-
+          dotnet pack src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj
+          --configuration Release
+          --output artifacts/workflow-tool-package
+          -p:PackageVersion=0.0.0-workflow-e2e
+
+      - name: Install the packed workflow tool
+        run: >-
+          dotnet tool install
+          --tool-path artifacts/workflow-tool
+          --add-source artifacts/workflow-tool-package
+          --version 0.0.0-workflow-e2e
+          Shirubasoft.Aspire.ModularAppHosts.Tool
+
+      - name: Publish Repo B images and emit the manifest
+        id: publish-images
+        run: >-
+          artifacts/workflow-tool/modular-apphosts manifest publish
+          --apphost samples/MultiRepoE2E/Spire.Producer.AppHost
+          --all
+          --tag workflow-e2e
+          --output artifacts/workflow-image-manifest.json
+          --github-output image-manifest
+
+      - name: Apply the Repo B image manifest for Repo A
+        run: >-
+          artifacts/workflow-tool/modular-apphosts manifest apply
+          --file artifacts/workflow-image-manifest.json
+
+      - name: Run Repo A E2E tests against the overridden image
+        env:
+          WORKFLOW_IMAGE_E2E: 1
+        run: >-
+          dotnet test samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
+          --configuration Release
+
   e2e-multi-repo:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -303,15 +384,17 @@ jobs:
           resource_latest_revision="$(git -C "$resource_repository" rev-parse HEAD)"
           test "$resource_revision" != "$resource_latest_revision"
 
-          echo "MULTI_REPO_ROOT=$multi_repo_root" >> "$GITHUB_ENV"
-          echo "MULTI_REPO_APPHOST=$consumer_repository/samples/MultiRepoE2E/Spire.Consumer.AppHost" >> "$GITHUB_ENV"
-          echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository" >> "$GITHUB_ENV"
-          echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision" >> "$GITHUB_ENV"
-          echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision" >> "$GITHUB_ENV"
-          echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepository=$resource_repository" >> "$GITHUB_ENV"
-          echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepositoryRevision=$resource_revision" >> "$GITHUB_ENV"
-          echo "SpireContractPackageVersion=$package_version" >> "$GITHUB_ENV"
-          echo "RestoreAdditionalProjectSources=$package_feed" >> "$GITHUB_ENV"
+          {
+            echo "MULTI_REPO_ROOT=$multi_repo_root"
+            echo "MULTI_REPO_APPHOST=$consumer_repository/samples/MultiRepoE2E/Spire.Consumer.AppHost"
+            echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository"
+            echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision"
+            echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision"
+            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepository=$resource_repository"
+            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepositoryRevision=$resource_revision"
+            echo "SpireContractPackageVersion=$package_version"
+            echo "RestoreAdditionalProjectSources=$package_feed"
+          } >> "$GITHUB_ENV"
 
       - name: Restore the isolated package consumer
         run: dotnet restore "$MULTI_REPO_APPHOST"

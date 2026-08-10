@@ -20,7 +20,10 @@ public static partial class SpireModule
                 $"Configure '{module.ConfigurationSection.Path}:BuildRepository'.");
         }
 
-        module.AddContainer(ApiResourceName, ImageName)
+        var image = string.IsNullOrWhiteSpace(options.ImageRegistry)
+            ? ImageName
+            : $"{options.ImageRegistry}/{ImageName}";
+        module.AddContainer(ApiResourceName, image)
             .WithImagePublishCommand(new ModuleContainerExportOptions(
                 imageName: ImageName,
                 publishCommand: "bash",
@@ -30,6 +33,7 @@ public static partial class SpireModule
                     ModuleContainerExportOptions.ImageReferencePlaceholder
                 ])
             {
+                ImageRegistry = options.ImageRegistry,
                 BuildRepository = options.BuildRepository,
                 BuildRepositoryRevision = options.BuildRepositoryRevision,
                 WorkingDirectory = "."
@@ -46,4 +50,6 @@ public sealed class SpireModuleOptions
     public string BuildRepository { get; set; } = string.Empty;
 
     public string? BuildRepositoryRevision { get; set; }
+
+    public string? ImageRegistry { get; set; }
 }

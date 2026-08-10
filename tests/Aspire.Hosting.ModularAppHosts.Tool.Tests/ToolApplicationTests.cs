@@ -1,5 +1,6 @@
 using Aspire.Hosting.ModularAppHosts;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;
+using System.Text.Json;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
@@ -262,6 +263,216 @@ public sealed class ToolApplicationTests
         Assert.Empty(error.ToString());
     }
 
+    [Fact]
+    public async Task Dispatch_passes_compact_json_waits_and_writes_fixed_outputs()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        var githubOutput = Path.Combine(directory.Path, "github-output");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = CreateSuccessfulGitHubRunner();
+        var environment = new FakeEnvironment(directory.Path, new Dictionary<string, string>
+        {
+            ["GITHUB_OUTPUT"] = githubOutput
+        });
+
+        var (exitCode, output, error, _) = await RunAsync(
+            directory,
+            [
+                "workflow", "dispatch",
+                "--repository", "acme/repo-a",
+                "--workflow", "e2e.yml",
+                "--ref", "main",
+                "--manifest", manifestPath,
+                "--input", "scenario=smoke",
+                "--gh-path", "custom-gh"
+            ],
+            runner,
+            environment);
+
+        Assert.Equal(ToolExitCode.Success, exitCode);
+        Assert.Empty(error);
+        Assert.Contains("123", output, StringComparison.Ordinal);
+        Assert.Collection(
+            runner.Invocations,
+            invocation => Assert.Equal(["--version"], invocation.Arguments),
+            invocation => Assert.Equal(["auth", "status", "--active"], invocation.Arguments),
+            invocation =>
+            {
+                Assert.Equal("custom-gh", invocation.FileName);
+                Assert.Equal(
+                    ["workflow", "run", "e2e.yml", "--repo", "acme/repo-a", "--ref", "main", "--json"],
+                    invocation.Arguments);
+                using var payload = JsonDocument.Parse(invocation.StandardInput!);
+                Assert.Equal("smoke", payload.RootElement.GetProperty("scenario").GetString());
+                var transmittedManifest = payload.RootElement.GetProperty("image-manifest").GetString();
+                Assert.NotNull(transmittedManifest);
+                Assert.Equal(3, ModuleImageManifestDocument.Parse(transmittedManifest).Images.Count);
+            },
+            invocation => Assert.Equal(
+                ["run", "watch", "123", "--repo", "acme/repo-a", "--compact"],
+                invocation.Arguments),
+            invocation => Assert.Equal(
+                ["run", "view", "123", "--repo", "acme/repo-a", "--json", "conclusion,databaseId,url"],
+                invocation.Arguments));
+        var values = await ReadGitHubFileAsync(githubOutput);
+        Assert.Equal(["conclusion", "manifest", "manifest-path", "run-id", "run-url"], values.Keys.Order());
+        Assert.Equal("success", values["conclusion"]);
+        Assert.Equal("123", values["run-id"]);
+        Assert.Equal("https://github.com/acme/repo-a/actions/runs/123", values["run-url"]);
+        Assert.Equal(Path.GetFullPath(manifestPath), values["manifest-path"]);
+    }
+
+    [Theory]
+    [InlineData("success", ToolExitCode.Success)]
+    [InlineData("failure", ToolExitCode.TargetFailure)]
+    [InlineData("cancelled", ToolExitCode.TargetFailure)]
+    public async Task Dispatch_maps_target_conclusion(string conclusion, int expectedExitCode)
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = CreateSuccessfulGitHubRunner(conclusion);
+
+        var (exitCode, _, _, _) = await RunAsync(
+            directory,
+            DispatchArguments(manifestPath),
+            runner);
+
+        Assert.Equal(expectedExitCode, exitCode);
+    }
+
+    [Fact]
+    public async Task Dispatch_maps_usage_authentication_and_github_failures()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+
+        var oldVersion = new FakeProcessRunner((_, _) => Task.FromResult(
+            new ProcessExecutionResult(0, "gh version 2.96.0", string.Empty)));
+        var (usageExit, _, _, _) = await RunAsync(directory, DispatchArguments(manifestPath), oldVersion);
+        Assert.Equal(ToolExitCode.Usage, usageExit);
+
+        var authentication = new FakeProcessRunner((invocation, _) => Task.FromResult(
+            invocation.Arguments[0] == "--version"
+                ? new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty)
+                : new ProcessExecutionResult(1, string.Empty, "not authenticated")));
+        var (authenticationExit, _, _, _) = await RunAsync(
+            directory,
+            DispatchArguments(manifestPath),
+            authentication);
+        Assert.Equal(ToolExitCode.AuthenticationFailure, authenticationExit);
+
+        var githubFailure = new FakeProcessRunner((invocation, _) => Task.FromResult(
+            invocation.Arguments[0] switch
+            {
+                "--version" => new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty),
+                "auth" => new ProcessExecutionResult(0, string.Empty, string.Empty),
+                _ => new ProcessExecutionResult(1, string.Empty, "dispatch failed")
+            }));
+        var (githubExit, _, _, _) = await RunAsync(
+            directory,
+            DispatchArguments(manifestPath),
+            githubFailure);
+        Assert.Equal(ToolExitCode.GitHubFailure, githubExit);
+    }
+
+    [Fact]
+    public async Task Dispatch_rejects_oversized_total_input_payload_before_github_preflight()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var arguments = DispatchArguments(manifestPath)
+            .Concat(["--input", $"notes={new string('x', 65_535)}"])
+            .ToArray();
+
+        var (exitCode, _, error, runner) = await RunAsync(directory, arguments);
+
+        Assert.Equal(ToolExitCode.Usage, exitCode);
+        Assert.Contains("65535", error, StringComparison.Ordinal);
+        Assert.Empty(runner.Invocations);
+    }
+
+    [Fact]
+    public async Task Dispatch_timeout_cancels_the_external_run()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
+        {
+            if (invocation.Arguments[0] == "--version")
+            {
+                return new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty);
+            }
+
+            if (invocation.Arguments.Take(2).SequenceEqual(["workflow", "run"]))
+            {
+                return new ProcessExecutionResult(
+                    0,
+                    "https://github.com/acme/repo-a/actions/runs/123",
+                    string.Empty);
+            }
+
+            if (invocation.Arguments.Take(2).SequenceEqual(["run", "watch"]))
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+        var arguments = DispatchArguments(manifestPath).Concat(["--timeout", "00:00:00.05"]).ToArray();
+
+        var (exitCode, _, _, _) = await RunAsync(directory, arguments, runner);
+
+        Assert.Equal(ToolExitCode.Timeout, exitCode);
+        Assert.Contains(runner.Invocations, invocation =>
+            invocation.Arguments.Take(2).SequenceEqual(["run", "cancel"]));
+    }
+
+    [Fact]
+    public async Task Dispatch_interruption_cancels_the_external_run()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestPath = Path.Combine(directory.Path, "manifest.json");
+        await CreateManifest().SaveAsync(manifestPath, TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
+        {
+            if (invocation.Arguments[0] == "--version")
+            {
+                return new ProcessExecutionResult(0, "gh version 2.97.0", string.Empty);
+            }
+
+            if (invocation.Arguments.Take(2).SequenceEqual(["workflow", "run"]))
+            {
+                return new ProcessExecutionResult(
+                    0,
+                    "https://github.com/acme/repo-a/actions/runs/123",
+                    string.Empty);
+            }
+
+            if (invocation.Arguments.Take(2).SequenceEqual(["run", "watch"]))
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var (exitCode, _, _, _) = await RunAsync(
+            directory,
+            DispatchArguments(manifestPath),
+            runner,
+            cancellationToken: cancellation.Token);
+
+        Assert.Equal(ToolExitCode.Interrupted, exitCode);
+        Assert.Contains(runner.Invocations, invocation =>
+            invocation.Arguments.Take(2).SequenceEqual(["run", "cancel"]));
+    }
+
     private static async Task<(
         int ExitCode,
         string Output,
@@ -270,7 +481,8 @@ public sealed class ToolApplicationTests
         TestDirectory directory,
         string[] args,
         FakeProcessRunner? runner = null,
-        FakeEnvironment? environment = null)
+        FakeEnvironment? environment = null,
+        CancellationToken? cancellationToken = null)
     {
         runner ??= new FakeProcessRunner((_, _) =>
             Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty)));
@@ -283,9 +495,36 @@ public sealed class ToolApplicationTests
             environment,
             output,
             error,
-            TestContext.Current.CancellationToken);
+            cancellationToken ?? TestContext.Current.CancellationToken);
         return (exitCode, output.ToString(), error.ToString(), runner);
     }
+
+    private static string[] DispatchArguments(string manifestPath) =>
+    [
+        "workflow", "dispatch",
+        "--repository", "acme/repo-a",
+        "--workflow", "e2e.yml",
+        "--ref", "main",
+        "--manifest", manifestPath
+    ];
+
+    private static FakeProcessRunner CreateSuccessfulGitHubRunner(string conclusion = "success") =>
+        new((invocation, _) => Task.FromResult(invocation.Arguments[0] switch
+        {
+            "--version" => new ProcessExecutionResult(0, "gh version 2.97.0 (2026-07-31)", string.Empty),
+            "auth" => new ProcessExecutionResult(0, string.Empty, string.Empty),
+            "workflow" => new ProcessExecutionResult(
+                0,
+                "https://github.com/acme/repo-a/actions/runs/123",
+                string.Empty),
+            "run" when invocation.Arguments[1] == "watch" =>
+                new ProcessExecutionResult(0, string.Empty, string.Empty),
+            "run" when invocation.Arguments[1] == "view" => new ProcessExecutionResult(
+                0,
+                $$"""{"conclusion":"{{conclusion}}","databaseId":123,"url":"https://github.com/acme/repo-a/actions/runs/123"}""",
+                string.Empty),
+            _ => throw new InvalidOperationException("Unexpected GitHub CLI invocation.")
+        }));
 
     private static ModuleImageManifestDocument CreateManifest()
     {

@@ -1,0 +1,70 @@
+name: Validate Repo B in Repo A
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        description: Tag used for Repo B images
+        required: false
+        type: string
+      repo-a-image-tag:
+        description: Optional tag Repo A applies after receiving the manifest
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  external-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MODULE_IMAGE_TAG: ${{ inputs.image-tag || github.sha }}
+      REPO_A_REF: ${{ vars.REPO_A_E2E_REF || 'main' }}
+      GH_TOKEN: ${{ secrets.REPO_A_ACTIONS_TOKEN }}
+
+    steps:
+      - name: Check out Repo B
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Log in to the image registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Aspire
+        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+
+      - name: Install the modular AppHost tool
+        run: dotnet tool install --global Shirubasoft.Aspire.ModularAppHosts.Tool
+
+      - name: Publish selected Repo B images
+        id: images
+        run: >-
+          modular-apphosts manifest publish
+          --apphost src/RepoB.AppHost
+          --selector orders
+          --tag "$MODULE_IMAGE_TAG"
+          --output module-image-manifest.json
+          --github-output manifest
+
+      - name: Dispatch Repo A and propagate its conclusion
+        run: >-
+          modular-apphosts workflow dispatch
+          --repository your-org/repo-a
+          --workflow external-e2e.yml
+          --ref "$REPO_A_REF"
+          --manifest "${{ steps.images.outputs.manifest-path }}"
+          --input "repo-a-ref=$REPO_A_REF"
+          --input "image-tag=${{ inputs.repo-a-image-tag }}"
+          --timeout 00:30:00
