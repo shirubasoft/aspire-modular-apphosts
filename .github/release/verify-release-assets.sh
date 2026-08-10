@@ -23,12 +23,14 @@ fi
 package_ids=(
   Shirubasoft.Aspire.ModularAppHosts
   Shirubasoft.Aspire.ModularAppHosts.Testing
+  Shirubasoft.Aspire.ModularAppHosts.Tool
   Shirubasoft.Aspire.ModularAppHosts.Templates
 )
 
 symbol_package_ids=(
   Shirubasoft.Aspire.ModularAppHosts
   Shirubasoft.Aspire.ModularAppHosts.Testing
+  Shirubasoft.Aspire.ModularAppHosts.Tool
 )
 
 for package_id in "${package_ids[@]}"; do

@@ -14,6 +14,7 @@ public sealed class PackedPackageContractTests
 {
     private const string CorePackageId = "Shirubasoft.Aspire.ModularAppHosts";
     private const string TestingPackageId = "Shirubasoft.Aspire.ModularAppHosts.Testing";
+    private const string ToolPackageId = "Shirubasoft.Aspire.ModularAppHosts.Tool";
     private const string TemplatePackageId = "Shirubasoft.Aspire.ModularAppHosts.Templates";
     private const string MinimumSupportedSdkVersion = "10.0.100";
     private static readonly SemaphoreSlim PackageBuildLock = new(1, 1);
@@ -64,6 +65,7 @@ public sealed class PackedPackageContractTests
                  {
                      packages.CorePackagePath,
                      packages.TestingPackagePath,
+                     packages.ToolPackagePath,
                      packages.TemplatePackagePath
                  })
         {
@@ -75,6 +77,7 @@ public sealed class PackedPackageContractTests
 
         Assert.True(File.Exists(packages.CoreSymbolPackagePath));
         Assert.True(File.Exists(packages.TestingSymbolPackagePath));
+        Assert.True(File.Exists(packages.ToolSymbolPackagePath));
     }
 
     [Fact]
@@ -95,6 +98,10 @@ public sealed class PackedPackageContractTests
             packages.TestingPackagePath,
             "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll",
             packages.OutputPath));
+        Assert.Equal(expectedVersion, ReadAssemblyVersion(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/Shirubasoft.Aspire.ModularAppHosts.Tool.dll",
+            packages.OutputPath));
         Assert.StartsWith(packages.Version, ReadInformationalVersion(
             packages.CorePackagePath,
             "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.dll"),
@@ -107,6 +114,72 @@ public sealed class PackedPackageContractTests
             packages.TestingPackagePath,
             "lib/net10.0/Shirubasoft.Aspire.ModularAppHosts.Testing.dll"),
             StringComparison.Ordinal);
+        Assert.StartsWith(packages.Version, ReadInformationalVersion(
+            packages.ToolPackagePath,
+            "tools/net10.0/any/Shirubasoft.Aspire.ModularAppHosts.Tool.dll"),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Packed_tool_installs_launches_and_applies_a_manifest()
+    {
+        var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
+        var toolPath = _workspace.CreateDirectory("installed-tool");
+        var nugetConfig = Path.Combine(toolPath, "NuGet.Config");
+        new XDocument(
+            new XElement("configuration",
+                new XElement("packageSources",
+                    new XElement("clear"),
+                    new XElement("add",
+                        new XAttribute("key", "package-tests"),
+                        new XAttribute("value", packages.OutputPath)),
+                    new XElement("add",
+                        new XAttribute("key", "nuget.org"),
+                        new XAttribute("value", "https://api.nuget.org/v3/index.json")))))
+            .Save(nugetConfig);
+        await RunDotNetAsync(
+            packages.RepositoryRoot,
+            TestContext.Current.CancellationToken,
+            "tool",
+            "install",
+            ToolPackageId,
+            "--version",
+            packages.Version,
+            "--tool-path",
+            toolPath,
+            "--configfile",
+            nugetConfig);
+        var executable = Path.Combine(
+            toolPath,
+            OperatingSystem.IsWindows() ? "modular-apphosts.exe" : "modular-apphosts");
+
+        var help = await RunCommandAsync(
+            executable,
+            ["manifest", "--help"],
+            toolPath,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(help.IsSuccess, help.StandardError);
+        Assert.Contains("publish", help.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("apply", help.StandardOutput, StringComparison.Ordinal);
+
+        var githubEnvironment = Path.Combine(toolPath, "github-env");
+        const string manifest =
+            "{\"schemaVersion\":1,\"images\":[{\"module\":\"orders\",\"resource\":\"api\"," +
+            "\"resourceKind\":\"project\",\"registry\":\"registry.example.test\"," +
+            "\"repository\":\"acme/orders\",\"tag\":\"candidate\",\"digest\":null}]}";
+        var apply = await RunCommandAsync(
+            executable,
+            ["manifest", "apply", "--json", manifest, "--github-env", githubEnvironment],
+            toolPath,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(apply.IsSuccess, apply.StandardError);
+        var environmentFile = await File.ReadAllTextAsync(
+            githubEnvironment,
+            TestContext.Current.CancellationToken);
+        Assert.Contains("Aspire__ModularAppHosts__WorkflowImageOverrides__0__Module=orders", environmentFile);
+        Assert.Contains("Aspire__ModularAppHosts__WorkflowImageOverrides__0__Tag=candidate", environmentFile);
     }
 
     [Fact]
@@ -364,6 +437,17 @@ public sealed class PackedPackageContractTests
                 repositoryRoot,
                 cancellationToken,
                 "pack",
+                "src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj",
+                "--configuration",
+                "Release",
+                "--no-restore",
+                "--output",
+                outputPath,
+                $"-p:Version={version}");
+            await RunDotNetAsync(
+                repositoryRoot,
+                cancellationToken,
+                "pack",
                 "src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj",
                 "--configuration",
                 "Release",
@@ -389,9 +473,11 @@ public sealed class PackedPackageContractTests
                 version,
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TestingPackageId}.{version}.nupkg"),
+                Path.Combine(outputPath, $"{ToolPackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{TemplatePackageId}.{version}.nupkg"),
                 Path.Combine(outputPath, $"{CorePackageId}.{version}.snupkg"),
-                Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"));
+                Path.Combine(outputPath, $"{TestingPackageId}.{version}.snupkg"),
+                Path.Combine(outputPath, $"{ToolPackageId}.{version}.snupkg"));
         }
         finally
         {
@@ -623,6 +709,17 @@ public sealed class PackedPackageContractTests
             result.StandardOutput + Environment.NewLine + result.StandardError);
     }
 
+    private static Task<BufferedCommandResult> RunCommandAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        CancellationToken cancellationToken) =>
+        CliCommand.Wrap(executable)
+            .WithArguments(arguments)
+            .WithWorkingDirectory(workingDirectory)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(cancellationToken);
+
     private static string FindRepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -644,9 +741,11 @@ public sealed class PackedPackageContractTests
         string Version,
         string CorePackagePath,
         string TestingPackagePath,
+        string ToolPackagePath,
         string TemplatePackagePath,
         string CoreSymbolPackagePath,
-        string TestingSymbolPackagePath);
+        string TestingSymbolPackagePath,
+        string ToolSymbolPackagePath);
 
     private sealed record PackageDependency(string Id, string Version);
 
