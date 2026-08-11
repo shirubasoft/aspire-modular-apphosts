@@ -563,6 +563,8 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 Existing clean imported repositories with a configured upstream update by default. Clean local branches without an upstream and dirty checkouts are left unchanged. Set `UpdateRepository` or `UpdateImportedRepositories` to `false` where a checkout must remain fixed. Resource-level `UpdateBuildRepository` and `AutoCloneBuildRepository` independently override those policies for a separate image-build checkout. Image build commands remain opt-in through `PublishImage`/`PublishImages`. Image, command, build-repository, and build-revision settings override a publisher declared by `ExportAsContainer` or `WithImagePublishCommand`; configuration cannot introduce an undeclared publisher. `PublishImage: false` skips the run-only installer and leaves image acquisition to the configured pull policy; an explicit tag or digest also avoids resolving an unused build repository.
 
+A complete external image identity—registry, repository name, and exactly one tag or digest with `PublishImage: false`—also removes that resource's source dependency. When every source-backed image publisher in an imported module is external-image-only, the remaining resources are repository-independent, and the module does not call `RequiresRepository()`, a declared definition repository remains contract metadata: the AppHost does not discover, prepare, or synchronize it, and `RepositoryBasePath` remains untouched. `manifest apply` configures this mode for every listed publisher. Projects running in `Project` mode, uncovered image publishers, and factories explicitly marked with `RequiresRepository()` still materialize the source they consume.
+
 Configured module, project, and container names are validated against exported definitions. A typo fails with the missing name and the available names instead of being silently ignored. With sibling discovery enabled, every specialized `AddProject` path is also checked after discovery or cloning; an absent service project fails with its module name, resource name, and expected path.
 
 The same options can be changed in code before materializing a module:
@@ -605,6 +607,8 @@ Managed repositories default to:
 
 For example, module `orders` from `acme/orders` uses `acme-orders-orders`. The repository owner and name keep repositories with the same final path segment distinct, while the module component keeps multiple contracts from one repository distinct. Names that would collapse to the same filesystem/resource slug receive a stable suffix instead of sharing a checkout or parameter accidentally.
 
+When a managed checkout is actually materialized, its base receives minimal `Directory.Build.props`, `Directory.Build.targets`, and `Directory.Packages.props` files plus an inert `Directory.Build.rsp`. These atomically published boundaries prevent a consumer repository's MSBuild and central package policy from leaking into independently owned checkouts while preserving any nearer files committed by each producer repository. Existing boundary files supplied at a custom base path are left unchanged. Move shared build policy that producers still require into each producer repository, or pre-provision custom boundary files that explicitly import that policy before mounting the base read-only.
+
 Override the base directory through the options section:
 
 ```json
@@ -621,7 +625,7 @@ Repository values supplied through `Aspire:ModularAppHosts:Modules:<module>:Repo
 
 `RepositoryBasePath` remains an AppHost option because its value is needed while the resource model is being constructed, before unresolved parameters are presented by the interaction service.
 
-Repository synchronization is keyed by the canonical Git root and shared across modules. When multiple modules belong to the same checkout, the AppHost's module registry executes one synchronization task and routes its buffered progress to the first module resource's log stream. Automatic fast-forward updates run only for branches that track an upstream; a clean local-only branch is preserved just like a dirty checkout.
+Existing repository synchronization is keyed by the canonical Git root and shared across modules, including nested logical roots and symbolic-link aliases. A not-yet-created managed checkout is keyed by its collision-free destination path. When multiple modules belong to the same checkout, the AppHost's module registry executes one synchronization task and routes its buffered progress to the first module resource's log stream. Automatic fast-forward updates run only for branches that track an upstream; a clean local-only branch is preserved just like a dirty checkout.
 
 Project paths declared with `ModuleProjectPathBase.Repository` and repository-relative publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
 

@@ -26,14 +26,23 @@ public sealed class ExternalImageTests
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TestTimeout);
-        var unavailableRepository = Path.Combine(
+        var unavailableDefinitionRepository = Path.Combine(
             Path.GetTempPath(),
-            $"missing-workflow-image-source-{Guid.NewGuid():N}");
+            $"missing-workflow-image-definition-{Guid.NewGuid():N}");
+        var unavailableBuildRepository = Path.Combine(
+            Path.GetTempPath(),
+            $"missing-workflow-image-build-{Guid.NewGuid():N}");
+        var unavailableManagedBase = Path.Combine(
+            Path.GetTempPath(),
+            $"missing-workflow-image-managed-{Guid.NewGuid():N}");
         await using var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.Spire_Consumer_AppHost>(
                 [
+                    $"Aspire:ModularAppHosts:RepositoryBasePath={unavailableManagedBase}",
+                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:DefinitionRepository=" +
+                    unavailableDefinitionRepository,
                     $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:BuildRepository=" +
-                    unavailableRepository
+                    unavailableBuildRepository
                 ],
                 timeout.Token);
         await using var application = await builder.BuildAsync(timeout.Token)
@@ -48,6 +57,8 @@ public sealed class ExternalImageTests
         var marker = await client.GetStringAsync("/marker.txt", timeout.Token);
 
         Assert.Equal("multi-repo-resource-pinned-revision", marker.Trim());
-        Assert.False(Directory.Exists(unavailableRepository));
+        Assert.False(Directory.Exists(unavailableDefinitionRepository));
+        Assert.False(Directory.Exists(unavailableBuildRepository));
+        Assert.False(Directory.Exists(unavailableManagedBase));
     }
 }

@@ -106,6 +106,10 @@ dotnet tool run modular-apphosts -- manifest apply \
 launches the command after `--` with that configuration. It does not invoke a shell or modify the
 parent process, so the exact invocation works locally and in CI. Projects run in container mode,
 listed resources do not publish locally, and `ImagePullPolicy.Always` prevents a stale local tag.
+When every source-backed image publisher is covered and the module does not explicitly require
+repository content, even a repository declared by the module contract is not discovered, prepared,
+or cloned; the receiving AppHost uses the contract assembly for its resource model and the manifest
+for images.
 Normal `IConfiguration` precedence still applies; later code configuration can intentionally replace
 a workflow override. Standard input and output are streamed, and the child exit code is returned.
 

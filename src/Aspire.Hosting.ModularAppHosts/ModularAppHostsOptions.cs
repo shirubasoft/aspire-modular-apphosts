@@ -15,7 +15,8 @@ public sealed class ModularAppHostsOptions
 
     /// <summary>
     /// Gets or sets the parent directory for managed repository checkouts. When omitted,
-    /// <c>&lt;AppHost&gt;/.aspire/module-repositories</c> is used.
+    /// <c>&lt;AppHost&gt;/.aspire/module-repositories</c> is used. Repository materialization creates
+    /// MSBuild boundary files in this directory while external-image-only modules leave it untouched.
     /// </summary>
     public string? RepositoryBasePath { get; set; }
 

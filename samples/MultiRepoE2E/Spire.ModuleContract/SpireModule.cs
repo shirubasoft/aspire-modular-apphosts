@@ -19,10 +19,16 @@ public static partial class SpireModule
             throw new InvalidOperationException(
                 $"Configure '{module.ConfigurationSection.Path}:BuildRepository'.");
         }
+        if (string.IsNullOrWhiteSpace(options.DefinitionRepository))
+        {
+            throw new InvalidOperationException(
+                $"Configure '{module.ConfigurationSection.Path}:DefinitionRepository'.");
+        }
 
         var image = string.IsNullOrWhiteSpace(options.ImageRegistry)
             ? ImageName
             : $"{options.ImageRegistry}/{ImageName}";
+        module.WithRepository(options.DefinitionRepository);
         module.AddContainer(ApiResourceName, image)
             .WithImagePublishCommand(new ModuleContainerExportOptions(
                 imageName: ImageName,
@@ -47,6 +53,8 @@ public static partial class SpireModule
 
 public sealed class SpireModuleOptions
 {
+    public string DefinitionRepository { get; set; } = string.Empty;
+
     public string BuildRepository { get; set; } = string.Empty;
 
     public string? BuildRepositoryRevision { get; set; }

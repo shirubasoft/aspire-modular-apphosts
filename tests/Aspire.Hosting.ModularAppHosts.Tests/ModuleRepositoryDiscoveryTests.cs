@@ -159,7 +159,7 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
-    public async Task Same_repository_remote_is_discovered_without_cloning()
+    public async Task Repository_independent_module_does_not_inspect_its_declared_repository()
     {
         using var repository = TemporaryDirectory.Create();
         var appHostDirectory = Path.Combine(repository.Path, "AppHost");
@@ -175,6 +175,8 @@ public sealed class ModuleRepositoryDiscoveryTests
 
         var builder = CreateBuilder(appHostDirectory);
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitExecutablePath"] =
+            Path.Combine(repository.Path, "missing-git");
         builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
             Path.Combine(repository.Path, "missing-gh");
         var module = await builder.ExportModuleAsync("consumer", definition =>
@@ -188,7 +190,59 @@ public sealed class ModuleRepositoryDiscoveryTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var annotation = Assert.Single(
             container.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>());
-        Assert.Equal(repository.Path, annotation.RepositoryPath);
+        Assert.Equal(appHostDirectory, annotation.RepositoryPath);
+    }
+
+    [Fact]
+    public async Task Existing_aliases_for_one_checkout_share_synchronization_policy()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var workspace = TemporaryDirectory.Create();
+        var appHostRoot = Path.Combine(workspace.Path, "consumer");
+        var appHostDirectory = Path.Combine(appHostRoot, "AppHost");
+        var producer = Path.Combine(workspace.Path, "producer");
+        var firstAlias = Path.Combine(workspace.Path, "producer-first");
+        var secondAlias = Path.Combine(workspace.Path, "producer-second");
+        Directory.CreateDirectory(appHostDirectory);
+        Directory.CreateDirectory(producer);
+        File.WriteAllText(Path.Combine(appHostRoot, "README.md"), "consumer");
+        File.WriteAllText(Path.Combine(producer, "README.md"), "producer");
+        await InitializeGitAsync(appHostRoot, "main");
+        await InitializeGitAsync(producer, "main");
+        Directory.CreateSymbolicLink(firstAlias, producer);
+        Directory.CreateSymbolicLink(secondAlias, producer);
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:first:UpdateRepository"] = "true";
+        builder.Configuration[
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:second:UpdateRepository"] = "false";
+        await builder.ExportModuleAsync("first", definition =>
+        {
+            definition.WithRepository(firstAlias);
+            definition.RequiresRepository();
+            definition.AddContainer("first-cache", "redis", "alpine");
+        });
+        await builder.ExportModuleAsync("second", definition =>
+        {
+            definition.WithRepository(secondAlias);
+            definition.RequiresRepository();
+            definition.AddContainer("second-cache", "redis", "alpine");
+        });
+        await builder.ImportModuleAsync("first");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.ImportModuleAsync("second"));
+
+        Assert.Contains("conflicting", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            nameof(DistributedApplicationModuleOptions.UpdateRepository),
+            exception.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -329,6 +383,107 @@ public sealed class ModuleRepositoryDiscoveryTests
         Assert.Null(await RepositoryInspector.TryGetBranchAsync(
             annotation.RepositoryPath,
             cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.props")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.targets")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Packages.props")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.ResponseBoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.rsp")));
+    }
+
+    [Fact]
+    public void Managed_repository_boundary_preserves_explicit_MSBuild_configuration()
+    {
+        using var imports = TemporaryDirectory.Create();
+        var existingProps = Path.Combine(imports.Path, "Directory.Build.props");
+        const string existingContents = "<Project><PropertyGroup><Custom>true</Custom></PropertyGroup></Project>";
+        File.WriteAllText(existingProps, existingContents);
+        var existingResponse = Path.Combine(imports.Path, "Directory.Build.rsp");
+        const string existingResponseContents = "-property:Custom=true";
+        File.WriteAllText(existingResponse, existingResponseContents);
+
+        ManagedRepositoryIsolation.EnsureBoundary(imports.Path);
+
+        Assert.Equal(existingContents, File.ReadAllText(existingProps));
+        Assert.Equal(existingResponseContents, File.ReadAllText(existingResponse));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.targets")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Packages.props")));
+    }
+
+    [Fact]
+    public void Managed_repository_boundary_is_published_atomically_across_concurrent_writers()
+    {
+        using var imports = TemporaryDirectory.Create();
+
+        Parallel.For(0, 64, _ => ManagedRepositoryIsolation.EnsureBoundary(imports.Path));
+
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.props")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.targets")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Packages.props")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.ResponseBoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.rsp")));
+        Assert.Empty(Directory.EnumerateFiles(imports.Path, ".*.tmp"));
+    }
+
+    [Fact]
+    public async Task Managed_repository_boundary_blocks_parent_MSBuild_policy()
+    {
+        using var consumer = TemporaryDirectory.Create();
+        var repositoryBase = Path.Combine(consumer.Path, ".aspire", "module-repositories");
+        var producer = Path.Combine(repositoryBase, "producer");
+        Directory.CreateDirectory(producer);
+        File.WriteAllText(
+            Path.Combine(consumer.Path, "Directory.Build.props"),
+            "<Project><PropertyGroup><ConsumerPropsLeak>true</ConsumerPropsLeak></PropertyGroup></Project>");
+        File.WriteAllText(
+            Path.Combine(consumer.Path, "Directory.Build.targets"),
+            "<Project><Target Name=\"ConsumerTargetLeak\" BeforeTargets=\"Probe\">" +
+            "<Error Text=\"Consumer Directory.Build.targets leaked.\" /></Target></Project>");
+        File.WriteAllText(
+            Path.Combine(consumer.Path, "Directory.Packages.props"),
+            "<Project><PropertyGroup><ConsumerPackagesLeak>true</ConsumerPackagesLeak></PropertyGroup></Project>");
+        File.WriteAllText(
+            Path.Combine(consumer.Path, "Directory.Build.rsp"),
+            "-property:ConsumerResponseLeak=true");
+        var projectPath = Path.Combine(producer, "Producer.proj");
+        File.WriteAllText(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Target Name="Probe">
+                <Error Condition="'$(ConsumerPropsLeak)' == 'true'" Text="Consumer Directory.Build.props leaked." />
+                <Error Condition="'$(ConsumerPackagesLeak)' == 'true'" Text="Consumer Directory.Packages.props leaked." />
+                <Error Condition="'$(ConsumerResponseLeak)' == 'true'" Text="Consumer Directory.Build.rsp leaked." />
+              </Target>
+            </Project>
+            """);
+        ManagedRepositoryIsolation.EnsureBoundary(repositoryBase);
+
+        var result = await CliCommand.Wrap("dotnet")
+            .WithArguments(["msbuild", projectPath, "-target:Probe", "-nologo", "-verbosity:quiet"])
+            .WithWorkingDirectory(producer)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(TestContext.Current.CancellationToken)
+            .ConfigureAwait(false);
+
+        Assert.True(result.IsSuccess, $"{result.StandardOutput}{Environment.NewLine}{result.StandardError}");
     }
 
     [Fact]
@@ -381,6 +536,63 @@ public sealed class ModuleRepositoryDiscoveryTests
             cancellationToken: TestContext.Current.CancellationToken));
         Assert.Null(await RepositoryInspector.TryGetBranchAsync(
             annotation.RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Missing_pinned_imports_nested_under_the_AppHost_repository_use_distinct_synchronization_keys()
+    {
+        using var appHostRepository = TemporaryDirectory.Create();
+        using var firstModuleRepository = TemporaryDirectory.Create();
+        using var secondModuleRepository = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(appHostRepository.Path, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHostRepository.Path, "README.md"), "consumer");
+        File.WriteAllText(Path.Combine(firstModuleRepository.Path, "README.md"), "first");
+        File.WriteAllText(Path.Combine(secondModuleRepository.Path, "README.md"), "second");
+        File.WriteAllText(Path.Combine(firstModuleRepository.Path, "First.Api.csproj"), ProjectContents);
+        File.WriteAllText(Path.Combine(secondModuleRepository.Path, "Second.Api.csproj"), ProjectContents);
+        await InitializeGitAsync(appHostRepository.Path, "consumer");
+        await InitializeGitAsync(firstModuleRepository.Path, "first");
+        await InitializeGitAsync(secondModuleRepository.Path, "second");
+        var firstRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            firstModuleRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var secondRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            secondModuleRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] =
+            Path.Combine(appHostRepository.Path, ".aspire", "module-repositories");
+        await builder.ExportModuleAsync("first", definition =>
+        {
+            definition.WithRepository(firstModuleRepository.Path, firstRevision);
+            definition.AddProject("first-api", "First.Api.csproj", ModuleProjectPathBase.Repository)
+                .ExportAsContainer("first-api", "dotnet", ["publish"]);
+        });
+        await builder.ExportModuleAsync("second", definition =>
+        {
+            definition.WithRepository(secondModuleRepository.Path, secondRevision);
+            definition.AddProject("second-api", "Second.Api.csproj", ModuleProjectPathBase.Repository)
+                .ExportAsContainer("second-api", "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync("first");
+        await builder.ImportModuleAsync("second");
+
+        var annotations = builder.Resources
+            .OfType<ContainerResource>()
+            .SelectMany(resource => resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>())
+            .OrderBy(annotation => annotation.ModuleName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, annotations.Length);
+        Assert.NotEqual(annotations[0].RepositoryPath, annotations[1].RepositoryPath);
+        Assert.Equal(firstRevision, await RepositoryInspector.TryResolveCommitAsync(
+            annotations.Single(annotation => annotation.ModuleName == "first").RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(secondRevision, await RepositoryInspector.TryResolveCommitAsync(
+            annotations.Single(annotation => annotation.ModuleName == "second").RepositoryPath,
             cancellationToken: TestContext.Current.CancellationToken));
     }
 

@@ -313,6 +313,12 @@ public static partial class DistributedApplicationModuleExtensions
                     cancellationToken)
                 .ConfigureAwait(false);
         var requiresRepository = module.ProjectDefinitions.Any(project =>
+                (builder.ExecutionContext.IsRunMode &&
+                    ResolveProjectMode(
+                        options,
+                        moduleOptions,
+                        moduleOptions?.FindProject(project.Name),
+                        imported) == ModuleProjectMode.Project) ||
                 !UsesExternalImage(moduleOptions?.FindProject(project.Name))) ||
             module.ExplicitlyRequiresRepositoryContent ||
             containerPublishersRequireModuleRepository;
@@ -321,9 +327,9 @@ public static partial class DistributedApplicationModuleExtensions
 
         var autoCloneRepository = moduleOptions?.AutoCloneRepository ?? options.AutoCloneRepositories;
         var useIsolatedRevisionCheckout = imported && !string.IsNullOrWhiteSpace(repositoryRevision);
-        var repositoryResolution = !useIsolatedRevisionCheckout &&
-            autoCloneRepository &&
-            (requiresRepository || !string.IsNullOrWhiteSpace(repository))
+        var repositoryResolution = requiresRepository &&
+            !useIsolatedRevisionCheckout &&
+            autoCloneRepository
             ? await ModuleRepositoryDiscovery.ResolveAsync(
                 builder.AppHostDirectory,
                 module,
@@ -342,7 +348,7 @@ public static partial class DistributedApplicationModuleExtensions
                 $"'{repositoryConfigurationKey}' or call WithRepository() in the module definition.");
         }
 
-        var existingSameWorktreeRepository = imported && !useIsolatedRevisionCheckout
+        var existingSameWorktreeRepository = imported && requiresRepository && !useIsolatedRevisionCheckout
             ? await TryGetExistingSameWorktreeRepositoryAsync(
                 builder.AppHostDirectory,
                 repository,
@@ -350,9 +356,9 @@ public static partial class DistributedApplicationModuleExtensions
                 options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false)
             : null;
-        var repositoryParameter = imported &&
+        var repositoryParameter = imported && requiresRepository &&
             (configuredRepository is not null ||
-                (!autoCloneRepository && requiresRepository && string.IsNullOrWhiteSpace(repository)))
+                (!autoCloneRepository && string.IsNullOrWhiteSpace(repository)))
             ? GetOrCreateRepositoryParameter(
                 builder,
                 registry,
@@ -371,14 +377,23 @@ public static partial class DistributedApplicationModuleExtensions
                     repository,
                     options,
                     cancellationToken).ConfigureAwait(false));
-        var repositorySynchronizationKey =
-            await RepositoryInspector.TryFindRepositoryRootAsync(
-                repositoryPath,
-                GetConfiguredValue(options.GitExecutablePath) ?? "git",
-                options.RepositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false) ??
-            Path.GetFullPath(repositoryPath);
-        var updateRepository =
+        var usesManagedRepositoryCheckout = imported && requiresRepository &&
+            repositoryResolution is null &&
+            existingSameWorktreeRepository is null;
+        if (usesManagedRepositoryCheckout)
+        {
+            EnsureManagedRepositoryBoundary(repositoryPath);
+        }
+
+        var repositorySynchronizationKey = requiresRepository && !usesManagedRepositoryCheckout
+            ? await RepositoryInspector.TryFindRepositoryRootAsync(
+                    repositoryPath,
+                    GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                    options.RepositoryCommandTimeout,
+                    cancellationToken).ConfigureAwait(false) ??
+                Path.GetFullPath(repositoryPath)
+            : Path.GetFullPath(repositoryPath);
+        var updateRepository = requiresRepository &&
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
             existingSameWorktreeRepository is null;
@@ -386,7 +401,7 @@ public static partial class DistributedApplicationModuleExtensions
             updateRepository,
             repositoryRevision);
 
-        var synchronizationRequired =
+        var synchronizationRequired = requiresRepository &&
             ((repositoryResolution?.UsesSiblingLayout == true && !string.IsNullOrWhiteSpace(repositoryRevision)) ||
              (builder.ExecutionContext.IsRunMode && imported) ||
              (imported && factoryRequiresRepository)) &&
@@ -465,20 +480,23 @@ public static partial class DistributedApplicationModuleExtensions
             ValidateProjectFiles(module, moduleOptions, repositoryPath);
         }
 
-        ConfigureRepositorySynchronization(
-            builder,
-            registry,
-            module,
-            repositoryPath,
-            repositorySynchronizationKey,
-            repositorySynchronizationPolicy,
-            repositoryParameter is null ? repository : null,
-            repositoryParameter,
-            imported,
-            updateRepository,
-            repositoryRevision,
-            GetConfiguredValue(options.GitExecutablePath) ?? "git",
-            options.RepositoryCommandTimeout);
+        if (requiresRepository)
+        {
+            ConfigureRepositorySynchronization(
+                builder,
+                registry,
+                module,
+                repositoryPath,
+                repositorySynchronizationKey,
+                repositorySynchronizationPolicy,
+                repositoryParameter is null ? repository : null,
+                repositoryParameter,
+                imported,
+                updateRepository,
+                repositoryRevision,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                options.RepositoryCommandTimeout);
+        }
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -1331,12 +1349,20 @@ public static partial class DistributedApplicationModuleExtensions
                 options,
                 effectiveRepository,
                 $"{module.Name}-{resourceName}-build");
-        var synchronizationKey = await RepositoryInspector.TryFindRepositoryRootAsync(
-                repositoryPath,
-                gitExecutablePath,
-                options.RepositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false) ??
-            Path.GetFullPath(repositoryPath);
+        var usesManagedRepositoryCheckout = !useDirectLocalRepository && repositoryResolution is null;
+        if (usesManagedRepositoryCheckout)
+        {
+            EnsureManagedRepositoryBoundary(repositoryPath);
+        }
+
+        var synchronizationKey = usesManagedRepositoryCheckout
+            ? Path.GetFullPath(repositoryPath)
+            : await RepositoryInspector.TryFindRepositoryRootAsync(
+                    repositoryPath,
+                    gitExecutablePath,
+                    options.RepositoryCommandTimeout,
+                    cancellationToken).ConfigureAwait(false) ??
+                Path.GetFullPath(repositoryPath);
         var updateRepository = (configured?.UpdateBuildRepository ??
                 (useDirectLocalRepository
                     ? false
@@ -1464,6 +1490,14 @@ public static partial class DistributedApplicationModuleExtensions
         string? definitionRevision,
         CancellationToken cancellationToken)
     {
+        var publishers = GetContainerPublishers(module)
+            .Where(publisher => !UsesExternalImage(moduleOptions?.FindContainer(publisher.ResourceName)))
+            .ToArray();
+        if (publishers.Length == 0)
+        {
+            return false;
+        }
+
         var definitionRepositoryIdentity = definitionRepository ??
             await GetLocalRepositoryPathAsync(
                 builder,
@@ -1471,7 +1505,7 @@ public static partial class DistributedApplicationModuleExtensions
                 repository: null,
                 options,
                 cancellationToken).ConfigureAwait(false);
-        foreach (var (resourceName, declared) in GetContainerPublishers(module))
+        foreach (var (resourceName, declared) in publishers)
         {
             var configured = moduleOptions?.FindContainer(resourceName);
             var buildRepository = GetConfiguredValue(configured?.BuildRepository) ??
@@ -1717,12 +1751,19 @@ public static partial class DistributedApplicationModuleExtensions
             builder.Configuration[$"Parameters:{RepositoryBaseLocationParameterName}"];
         var defaultLocation = Path.Combine(builder.AppHostDirectory, ".aspire", "module-repositories");
         var baseLocation = Path.GetFullPath(configuredLocation ?? defaultLocation, builder.AppHostDirectory);
-        Directory.CreateDirectory(baseLocation);
         var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(
             repository,
             moduleName,
             builder.AppHostDirectory);
         return Path.Combine(baseLocation, canonicalName);
+    }
+
+    private static void EnsureManagedRepositoryBoundary(string repositoryPath)
+    {
+        var repositoryBasePath = Path.GetDirectoryName(repositoryPath)
+            ?? throw new InvalidOperationException(
+                $"Unable to determine the managed repository base for '{repositoryPath}'.");
+        ManagedRepositoryIsolation.EnsureBoundary(repositoryBasePath);
     }
 
     private static IResourceBuilder<ParameterResource> GetOrCreateRepositoryParameter(
