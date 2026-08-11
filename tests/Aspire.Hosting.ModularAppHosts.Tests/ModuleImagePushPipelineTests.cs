@@ -130,6 +130,59 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public async Task Clean_publisher_resolves_a_branch_alias_in_the_remote_repository()
+    {
+        var resource = await CreateBranchAliasResourceAsync("feature-orders", repositoryDirty: false);
+        var resolved = new ModuleEffectiveImage(
+            "orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            ModuleImagePushTargetKind.AspireRegistry,
+            null,
+            "orders-api",
+            "candidate",
+            null,
+            new ModuleRemoteImage(
+                "registry.example.test",
+                "acme/orders-api",
+                "candidate",
+                "registry.example.test/acme/orders-api:candidate"));
+
+        var alias = ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved);
+
+        Assert.Equal("registry.example.test/acme/orders-api:feature-orders", alias);
+    }
+
+    [Theory]
+    [InlineData(true, "feature-orders", "candidate")]
+    [InlineData(false, null, "candidate")]
+    [InlineData(false, "candidate", "candidate")]
+    public async Task Branch_alias_is_skipped_when_it_is_not_safe_or_distinct(
+        bool repositoryDirty,
+        string? branchImageTag,
+        string pushedTag)
+    {
+        var resource = await CreateBranchAliasResourceAsync(branchImageTag, repositoryDirty);
+        var reference = $"registry.example.test/acme/orders-api:{pushedTag}";
+        var resolved = new ModuleEffectiveImage(
+            "orders-api:candidate",
+            reference,
+            reference,
+            ModuleImagePushTargetKind.ContainerRuntime,
+            null,
+            "orders-api",
+            "candidate",
+            null,
+            new ModuleRemoteImage(
+                "registry.example.test",
+                "acme/orders-api",
+                pushedTag,
+                reference));
+
+        Assert.Null(ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved));
+    }
+
+    [Fact]
     public void Push_arguments_scope_the_pipeline_to_named_resources()
     {
         var selection = ModuleImagePushPipeline.GetSelection(
@@ -355,6 +408,33 @@ public sealed class ModuleImagePushPipelineTests
         return steps
             .Where(step => step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
             .ToArray();
+    }
+
+    private static async Task<ContainerResource> CreateBranchAliasResourceAsync(
+        string? branchImageTag,
+        bool repositoryDirty)
+    {
+        var resource = new ContainerResource("orders-api");
+        var options = new ModuleContainerExportOptions("orders-api", "docker", "build")
+        {
+            ImageTag = "candidate"
+        };
+        var plan = await ModuleImagePublishPlan.CreateAsync(
+            options,
+            repositoryDirty,
+            (_, _) => Task.FromResult(false),
+            TestContext.Current.CancellationToken);
+        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+            "orders",
+            "api",
+            ModuleResourceKind.Container,
+            options,
+            plan,
+            "/work",
+            "https://example.test/orders.git",
+            null,
+            branchImageTag));
+        return resource;
     }
 
     private static IDistributedApplicationBuilder CreatePublishBuilder(string projectDirectory)

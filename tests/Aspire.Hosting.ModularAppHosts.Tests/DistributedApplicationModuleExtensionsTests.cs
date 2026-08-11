@@ -1503,6 +1503,36 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Publisher_records_the_sanitized_source_branch_for_push_aliases()
+    {
+        using var repository = await TestRepository.CreateAsync(initializeGit: true);
+        await TestRepository.RunGitAsync(repository.Path, "switch", "-c", "feature/orders-api");
+        var builder = CreateBuilder(repository.Path, "--publisher", "manifest");
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:PublishImages"] = "false";
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("orders-api", "registry.example.test/orders-api", "candidate")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "orders-api",
+                    "docker",
+                    "build")
+                {
+                    ImageRegistry = "registry.example.test",
+                    ImageTag = "candidate"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var publisher = Assert.Single(
+            Assert.Single(builder.Resources.OfType<ContainerResource>())
+                .Annotations.OfType<ModuleImagePublisherAnnotation>());
+        Assert.Equal("feature-orders-api", publisher.BranchImageTag);
+        Assert.Equal("candidate", publisher.Plan.ImageTag);
+    }
+
+    [Fact]
     public async Task Publishing_disabled_with_explicit_tag_skips_missing_build_repository()
     {
         using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);

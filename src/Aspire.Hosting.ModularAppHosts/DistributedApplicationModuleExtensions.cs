@@ -434,9 +434,9 @@ public static partial class DistributedApplicationModuleExtensions
                 options.RepositoryCommandTimeout,
                 requireSuccessfulInspection: true,
                 cancellationToken).ConfigureAwait(false);
-        var defaultImageTag = !requiresRepository
-            ? "latest"
-            : await GetDefaultImageTagAsync(
+        var repositoryImageTags = !requiresRepository
+            ? new RepositoryImageTags("latest", BranchImageTag: null)
+            : await GetRepositoryImageTagsAsync(
                 builder,
                 repositoryPath,
                 options,
@@ -447,7 +447,8 @@ public static partial class DistributedApplicationModuleExtensions
             repositoryRevision,
             imported && updateRepository,
             repositoryDirty,
-            defaultImageTag,
+            repositoryImageTags.DefaultImageTag,
+            repositoryImageTags.BranchImageTag,
             UsesModuleRepository: true);
 
         ValidateResourceNames(
@@ -666,7 +667,8 @@ public static partial class DistributedApplicationModuleExtensions
                 publishPlan,
                 publishWorkingDirectory,
                 effectiveExportOptions.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
-                effectiveExportOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
+                effectiveExportOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision,
+                buildRepository.BranchImageTag));
             ModuleImageBuildPipeline.AddBuildStep(container);
             ModuleImagePushPipeline.AddPushStep(container);
         }
@@ -812,7 +814,8 @@ public static partial class DistributedApplicationModuleExtensions
                 publishPlan,
                 publishWorkingDirectory!,
                 publishOptions!.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
-                publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
+                publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision,
+                buildRepository.BranchImageTag));
             ModuleImageBuildPipeline.AddBuildStep(container);
             ModuleImagePushPipeline.AddPushStep(container);
         }
@@ -1021,7 +1024,8 @@ public static partial class DistributedApplicationModuleExtensions
                         publishPlan,
                         publishWorkingDirectory!,
                         publishOptions!.BuildRepository ?? buildRepository.Repository ?? buildRepository.RepositoryPath,
-                        publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision));
+                        publishOptions.BuildRepositoryRevision ?? buildRepository.RepositoryRevision,
+                        buildRepository.BranchImageTag));
                     ModuleImageBuildPipeline.AddBuildStep(container);
                     ModuleImagePushPipeline.AddPushStep(container);
                 }
@@ -1236,7 +1240,38 @@ public static partial class DistributedApplicationModuleExtensions
             GetConfiguredValue(declared.BuildRepositoryRevision);
         if (requestedRepository is null && requestedRevision is null)
         {
-            return definitionRepository;
+            if (!prepareBuildRepository || definitionRepository.BranchImageTag is not null)
+            {
+                return definitionRepository;
+            }
+
+            var definitionGitExecutablePath = GetConfiguredValue(options.GitExecutablePath) ?? "git";
+            if (!await RepositoryInspector.IsGitRepositoryAsync(
+                    definitionRepository.RepositoryPath,
+                    definitionGitExecutablePath,
+                    options.RepositoryCommandTimeout,
+                    cancellationToken: cancellationToken).ConfigureAwait(false))
+            {
+                return definitionRepository;
+            }
+
+            var definitionRepositoryDirty = await RepositoryInspector.IsDirtyAsync(
+                definitionRepository.RepositoryPath,
+                definitionGitExecutablePath,
+                options.RepositoryCommandTimeout,
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false);
+            var definitionRepositoryImageTags = await GetRepositoryImageTagsAsync(
+                builder,
+                definitionRepository.RepositoryPath,
+                options,
+                cancellationToken).ConfigureAwait(false);
+            return definitionRepository with
+            {
+                RepositoryDirty = definitionRepositoryDirty,
+                DefaultImageTag = definitionRepositoryImageTags.DefaultImageTag,
+                BranchImageTag = definitionRepositoryImageTags.BranchImageTag
+            };
         }
 
         var effectiveRepository = requestedRepository ??
@@ -1346,7 +1381,7 @@ public static partial class DistributedApplicationModuleExtensions
             options.RepositoryCommandTimeout,
             requireSuccessfulInspection: true,
             cancellationToken).ConfigureAwait(false);
-        var defaultImageTag = await GetDefaultImageTagAsync(
+        var repositoryImageTags = await GetRepositoryImageTagsAsync(
             builder,
             repositoryPath,
             options,
@@ -1357,7 +1392,8 @@ public static partial class DistributedApplicationModuleExtensions
             requestedRevision,
             updateRepository,
             repositoryDirty,
-            defaultImageTag,
+            repositoryImageTags.DefaultImageTag,
+            repositoryImageTags.BranchImageTag,
             UsesModuleRepository: false);
     }
 
@@ -1899,7 +1935,7 @@ public static partial class DistributedApplicationModuleExtensions
         }
     }
 
-    private static async Task<string> GetDefaultImageTagAsync(
+    private static async Task<RepositoryImageTags> GetRepositoryImageTagsAsync(
         IDistributedApplicationBuilder builder,
         string repositoryPath,
         ModularAppHostsOptions options,
@@ -1916,9 +1952,25 @@ public static partial class DistributedApplicationModuleExtensions
             gitExecutablePath,
             options.RepositoryCommandTimeout,
             cancellationToken).ConfigureAwait(false);
+        var branchForAlias = branch;
+        if (branchForAlias is null && await IsAppHostRepositoryAsync(
+                builder,
+                repositoryPath,
+                gitExecutablePath,
+                options.RepositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false))
+        {
+            branchForAlias = GetCiBranch();
+        }
+
+        var branchImageTag = string.IsNullOrWhiteSpace(branchForAlias)
+            ? null
+            : ModuleImageTag.FromBranch(branchForAlias);
         if (commit is not null)
         {
-            return ModuleImageTag.FromRepository(branch, commit);
+            return new RepositoryImageTags(
+                ModuleImageTag.FromRepository(branch, commit),
+                branchImageTag);
         }
 
         var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
@@ -1940,14 +1992,46 @@ public static partial class DistributedApplicationModuleExtensions
                 cancellationToken).ConfigureAwait(false);
             if (appHostCommit is not null)
             {
-                return ModuleImageTag.FromRepository(appHostBranch, appHostCommit);
+                var appHostBranchForAlias = appHostBranch ?? GetCiBranch();
+                return new RepositoryImageTags(
+                    ModuleImageTag.FromRepository(appHostBranch, appHostCommit),
+                    string.IsNullOrWhiteSpace(appHostBranchForAlias)
+                        ? null
+                        : ModuleImageTag.FromBranch(appHostBranchForAlias));
             }
         }
 
-        var ciBranch = GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF")) ??
-            GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
-        return ModuleImageTag.FromRepository(ciBranch, commit: null);
+        var ciBranch = GetCiBranch();
+        return new RepositoryImageTags(
+            ModuleImageTag.FromRepository(ciBranch, commit: null),
+            string.IsNullOrWhiteSpace(ciBranch) ? null : ModuleImageTag.FromBranch(ciBranch));
     }
+
+    private static async Task<bool> IsAppHostRepositoryAsync(
+        IDistributedApplicationBuilder builder,
+        string repositoryPath,
+        string gitExecutablePath,
+        TimeSpan commandTimeout,
+        CancellationToken cancellationToken)
+    {
+        var repositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            repositoryPath,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
+            builder.AppHostDirectory,
+            gitExecutablePath,
+            commandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        return repositoryRoot is not null &&
+            appHostRepositoryRoot is not null &&
+            PathSafety.AreEqual(repositoryRoot, appHostRepositoryRoot);
+    }
+
+    private static string? GetCiBranch() =>
+        GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_HEAD_REF")) ??
+        GetConfiguredValue(Environment.GetEnvironmentVariable("GITHUB_REF_NAME"));
 
     private static string FormatNames(IEnumerable<string> names)
     {
@@ -2236,7 +2320,10 @@ public static partial class DistributedApplicationModuleExtensions
         bool UpdateRepository,
         bool RepositoryDirty,
         string DefaultImageTag,
+        string? BranchImageTag,
         bool UsesModuleRepository);
+
+    private sealed record RepositoryImageTags(string DefaultImageTag, string? BranchImageTag);
 
     private sealed record ModuleImageAcquisition(
         ModuleContainerExportOptions Options,

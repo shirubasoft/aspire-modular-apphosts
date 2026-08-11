@@ -22,6 +22,7 @@ bash samples/ImagePushE2E/test-image-pull.sh
 
 `test-image-describe.sh` verifies the deterministic `module-images.json` document, including distinct
 run, pull, and push references, build metadata, a registry mapping, and a consumed image. The push
-script proves resource, `module:<name>`, and multi-module scopes, including build isolation for the
-selected publishers. The push and pull scripts create temporary local registries and validate the
-operations against them. Set `ASPIRE_CONTAINER_RUNTIME=podman` to run them with Podman.
+script proves resource, `module:<name>`, and multi-module scopes, including build isolation and the
+sanitized source-branch alias for selected publishers. The push and pull scripts create temporary
+local registries and validate the operations against them. Set `ASPIRE_CONTAINER_RUNTIME=podman` to
+run them with Podman.
