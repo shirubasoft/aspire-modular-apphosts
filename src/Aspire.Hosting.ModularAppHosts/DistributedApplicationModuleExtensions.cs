@@ -1687,7 +1687,7 @@ public static partial class DistributedApplicationModuleExtensions
             builder.Configuration[$"Parameters:{RepositoryBaseLocationParameterName}"];
         var defaultLocation = Path.Combine(builder.AppHostDirectory, ".aspire", "module-repositories");
         var baseLocation = Path.GetFullPath(configuredLocation ?? defaultLocation, builder.AppHostDirectory);
-        Directory.CreateDirectory(baseLocation);
+        ManagedRepositoryIsolation.EnsureBoundary(baseLocation);
         var canonicalName = ModuleRepositoryIdentity.GetCanonicalName(
             repository,
             moduleName,

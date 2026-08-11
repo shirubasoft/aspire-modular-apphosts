@@ -329,6 +329,34 @@ public sealed class ModuleRepositoryDiscoveryTests
         Assert.Null(await RepositoryInspector.TryGetBranchAsync(
             annotation.RepositoryPath,
             cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.props")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.targets")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Packages.props")));
+    }
+
+    [Fact]
+    public void Managed_repository_boundary_preserves_explicit_MSBuild_configuration()
+    {
+        using var imports = TemporaryDirectory.Create();
+        var existingProps = Path.Combine(imports.Path, "Directory.Build.props");
+        const string existingContents = "<Project><PropertyGroup><Custom>true</Custom></PropertyGroup></Project>";
+        File.WriteAllText(existingProps, existingContents);
+
+        ManagedRepositoryIsolation.EnsureBoundary(imports.Path);
+
+        Assert.Equal(existingContents, File.ReadAllText(existingProps));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Build.targets")));
+        Assert.Equal(
+            ManagedRepositoryIsolation.BoundaryContents,
+            File.ReadAllText(Path.Combine(imports.Path, "Directory.Packages.props")));
     }
 
     [Fact]

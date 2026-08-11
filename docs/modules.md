@@ -603,6 +603,8 @@ Managed repositories default to:
 
 For example, module `orders` from `acme/orders` uses `acme-orders-orders`. The repository owner and name keep repositories with the same final path segment distinct, while the module component keeps multiple contracts from one repository distinct. Names that would collapse to the same filesystem/resource slug receive a stable suffix instead of sharing a checkout or parameter accidentally.
 
+The managed repository base contains minimal `Directory.Build.props`, `Directory.Build.targets`, and `Directory.Packages.props` boundary files. These prevent a consumer repository's MSBuild policy from leaking into independently owned checkouts while preserving any nearer files committed by each producer repository. Existing boundary files supplied at a custom base path are left unchanged.
+
 Override the base directory through the options section:
 
 ```json
