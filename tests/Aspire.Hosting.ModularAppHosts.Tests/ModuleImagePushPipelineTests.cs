@@ -154,6 +154,33 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Equal("registry.example.test/acme/orders-api:feature-orders", alias);
     }
 
+    [Fact]
+    public async Task Detached_clean_AppHost_source_uses_its_configured_CI_branch_alias()
+    {
+        var resource = await CreateBranchAliasResourceAsync(
+            branchImageTag: null,
+            repositoryDirty: false,
+            detachedBranchAlias: "pull-request/orders");
+        var resolved = new ModuleEffectiveImage(
+            "orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            ModuleImagePushTargetKind.ContainerRuntime,
+            null,
+            "orders-api",
+            "candidate",
+            null,
+            new ModuleRemoteImage(
+                "registry.example.test",
+                "acme/orders-api",
+                "candidate",
+                "registry.example.test/acme/orders-api:candidate"));
+
+        var alias = ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved);
+
+        Assert.Equal("registry.example.test/acme/orders-api:pull-request-orders", alias);
+    }
+
     [Theory]
     [InlineData(true, "feature-orders", "candidate")]
     [InlineData(false, null, "candidate")]
@@ -413,7 +440,8 @@ public sealed class ModuleImagePushPipelineTests
 
     private static async Task<ContainerResource> CreateBranchAliasResourceAsync(
         string? branchImageTag,
-        bool repositoryDirty)
+        bool repositoryDirty,
+        string? detachedBranchAlias = null)
     {
         var resource = new ContainerResource("orders-api");
         var options = new ModuleContainerExportOptions("orders-api", "docker", "build")
@@ -431,7 +459,8 @@ public sealed class ModuleImagePushPipelineTests
             refreshCleanCheckout: false,
             "git",
             "gh",
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            detachedBranchAlias);
         var sourceState = new ModuleImageSourceState(
             branchImageTag,
             "abcdef012345",

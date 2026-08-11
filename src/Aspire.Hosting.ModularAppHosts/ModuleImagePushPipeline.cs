@@ -174,13 +174,18 @@ internal static class ModuleImagePushPipeline
         if (publisher is null ||
             !publisher.TryGetPreparedImage(out var preparedImage) ||
             preparedImage.SourceState.IsDirty ||
-            string.IsNullOrWhiteSpace(preparedImage.SourceState.Branch) ||
             resolved.PushImage is null)
         {
             return null;
         }
 
-        var branchImageTag = ModuleImageTag.FromBranch(preparedImage.SourceState.Branch);
+        var branch = preparedImage.SourceState.Branch ?? publisher.Recipe.DetachedBranchAlias;
+        if (string.IsNullOrWhiteSpace(branch))
+        {
+            return null;
+        }
+
+        var branchImageTag = ModuleImageTag.FromBranch(branch);
         var alias = $"{resolved.PushImage.Registry}/{resolved.PushImage.Repository}:{branchImageTag}";
         return string.Equals(alias, resolved.PushReference, StringComparison.OrdinalIgnoreCase)
             ? null

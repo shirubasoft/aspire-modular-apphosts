@@ -22,7 +22,8 @@ internal sealed class ModuleImageBuildRecipe
         bool refreshCleanCheckout,
         string gitExecutablePath,
         string githubCliPath,
-        TimeSpan commandTimeout)
+        TimeSpan commandTimeout,
+        string? detachedBranchAlias = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
@@ -52,6 +53,9 @@ internal sealed class ModuleImageBuildRecipe
         GitExecutablePath = gitExecutablePath;
         GitHubCliPath = githubCliPath;
         CommandTimeout = commandTimeout;
+        DetachedBranchAlias = string.IsNullOrWhiteSpace(detachedBranchAlias)
+            ? null
+            : detachedBranchAlias.Trim();
 
         var imageRepository = ModuleImageReference.GetRepository(Options);
         LocalImageReference = $"{imageRepository}:{LocalRunTag}";
@@ -78,6 +82,8 @@ internal sealed class ModuleImageBuildRecipe
     public string GitHubCliPath { get; }
 
     public TimeSpan CommandTimeout { get; }
+
+    public string? DetachedBranchAlias { get; }
 
     public string LocalImageReference { get; }
 }

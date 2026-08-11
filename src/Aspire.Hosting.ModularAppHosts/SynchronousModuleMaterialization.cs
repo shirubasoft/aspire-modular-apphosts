@@ -433,8 +433,31 @@ public static partial class DistributedApplicationModuleExtensions
             refresh,
             GetConfiguredValue(options.GitExecutablePath) ?? "git",
             GetConfiguredValue(options.GitHubCliPath) ?? "gh",
-            options.RepositoryCommandTimeout);
+            options.RepositoryCommandTimeout,
+            GetDetachedAppHostBranchAlias(builder, buildRepository));
         return new ModuleImagePublisherAnnotation(resourceKind, recipe);
+    }
+
+    private static string? GetDetachedAppHostBranchAlias(
+        IDistributedApplicationBuilder builder,
+        ModuleRepositoryContext buildRepository)
+    {
+        if (buildRepository.Revision is not null)
+        {
+            return null;
+        }
+
+        var appHostRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(builder.AppHostDirectory);
+        var buildRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(buildRepository.RepositoryPath);
+        if (appHostRepositoryRoot is null ||
+            buildRepositoryRoot is null ||
+            !PathSafety.AreEqual(appHostRepositoryRoot, buildRepositoryRoot))
+        {
+            return null;
+        }
+
+        return GetConfiguredValue(builder.Configuration["GITHUB_HEAD_REF"]) ??
+            GetConfiguredValue(builder.Configuration["GITHUB_REF_NAME"]);
     }
 
     private static void ConfigureContainerImage(
