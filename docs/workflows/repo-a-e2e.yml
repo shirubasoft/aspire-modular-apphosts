@@ -87,12 +87,12 @@ jobs:
       - name: Restore pinned repository tools
         run: dotnet tool restore
 
-      - name: Apply producer images
+      - name: Run Repo A E2E tests with producer images
         run: >-
           dotnet tool run modular-apphosts -- manifest apply
           --json "$IMAGE_MANIFEST"
           --tag "$IMAGE_TAG"
           --resource-tags "$RESOURCE_TAGS"
-
-      - name: Run Repo A E2E tests
-        run: dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
+          --
+          dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj
+          --configuration Release

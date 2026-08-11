@@ -59,9 +59,50 @@ public sealed class WorkflowDocumentationTests
         Assert.DoesNotContain("jq ", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("gh workflow run", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("gh run watch", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("GITHUB_ENV", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("GITHUB_OUTPUT", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("export Aspire__", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("--github-env", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("--github-output", workflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repo_A_workflow_runs_the_E2E_command_through_manifest_apply()
+    {
+        var workflowPath = Path.Combine(
+            FindRepositoryRoot(),
+            "docs",
+            "workflows",
+            "repo-a-e2e.yml");
+        var workflow = await File.ReadAllTextAsync(
+            workflowPath,
+            TestContext.Current.CancellationToken);
+
+        var applyIndex = workflow.IndexOf("manifest apply", StringComparison.Ordinal);
+        var commandBoundaryIndex = workflow.IndexOf("\n          --\n", StringComparison.Ordinal);
+        var testIndex = workflow.IndexOf("dotnet test", StringComparison.Ordinal);
+        Assert.True(applyIndex >= 0);
+        Assert.True(commandBoundaryIndex > applyIndex);
+        Assert.True(testIndex > commandBoundaryIndex);
+    }
+
+    [Fact]
+    public async Task Multi_repo_sample_uses_the_same_portable_apply_command()
+    {
+        var readmePath = Path.Combine(
+            FindRepositoryRoot(),
+            "samples",
+            "MultiRepoE2E",
+            "README.md");
+        var readme = await File.ReadAllTextAsync(
+            readmePath,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("manifest apply", readme, StringComparison.Ordinal);
+        Assert.Contains("--file artifacts/manual-workflow-image-manifest.json", readme, StringComparison.Ordinal);
+        Assert.Contains("dotnet test", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("GITHUB_ENV", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("export Aspire__", readme, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

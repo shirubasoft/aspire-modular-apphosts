@@ -17,11 +17,18 @@ internal sealed class ManifestCommandService(
         string? json,
         string? tag,
         string resourceTags,
+        string[] command,
+        bool hasCommandSeparator,
         CancellationToken cancellationToken)
     {
         if ((file is null) == (json is null))
         {
             throw new ToolUsageException("Specify exactly one of --file or --json.");
+        }
+
+        if (!hasCommandSeparator || command.Length == 0 || string.IsNullOrWhiteSpace(command[0]))
+        {
+            throw new ToolUsageException("Specify a command to run after '--'.");
         }
 
         var document = file is not null
@@ -30,24 +37,20 @@ internal sealed class ManifestCommandService(
                 cancellationToken).ConfigureAwait(false)
             : ModuleImageManifestDocument.Parse(json!);
         new ManifestTagOverrides(tag, resourceTags).Apply(document);
-        if (string.IsNullOrWhiteSpace(configuration["GITHUB_ENV"]))
-        {
-            throw new ToolUsageException(
-                "GITHUB_ENV is not configured. Run this command from a GitHub Actions step.");
-        }
-
-        foreach (var (key, value) in ModuleImageWorkflowConfiguration.Create(document))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await githubActions.ExportVariableAsync(
-                key.Replace(":", "__", StringComparison.Ordinal),
-                value).ConfigureAwait(false);
-        }
-
-        await output.WriteLineAsync(
-            $"Applied {document.Images.Count} workflow image override(s) to subsequent steps.")
-            .ConfigureAwait(false);
-        return ToolExitCode.Success;
+        var environment = ModuleImageWorkflowConfiguration.Create(document)
+            .ToDictionary(
+                pair => pair.Key.Replace(":", "__", StringComparison.Ordinal),
+                pair => (string?)pair.Value,
+                StringComparer.Ordinal);
+        var result = await processRunner.RunAsync(
+            new ProcessInvocation(
+                command[0],
+                command[1..],
+                workingDirectory,
+                environment,
+                ProcessOutputMode.Stream),
+            cancellationToken).ConfigureAwait(false);
+        return result.ExitCode;
     }
 
     public async Task<int> PublishAsync(

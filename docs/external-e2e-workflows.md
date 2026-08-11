@@ -91,21 +91,23 @@ On GitHub Actions it automatically emits step outputs:
 
 ## Apply in Repo A
 
-Pass the manifest through an environment variable and run apply in its own step:
+Pass the manifest through an environment variable and run the E2E command through `apply`:
 
 ```bash
 dotnet tool run modular-apphosts -- manifest apply \
   --json "$IMAGE_MANIFEST" \
   --tag "$REPO_A_IMAGE_TAG" \
-  --resource-tags "$REPO_A_RESOURCE_TAGS"
+  --resource-tags "$REPO_A_RESOURCE_TAGS" \
+  -- \
+  dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
 
-`apply` uses GitHub Actions workflow commands to export the standard
-`Aspire:ModularAppHosts:Modules` option hierarchy to `GITHUB_ENV`. Those values become available to
-subsequent steps, so the E2E command must be a separate step. Projects run in container mode,
+`apply` projects the manifest into the standard `Aspire:ModularAppHosts:Modules` option hierarchy and
+launches the command after `--` with that configuration. It does not invoke a shell or modify the
+parent process, so the exact invocation works locally and in CI. Projects run in container mode,
 listed resources do not publish locally, and `ImagePullPolicy.Always` prevents a stale local tag.
-Normal `IConfiguration` precedence still applies; later code configuration can intentionally
-replace a workflow override.
+Normal `IConfiguration` precedence still applies; later code configuration can intentionally replace
+a workflow override. Standard input and output are streamed, and the child exit code is returned.
 
 The tag precedence is the same for both handoff styles:
 
@@ -180,7 +182,8 @@ B fail without a second status-mapping layer.
 
 - **No run URL is returned:** upgrade `gh` to 2.87.0 or newer. Never guess by selecting the latest
   run; concurrent dispatches make that unsafe.
-- **Apply has no effect:** ensure it runs before, not in the same step as, the E2E command.
+- **Apply has no effect:** ensure the E2E command follows `--` in the same `manifest apply`
+  invocation; configuration cannot escape into a parent shell or a later step.
 - **A tag cannot be pulled:** ensure it was pushed and that Repo A's container runtime is logged in.
 - **A resource is unknown:** use the declared `module/resource`, not an imported alias or effective
   Aspire name.

@@ -56,20 +56,22 @@ Actions, the command automatically writes these step outputs when `GITHUB_OUTPUT
 
 ## Repo A: apply images
 
-Run `apply` in a step before starting the AppHost or E2E tests:
+Run the AppHost or E2E command through `apply`. The invocation is identical locally and in CI:
 
 ```bash
 dotnet tool run modular-apphosts -- manifest apply \
   --json "$IMAGE_MANIFEST" \
   --tag "$REPO_A_IMAGE_TAG" \
-  --resource-tags "$REPO_A_RESOURCE_TAGS"
+  --resource-tags "$REPO_A_RESOURCE_TAGS" \
+  -- \
+  dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
 
-Specify exactly one of `--json` or `--file`. `apply` requires the runner-provided `GITHUB_ENV` and
-uses GitHub Actions workflow commands to export ordinary
-`Aspire:ModularAppHosts:Modules:<module>:<collection>:<resource>` configuration for subsequent
-steps. It does not read environment variables through a custom abstraction or implement GitHub's
-file-command protocol itself.
+Specify exactly one of `--json` or `--file`, then place the command and its arguments after `--`.
+`apply` launches that command directly, without a shell, and gives it ordinary
+`Aspire:ModularAppHosts:Modules:<module>:<collection>:<resource>` configuration. The caller's
+environment and working directory are inherited, while the parent shell remains unchanged. Standard
+input and output are streamed, and the child command's exit code becomes the tool's exit code.
 
 Repo A's `--tag` overrides every received tag or digest. Its `--resource-tags` JSON object wins
 last. These options select existing registry tags; they do not create or retag images.
@@ -149,7 +151,8 @@ The tool reads runner configuration through .NET `IConfiguration`. Set
 | `2` | Invalid command input, manifest, selector, tag map, or payload. |
 | `130` | The tool was interrupted. |
 
-GitHub CLI may define additional exit statuses returned by `gh run watch`.
+The command launched by `manifest apply` and GitHub CLI may define additional exit statuses that the
+tool returns unchanged.
 
 ## Security notes
 

@@ -4,6 +4,7 @@ using Aspire.Hosting.ModularAppHosts;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;
+using System.ComponentModel;
 using System.Text.Json;
 using Xunit;
 
@@ -169,7 +170,7 @@ public sealed class ToolApplicationTests
     }
 
     [Fact]
-    public async Task Apply_writes_full_environment_with_global_then_resource_tag_precedence()
+    public async Task Apply_runs_the_child_with_full_environment_and_tag_precedence()
     {
         using var directory = TestDirectory.Create();
         var document = CreateManifest();
@@ -182,19 +183,23 @@ public sealed class ToolApplicationTests
                 "manifest", "apply",
                 "--json", document.ToJson(),
                 "--tag", "global",
-                "--resource-tags", "{\"orders/api\":\"specific\"}"
+                "--resource-tags", "{\"orders/api\":\"specific\"}",
+                "--",
+                "dotnet", "test", "tests/Consumer.Tests.csproj", "--configuration", "Release"
             ],
             githubActions: githubActions);
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
-        Assert.Empty(runner.Invocations);
-        var values = githubActions.ReceivedCalls()
-            .Where(call => call.GetMethodInfo().Name == nameof(ICoreService.ExportVariableAsync))
-            .ToDictionary(
-                call => Assert.IsType<string>(call.GetArguments()[0]),
-                call => Assert.IsType<string>(call.GetArguments()[1]),
-                StringComparer.Ordinal);
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal("dotnet", invocation.FileName);
+        Assert.Equal(
+            ["test", "tests/Consumer.Tests.csproj", "--configuration", "Release"],
+            invocation.Arguments);
+        Assert.Equal(directory.Path, invocation.WorkingDirectory);
+        Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
+        var values = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string?>>(
+            invocation.EnvironmentVariables);
         const string catalog =
             "Aspire__ModularAppHosts__Modules__catalog__Projects__api";
         const string orders =
@@ -207,6 +212,9 @@ public sealed class ToolApplicationTests
         Assert.Equal(bool.FalseString, values[$"{orders}__PublishImage"]);
         Assert.Equal(nameof(ImagePullPolicy.Always), values[$"{orders}__ImagePullPolicy"]);
         Assert.Equal(nameof(ModuleProjectMode.Container), values[$"{orders}__ProjectMode"]);
+        Assert.DoesNotContain(
+            githubActions.ReceivedCalls(),
+            call => call.GetMethodInfo().Name == nameof(ICoreService.ExportVariableAsync));
     }
 
     [Theory]
@@ -217,6 +225,7 @@ public sealed class ToolApplicationTests
         using var directory = TestDirectory.Create();
         var args = new List<string> { "manifest", "apply" };
         args.AddRange(sourceArguments);
+        args.AddRange(["--", "test-command"]);
 
         var (exitCode, _, error, _) = await RunAsync(directory, [.. args]);
 
@@ -225,17 +234,30 @@ public sealed class ToolApplicationTests
     }
 
     [Fact]
-    public async Task Apply_requires_the_GitHub_Actions_environment_file_configuration()
+    public async Task Apply_requires_a_child_command()
     {
         using var directory = TestDirectory.Create();
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "apply", "--json", CreateManifest().ToJson()],
-            configurationValues: new Dictionary<string, string?>());
+            ["manifest", "apply", "--json", CreateManifest().ToJson()]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
-        Assert.Contains("GITHUB_ENV", error, StringComparison.Ordinal);
+        Assert.Contains("command", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Apply_requires_the_command_separator()
+    {
+        using var directory = TestDirectory.Create();
+
+        var (exitCode, _, error, runner) = await RunAsync(
+            directory,
+            ["manifest", "apply", "--json", CreateManifest().ToJson(), "test-command"]);
+
+        Assert.Equal(ToolExitCode.Usage, exitCode);
+        Assert.Contains("after '--'", error, StringComparison.Ordinal);
+        Assert.Empty(runner.Invocations);
     }
 
     [Theory]
@@ -251,7 +273,8 @@ public sealed class ToolApplicationTests
             [
                 "manifest", "apply",
                 "--json", CreateManifest().ToJson(),
-                "--resource-tags", resourceTags
+                "--resource-tags", resourceTags,
+                "--", "test-command"
             ]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
@@ -265,10 +288,67 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "apply", "--file", "missing.json"]);
+            ["manifest", "apply", "--file", "missing.json", "--", "test-command"]);
 
         Assert.Equal(ToolExitCode.Failure, exitCode);
         Assert.Contains("missing.json", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Apply_returns_the_child_exit_code()
+    {
+        using var directory = TestDirectory.Create();
+        var runner = new FakeProcessRunner((_, _) => Task.FromResult(
+            new ProcessExecutionResult(17, string.Empty, string.Empty)));
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            [
+                "manifest", "apply",
+                "--json", CreateManifest().ToJson(),
+                "--", "test-command", "--failing-option"
+            ],
+            runner);
+
+        Assert.Equal(17, exitCode);
+        Assert.Empty(error);
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal(["--failing-option"], invocation.Arguments);
+    }
+
+    [Fact]
+    public async Task Apply_maps_child_launch_failures_and_cancellation()
+    {
+        using var directory = TestDirectory.Create();
+        var failedRunner = new FakeProcessRunner((_, _) =>
+            Task.FromException<ProcessExecutionResult>(new Win32Exception("missing executable")));
+        var (failedExit, _, failedError, _) = await RunAsync(
+            directory,
+            [
+                "manifest", "apply",
+                "--json", CreateManifest().ToJson(),
+                "--", "missing-command"
+            ],
+            failedRunner);
+
+        Assert.Equal(ToolExitCode.Failure, failedExit);
+        Assert.Contains("missing executable", failedError, StringComparison.Ordinal);
+
+        var cancelledRunner = new FakeProcessRunner((_, cancellationToken) =>
+            Task.FromCanceled<ProcessExecutionResult>(
+                cancellationToken.IsCancellationRequested
+                    ? cancellationToken
+                    : new CancellationToken(canceled: true)));
+        var (cancelledExit, _, _, _) = await RunAsync(
+            directory,
+            [
+                "manifest", "apply",
+                "--json", CreateManifest().ToJson(),
+                "--", "test-command"
+            ],
+            cancelledRunner);
+
+        Assert.Equal(ToolExitCode.Interrupted, cancelledExit);
     }
 
     [Fact]
@@ -474,7 +554,7 @@ public sealed class ToolApplicationTests
         using var directory = TestDirectory.Create();
         var output = new StringWriter();
         var error = new StringWriter();
-        var runner = new CliWrapProcessRunner(output, error);
+        var runner = new CliWrapProcessRunner(Stream.Null, output, error);
 
         var streamed = await runner.RunAsync(
             new ProcessInvocation("dotnet", ["--version"], directory.Path),
@@ -514,7 +594,6 @@ public sealed class ToolApplicationTests
             Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty)));
         configurationValues ??= new Dictionary<string, string?>
         {
-            ["GITHUB_ENV"] = Path.Combine(directory.Path, "github-env"),
             ["GITHUB_OUTPUT"] = Path.Combine(directory.Path, "github-output")
         };
         githubActions ??= Substitute.For<ICoreService>();

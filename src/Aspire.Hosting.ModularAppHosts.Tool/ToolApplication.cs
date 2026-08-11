@@ -170,16 +170,24 @@ internal static class ToolApplication
             Description = "Per-resource tags as a JSON object keyed by <module>/<resource>.",
             DefaultValueFactory = _ => "{}"
         };
-        var command = new Command("apply", "Applies image identities to subsequent GitHub Actions steps.");
+        var childCommand = new Argument<string[]>("command")
+        {
+            Description = "Command and arguments to run with the manifest configuration; precede them with '--'.",
+            Arity = ArgumentArity.OneOrMore
+        };
+        var command = new Command("apply", "Runs a command with workflow image identities applied.");
         command.Options.Add(file);
         command.Options.Add(json);
         command.Options.Add(tag);
         command.Options.Add(resourceTags);
+        command.Arguments.Add(childCommand);
         command.SetAction((parse, cancellationToken) => service.ApplyAsync(
             parse.GetValue(file),
             parse.GetValue(json),
             parse.GetValue(tag),
             parse.GetRequiredValue(resourceTags),
+            parse.GetRequiredValue(childCommand),
+            parse.Tokens.Any(token => string.Equals(token.Value, "--", StringComparison.Ordinal)),
             cancellationToken));
         return command;
     }

@@ -15,10 +15,11 @@ internal static class Program
         using var services = new ServiceCollection()
             .AddGitHubActionsCore()
             .BuildServiceProvider();
+        using var standardInput = Console.OpenStandardInput();
 
         return await ToolApplication.RunAsync(
             args,
-            new CliWrapProcessRunner(Console.Out, Console.Error),
+            new CliWrapProcessRunner(standardInput, Console.Out, Console.Error),
             configuration,
             services.GetRequiredService<ICoreService>(),
             Directory.GetCurrentDirectory(),

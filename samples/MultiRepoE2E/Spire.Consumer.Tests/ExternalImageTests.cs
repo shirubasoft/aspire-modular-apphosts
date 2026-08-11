@@ -1,4 +1,6 @@
 using Aspire.Hosting.Testing;
+using Aspire.Hosting.ModularAppHosts;
+using Microsoft.Extensions.Configuration;
 using Spire.ModuleContract;
 using Xunit;
 
@@ -11,12 +13,16 @@ public sealed class ExternalImageTests
     [Fact]
     public async Task Consumer_runs_the_producer_image_without_its_build_repository()
     {
+        var configuration = new ConfigurationBuilder()
+            .AddEnvironmentVariables()
+            .Build();
+        var imageConfigurationKey = ModuleImageWorkflowConfiguration.GetResourceKey(
+            SpireModule.Name,
+            SpireModule.ApiResourceName,
+            ModuleResourceKind.Container);
         Assert.SkipUnless(
-            string.Equals(
-                Environment.GetEnvironmentVariable("WORKFLOW_IMAGE_E2E"),
-                "1",
-                StringComparison.Ordinal),
-            "Run through the dedicated local-registry workflow image E2E job.");
+            !string.IsNullOrWhiteSpace(configuration[$"{imageConfigurationKey}:ImageName"]),
+            "Run through modular-apphosts manifest apply with a workflow image manifest.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TestTimeout);

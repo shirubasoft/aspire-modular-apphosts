@@ -33,7 +33,10 @@ internal interface IProcessRunner
         CancellationToken cancellationToken);
 }
 
-internal sealed class CliWrapProcessRunner(TextWriter output, TextWriter error) : IProcessRunner
+internal sealed class CliWrapProcessRunner(
+    Stream input,
+    TextWriter output,
+    TextWriter error) : IProcessRunner
 {
     public async Task<ProcessExecutionResult> RunAsync(
         ProcessInvocation invocation,
@@ -60,10 +63,10 @@ internal sealed class CliWrapProcessRunner(TextWriter output, TextWriter error) 
         {
             command = command.WithEnvironmentVariables(invocation.EnvironmentVariables);
         }
-        if (invocation.StandardInput is not null)
-        {
-            command = command.WithStandardInputPipe(PipeSource.FromString(invocation.StandardInput));
-        }
+        command = command.WithStandardInputPipe(
+            invocation.StandardInput is not null
+                ? PipeSource.FromString(invocation.StandardInput)
+                : PipeSource.FromStream(input));
 
         var result = await command.ExecuteAsync(cancellationToken).ConfigureAwait(false);
         return new ProcessExecutionResult(

@@ -171,10 +171,18 @@ public sealed class PackedPackageContractTests
         Assert.Contains("--repository", workflowHelp.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("--manifest", workflowHelp.StandardOutput, StringComparison.Ordinal);
 
-        var githubEnvironment = Path.Combine(toolPath, "github-env");
+        var probeProject = Path.Combine(toolPath, "EnvironmentProbe.proj");
         await File.WriteAllTextAsync(
-            githubEnvironment,
-            string.Empty,
+            probeProject,
+            """
+            <Project>
+              <Target Name="PrintManifestConfiguration">
+                <Message Importance="high" Text="registry=$(Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageRegistry)" />
+                <Message Importance="high" Text="tag=$(Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag)" />
+                <Message Importance="high" Text="publish=$(Aspire__ModularAppHosts__Modules__orders__Projects__api__PublishImage)" />
+              </Target>
+            </Project>
+            """,
             TestContext.Current.CancellationToken);
         const string manifest =
             "{\"schemaVersion\":1,\"images\":[{\"module\":\"orders\",\"resource\":\"api\"," +
@@ -182,27 +190,18 @@ public sealed class PackedPackageContractTests
             "\"repository\":\"acme/orders\",\"tag\":\"candidate\",\"digest\":null}]}";
         var apply = await RunCommandAsync(
             executable,
-            ["manifest", "apply", "--json", manifest],
+            [
+                "manifest", "apply", "--json", manifest,
+                "--", "dotnet", "msbuild", probeProject,
+                "-target:PrintManifestConfiguration", "-verbosity:minimal", "-nologo"
+            ],
             toolPath,
-            TestContext.Current.CancellationToken,
-            new Dictionary<string, string?> { ["GITHUB_ENV"] = githubEnvironment });
+            TestContext.Current.CancellationToken);
 
         Assert.True(apply.IsSuccess, apply.StandardError);
-        var environmentFile = await File.ReadAllTextAsync(
-            githubEnvironment,
-            TestContext.Current.CancellationToken);
-        Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageRegistry<<",
-            environmentFile);
-        Assert.Contains("registry.example.test", environmentFile, StringComparison.Ordinal);
-        Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag<<",
-            environmentFile);
-        Assert.Contains("candidate", environmentFile, StringComparison.Ordinal);
-        Assert.Contains(
-            "Aspire__ModularAppHosts__Modules__orders__Projects__api__PublishImage<<",
-            environmentFile);
-        Assert.Contains(bool.FalseString, environmentFile, StringComparison.Ordinal);
+        Assert.Contains("registry=registry.example.test", apply.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("tag=candidate", apply.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("publish=False", apply.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]

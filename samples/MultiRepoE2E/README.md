@@ -49,11 +49,11 @@ checkout's independent producer origin, checks the expected Docker image and pro
 
 A second CI job starts an ordinary local registry service and uses only the packed tool's commands:
 
-1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged reference plus
-   GitHub step outputs.
-2. `manifest apply` writes the consumer configuration to `GITHUB_ENV`.
-3. `Spire.Consumer.Tests` starts the consumer AppHost with a deliberately missing build repository
-   and verifies `/marker.txt` from the image that Repo B published.
+1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged
+   reference plus GitHub step outputs.
+2. `manifest apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
+   the consumer AppHost with a deliberately missing build repository and verify `/marker.txt` from
+   the image that Repo B published.
 
 ## Run manually
 
@@ -94,19 +94,16 @@ dotnet run \
   --output artifacts/manual-workflow-image-manifest.json
 ```
 
-`manifest apply` targets GitHub Actions and therefore requires runner-provided `GITHUB_ENV`. For a
-local run, set the same standard configuration values it would export, make the producer build
-repository unavailable through the test fixture, and run the consumer test:
+Run the consumer test through `manifest apply`. This is the same command shape used in CI; no shell
+environment setup is required:
 
 ```bash
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageRegistry=localhost:5000
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageName=multi-repo-e2e-resource
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageTag=manual-e2e
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImageSHA256=
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__PublishImage=False
-export Aspire__ModularAppHosts__Modules__multi-repo-resource-build__Containers__multi-repo-api__ImagePullPolicy=Always
-export WORKFLOW_IMAGE_E2E=1
-dotnet test \
+dotnet run \
+  --project src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj \
+  -- manifest apply \
+  --file artifacts/manual-workflow-image-manifest.json \
+  -- \
+  dotnet test \
   samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj \
   --configuration Release
 ```
@@ -123,4 +120,4 @@ For an independent checkout or pinned build, set `BuildRepository` and
 `Aspire:ModularAppHosts:Modules:multi-repo-resource-build` through JSON, command-line, or another
 standard .NET configuration provider.
 
-The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, Bash, Docker, `curl`, and `jq`.
+The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, Bash, Docker, and `curl`.

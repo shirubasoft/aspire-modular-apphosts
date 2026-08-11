@@ -115,10 +115,14 @@ dotnet tool run modular-apphosts -- manifest publish \
   --apphost src/RepoB.AppHost --selector orders --tag "$GITHUB_SHA"
 ```
 
-Repo A applies that manifest in a GitHub Actions step before starting its ordinary E2E AppHost:
+Repo A runs its ordinary E2E command with that manifest, using the same invocation locally and in
+GitHub Actions:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest apply --json "$IMAGE_MANIFEST"
+dotnet tool run modular-apphosts -- manifest apply \
+  --json "$IMAGE_MANIFEST" \
+  -- \
+  dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
 
 When Repo B needs a separate Repo A run, one command dispatches the exact run, waits for it, and
