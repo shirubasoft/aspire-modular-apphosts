@@ -8,7 +8,7 @@ using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal static class ModuleImageManifestPipeline
 {

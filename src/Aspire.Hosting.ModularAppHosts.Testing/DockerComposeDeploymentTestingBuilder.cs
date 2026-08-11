@@ -19,7 +19,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting.Testing;
 
 /// <summary>
 /// Deploys or imports a Docker Compose environment and represents its services as an Aspire testing application.

@@ -23,7 +23,6 @@ Keep the definition in a project referenced by every participating AppHost:
 ```csharp
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
 
 namespace Orders.Modules;
 

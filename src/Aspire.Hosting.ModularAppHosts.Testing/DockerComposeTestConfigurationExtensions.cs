@@ -1,7 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting.Testing;
 
 /// <summary>Exports Docker Compose deployment values for use by external tests.</summary>
 public static class DockerComposeTestConfigurationExtensions

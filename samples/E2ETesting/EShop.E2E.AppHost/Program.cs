@@ -1,4 +1,5 @@
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
+using Aspire.Hosting.Testing;
 using EShop.Modules;
 
 var builder = DistributedApplication.CreateBuilder(args);

@@ -2,7 +2,7 @@
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 
 const string ImageTag = "push-test";
 const string ProjectResourceName = "image-push-project";

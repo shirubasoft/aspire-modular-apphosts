@@ -1,5 +1,4 @@
 using Aspire.Hosting;
-using Aspire.Hosting.ModularAppHosts;
 
 namespace AspireModuleNamespace;
 

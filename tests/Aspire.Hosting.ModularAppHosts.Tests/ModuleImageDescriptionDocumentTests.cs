@@ -1,4 +1,4 @@
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using System.Text.Json;
 using Xunit;
 

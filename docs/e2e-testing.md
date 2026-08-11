@@ -17,7 +17,7 @@ dotnet add path/to/AppHost.Tests.csproj package Shirubasoft.Aspire.ModularAppHos
 Add a Docker Compose environment and export only the endpoints and values that external tests require:
 
 ```csharp
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting.Testing;
 
 var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);

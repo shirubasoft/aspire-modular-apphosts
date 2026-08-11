@@ -1,6 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>
 /// Maps a remote container image reference to the effective local image reference of a resource during

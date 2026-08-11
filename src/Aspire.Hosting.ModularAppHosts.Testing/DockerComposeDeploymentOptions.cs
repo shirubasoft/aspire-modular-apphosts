@@ -1,4 +1,4 @@
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting.Testing;
 
 /// <summary>Controls an Aspire-owned Docker Compose test deployment.</summary>
 public sealed class DockerComposeDeploymentOptions

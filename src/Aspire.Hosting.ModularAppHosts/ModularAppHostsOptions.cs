@@ -1,7 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Controls how exported modules are materialized by a receiving AppHost.</summary>
 /// <remarks>

@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Extensions for composing reusable modules in an Aspire AppHost.</summary>
 public static partial class DistributedApplicationModuleExtensions

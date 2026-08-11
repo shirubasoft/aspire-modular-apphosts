@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Describes the remotely pullable module images shared between repository workflows.</summary>
 public sealed class ModuleImageManifestDocument

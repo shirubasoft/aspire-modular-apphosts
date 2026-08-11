@@ -1,7 +1,7 @@
 using CliWrap;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal sealed record ModuleImagePublishPlan(
     string? ImageRegistry,

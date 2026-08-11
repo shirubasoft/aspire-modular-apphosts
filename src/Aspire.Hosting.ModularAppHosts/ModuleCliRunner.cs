@@ -2,7 +2,7 @@ using System.Text;
 using CliWrap;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal sealed record ModuleCliResult(int ExitCode, string StandardOutput, string StandardError)
 {

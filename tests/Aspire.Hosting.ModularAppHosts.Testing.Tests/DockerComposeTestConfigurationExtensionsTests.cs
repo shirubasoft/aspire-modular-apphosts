@@ -1,7 +1,7 @@
 using System.Reflection;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Docker;
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting.Testing;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;

@@ -2,7 +2,7 @@ using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal sealed class DistributedApplicationModuleBuilder(
     IDistributedApplicationBuilder applicationBuilder,

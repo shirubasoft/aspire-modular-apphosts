@@ -10,7 +10,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
 
-namespace Aspire.Hosting.ModularAppHosts.Generators;
+namespace Aspire.Hosting;
 
 /// <summary>
 /// Generates strongly typed accessors for resources declared by distributed application modules.
@@ -22,10 +22,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         typeof(DistributedApplicationModuleGenerator).Assembly.GetName().Version?.ToString() ?? "unknown";
 
     private const string AttributeMetadataName =
-        "Aspire.Hosting.ModularAppHosts.GenerateDistributedApplicationModuleAttribute";
+        "Aspire.Hosting.GenerateDistributedApplicationModuleAttribute";
 
     private const string ModuleBuilderMetadataName =
-        "Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder";
+        "Aspire.Hosting.IDistributedApplicationModuleBuilder";
 
     private static readonly DiagnosticDescriptor InvalidModuleDeclaration = new(
         "SAMHSG001",
@@ -409,7 +409,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             if (operation is IArgumentOperation { Parameter.Name: "moduleBuilder", Parent: IInvocationOperation owner } &&
                 owner.TargetMethod.Name is "DefineModuleAsync" or "ExportModuleAsync" &&
                 owner.TargetMethod.ContainingType.ToDisplayString() ==
-                    "Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions")
+                    "Aspire.Hosting.DistributedApplicationModuleExtensions")
             {
                 return true;
             }
@@ -548,7 +548,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("{");
         source.AppendLine("    /// <summary>Gets a strongly typed reference to this module from another module definition.</summary>");
         source.AppendLine("    public static Module Reference(");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModuleBuilder moduleBuilder)");
+        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(moduleBuilder);");
         source.Append("        return new Module(moduleBuilder.GetRequiredModule(")
@@ -568,7 +568,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
             source.AppendLine("    {");
             source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
-            source.Append("        var module = await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
+            source.Append("        var module = await global::Aspire.Hosting.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
@@ -589,7 +589,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .Append(module.AddExtensionMethodName)
             .AppendLine("(");
         source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module,");
+        source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationModule module,");
         source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
@@ -614,7 +614,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .AppendLine(", nameof(module));");
         source.AppendLine("        }");
         source.AppendLine();
-        source.AppendLine("        await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.AddAsync(builder, module, cancellationToken).ConfigureAwait(false);");
+        source.AppendLine("        await global::Aspire.Hosting.DistributedApplicationModuleExtensions.AddAsync(builder, module, cancellationToken).ConfigureAwait(false);");
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
@@ -628,7 +628,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
         source.Append("        return ")
             .Append(module.ImportExtensionMethodName)
-            .AppendLine("(builder, new global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions(), cancellationToken);");
+            .AppendLine("(builder, new global::Aspire.Hosting.ModuleImportOptions(), cancellationToken);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>Imports the module with resource naming options and returns its typed resources.</summary>");
@@ -636,14 +636,14 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .Append(module.ImportExtensionMethodName)
             .AppendLine("(");
         source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationBuilder builder,");
-        source.AppendLine("        global::Aspire.Hosting.ModularAppHosts.ModuleImportOptions options,");
+        source.AppendLine("        global::Aspire.Hosting.ModuleImportOptions options,");
         source.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
         source.AppendLine("    {");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(builder);");
         source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(options);");
         if (module.HasConventionalDefineMethod)
         {
-            source.Append("        await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
+            source.Append("        await global::Aspire.Hosting.DistributedApplicationModuleExtensions.DefineModuleAsync(builder, ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
                 .Append(", ")
                 .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
@@ -654,16 +654,16 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .AppendLine(", Define, cancellationToken).ConfigureAwait(false);");
         }
 
-        source.Append("        var module = await global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleExtensions.ImportModuleAsync(builder, ")
+        source.Append("        var module = await global::Aspire.Hosting.DistributedApplicationModuleExtensions.ImportModuleAsync(builder, ")
             .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
             .AppendLine(", options, cancellationToken).ConfigureAwait(false);");
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    /// <summary>A materialized module with strongly typed access to every declared resource.</summary>");
-        source.AppendLine("    public sealed class Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference");
+        source.AppendLine("    public sealed class Module : global::Aspire.Hosting.DistributedApplicationModuleReference");
         source.AppendLine("    {");
-        source.AppendLine("        internal Module(global::Aspire.Hosting.ModularAppHosts.IDistributedApplicationModule module)");
+        source.AppendLine("        internal Module(global::Aspire.Hosting.IDistributedApplicationModule module)");
         source.AppendLine("            : base(module)");
         source.AppendLine("        {");
         source.AppendLine("        }");

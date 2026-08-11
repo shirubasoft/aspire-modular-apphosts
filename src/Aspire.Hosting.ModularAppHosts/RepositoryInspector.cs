@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal static class RepositoryInspector
 {

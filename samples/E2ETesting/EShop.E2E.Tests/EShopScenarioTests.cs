@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using Aspire.Hosting;
-using Aspire.Hosting.ModularAppHosts;
 using Aspire.Hosting.Testing;
 using EShop.Modules;
 using Microsoft.Extensions.Configuration;

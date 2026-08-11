@@ -1,4 +1,4 @@
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>
 /// Generates a typed module wrapper for the resources declared by an exported module.

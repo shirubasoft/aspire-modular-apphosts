@@ -1,7 +1,7 @@
 using CliWrap;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Resolves the container runtime used by Aspire module image commands.</summary>
 public static class ContainerRuntimeResolver

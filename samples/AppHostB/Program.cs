@@ -1,4 +1,4 @@
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);

@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Provides read-only access to module definitions registered with an AppHost builder.</summary>
 public interface IDistributedApplicationModuleCatalog

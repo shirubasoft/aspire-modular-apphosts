@@ -1,6 +1,5 @@
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
 using Aspire.Hosting.Testing;
 using Xunit;
 

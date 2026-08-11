@@ -1,6 +1,5 @@
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
 
 namespace EShop.Modules;
 
