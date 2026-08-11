@@ -13,7 +13,8 @@ internal sealed class ModuleImagePublisherAnnotation(
     ModuleImagePublishPlan plan,
     string workingDirectory,
     string? repository,
-    string? revision) : IResourceAnnotation
+    string? revision,
+    string? branchImageTag = null) : IResourceAnnotation
 {
     public string ModuleName { get; } = moduleName;
 
@@ -30,6 +31,8 @@ internal sealed class ModuleImagePublisherAnnotation(
     public string? Repository { get; } = repository;
 
     public string? Revision { get; } = revision;
+
+    public string? BranchImageTag { get; } = branchImageTag;
 }
 
 internal sealed record ModuleEffectiveImage(
