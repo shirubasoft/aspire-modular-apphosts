@@ -9,6 +9,31 @@ namespace Aspire.Hosting;
 
 internal static class RepositoryInspector
 {
+    public static string FindRepositoryRoot(string projectPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        return TryFindRepositoryRoot(projectPath) ?? GetWorkingDirectory(projectPath);
+    }
+
+    public static string? TryFindRepositoryRoot(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var current = new DirectoryInfo(GetWorkingDirectory(path));
+        while (current is not null)
+        {
+            var metadataPath = Path.Combine(current.FullName, ".git");
+            if (Directory.Exists(metadataPath) || File.Exists(metadataPath))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
     public static async Task<string> FindRepositoryRootAsync(
         string projectPath,
         string gitExecutablePath = "git",

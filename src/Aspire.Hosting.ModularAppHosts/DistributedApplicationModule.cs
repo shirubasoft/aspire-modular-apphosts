@@ -98,6 +98,43 @@ internal sealed class DistributedApplicationModule(
         _materializedResources[declaredName] = resource;
     }
 
+    internal void Validate()
+    {
+        ValidateResourceDefinitions();
+
+        var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
+        foreach (var project in _projects)
+        {
+            if (project.PathBase == ModuleProjectPathBase.Repository)
+            {
+                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
+                    Repository,
+                    appHostDirectory);
+                continue;
+            }
+
+            var repositoryRoot = RepositoryInspector.FindRepositoryRoot(project.ProjectPath);
+            var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
+                Repository,
+                appHostDirectory,
+                project.ProjectPath);
+
+            if (configuredRepositoryRoot is not null)
+            {
+                repositoryRoot = configuredRepositoryRoot;
+            }
+            else if (RepositoryInspector.TryFindRepositoryRoot(repositoryRoot) is null &&
+                PathSafety.IsContainedBy(appHostDirectory, project.ProjectPath))
+            {
+                repositoryRoot = appHostDirectory;
+            }
+
+            project.SourceRepositoryRoot = repositoryRoot;
+        }
+
+        ValidateRepositoryRoots();
+    }
+
     internal IResourceBuilder<TResource> GetResourceForCallback<TResource>(
         string name,
         string requestingResourceName)
@@ -131,17 +168,7 @@ internal sealed class DistributedApplicationModule(
         TimeSpan repositoryCommandTimeout,
         CancellationToken cancellationToken)
     {
-        if (_resources.Count == 0)
-        {
-            throw new InvalidOperationException($"Module '{Name}' does not contain any resources.");
-        }
-
-        var notExported = _projects.FirstOrDefault(project => !project.IsExportedAsContainer);
-        if (notExported is not null)
-        {
-            throw new InvalidOperationException(
-                $"Project '{notExported.Name}' in module '{Name}' must call ExportAsContainer().");
-        }
+        ValidateResourceDefinitions();
 
         var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
         foreach (var project in _projects)
@@ -185,6 +212,35 @@ internal sealed class DistributedApplicationModule(
             project.SourceRepositoryRoot = repositoryRoot;
         }
 
+        var repositoryRoots = ValidateRepositoryRoots();
+
+        if (repositoryRoots.Length == 1)
+        {
+            Repository ??= await RepositoryInspector.TryGetRemoteAsync(
+                repositoryRoots[0],
+                gitExecutablePath,
+                repositoryCommandTimeout,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void ValidateResourceDefinitions()
+    {
+        if (_resources.Count == 0)
+        {
+            throw new InvalidOperationException($"Module '{Name}' does not contain any resources.");
+        }
+
+        var notExported = _projects.FirstOrDefault(project => !project.IsExportedAsContainer);
+        if (notExported is not null)
+        {
+            throw new InvalidOperationException(
+                $"Project '{notExported.Name}' in module '{Name}' must call ExportAsContainer().");
+        }
+    }
+
+    private string[] ValidateRepositoryRoots()
+    {
         var repositoryRoots = _projects
             .Select(project => project.SourceRepositoryRoot)
             .Where(repositoryRoot => repositoryRoot is not null)
@@ -198,14 +254,7 @@ internal sealed class DistributedApplicationModule(
                 $"All projects in module '{Name}' must belong to the same Git repository or source tree.");
         }
 
-        if (repositoryRoots.Length == 1)
-        {
-            Repository ??= await RepositoryInspector.TryGetRemoteAsync(
-                repositoryRoots[0],
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-        }
+        return repositoryRoots;
     }
 
     private static string? GetDefinitionRepositoryRoot(
@@ -219,6 +268,42 @@ internal sealed class DistributedApplicationModule(
         }
 
         return null;
+    }
+
+    private static string? TryGetConfiguredLocalRepositoryRoot(
+        string? repository,
+        string appHostDirectory,
+        string projectPath)
+    {
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            return null;
+        }
+
+        string candidate;
+        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+        {
+            var appHostRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(appHostDirectory);
+            var repositoryParent = appHostRepositoryRoot is null
+                ? null
+                : Path.GetDirectoryName(appHostRepositoryRoot);
+            if (repositoryParent is null)
+            {
+                return null;
+            }
+
+            candidate = Path.Combine(
+                repositoryParent,
+                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
+        }
+        else
+        {
+            candidate = Path.GetFullPath(repository, appHostDirectory);
+        }
+
+        return PathSafety.IsContainedBy(candidate, projectPath)
+            ? candidate
+            : null;
     }
 
     private static async Task<string?> TryGetConfiguredLocalRepositoryRootAsync(

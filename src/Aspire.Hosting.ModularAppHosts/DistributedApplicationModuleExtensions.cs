@@ -12,6 +12,66 @@ public static partial class DistributedApplicationModuleExtensions
     /// <summary>The legacy <c>Parameters</c> key used as the parent directory for managed repository clones.</summary>
     public const string RepositoryBaseLocationParameterName = "module-repository-base-location";
 
+    /// <summary>Exports a named module definition without adding its services to the application model.</summary>
+    public static IDistributedApplicationModule ExportModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        return DefineModule(builder, name, "1", packageId: null, moduleBuilder);
+    }
+
+    /// <summary>Exports a named module definition with its NuGet contract package identity.</summary>
+    public static IDistributedApplicationModule ExportModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        return DefineModule(builder, name, "1", packageId, moduleBuilder);
+    }
+
+    /// <summary>Defines a versioned module contract without adding its resources to the application model.</summary>
+    public static IDistributedApplicationModule DefineModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string version,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        return DefineModule(builder, name, version, packageId: null, moduleBuilder);
+    }
+
+    /// <summary>Defines a versioned module contract with its NuGet package identity.</summary>
+    public static IDistributedApplicationModule DefineModule(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(version);
+        ValidatePackageId(packageId);
+        ArgumentNullException.ThrowIfNull(moduleBuilder);
+
+        var registry = GetOrCreateRegistry(builder);
+        registry.RefreshConfiguration();
+        ValidateOptions(registry.Options);
+        if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
+        {
+            ValidateExistingDefinition(existingModule, version, packageId);
+            return existingModule;
+        }
+
+        var module = new DistributedApplicationModule(builder, name, version, packageId);
+        moduleBuilder(new DistributedApplicationModuleBuilder(builder, module, registry));
+        module.Validate();
+        ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
+        registry.AddModule(module);
+        return module;
+    }
+
     /// <summary>Configures module materialization options after applying AppHost configuration.</summary>
     public static IDistributedApplicationBuilder ConfigureModularAppHosts(
         this IDistributedApplicationBuilder builder,
@@ -2259,6 +2319,43 @@ public static partial class DistributedApplicationModuleExtensions
         var hasTag = GetConfiguredValue(options.ImageTag) is not null;
         var hasDigest = GetConfiguredValue(options.ImageSHA256) is not null;
         return hasTag != hasDigest;
+    }
+
+    private static void ValidatePackageId(string? packageId)
+    {
+        if (packageId is null)
+        {
+            return;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        if (packageId.Length > 100 || packageId.Any(character =>
+            !(char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_')))
+        {
+            throw new ArgumentException(
+                $"'{packageId}' is not a valid NuGet package ID.",
+                nameof(packageId));
+        }
+    }
+
+    private static void ValidateExistingDefinition(
+        DistributedApplicationModule existingModule,
+        string version,
+        string? packageId)
+    {
+        if (!string.Equals(existingModule.Version, version, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Module '{existingModule.Name}' is already defined with contract version '{existingModule.Version}', " +
+                $"not requested version '{version}'.");
+        }
+
+        if (!string.Equals(existingModule.PackageId, packageId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Module '{existingModule.Name}' is already defined with contract package ID " +
+                $"'{existingModule.PackageId ?? "none"}', not requested package ID '{packageId ?? "none"}'.");
+        }
     }
 
     [LoggerMessage(EventId = 1, Level = LogLevel.Information, Message = "{Progress}")]

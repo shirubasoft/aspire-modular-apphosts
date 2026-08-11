@@ -35,6 +35,81 @@ public sealed class ModuleCliRunnerTests
     }
 
     [Fact]
+    public async Task Runner_redacts_sensitive_URI_components_from_streamed_and_captured_output()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string userName = "octocat";
+        const string password = "super-secret-password";
+        const string query = "access_token=secret-query-token";
+        const string fragment = "secret-fragment";
+        var progress = new List<string>();
+
+        var result = await ModuleCliRunner.RunAsync(
+            "/bin/sh",
+            ["-c", $"printf '%s\\n' 'https://{userName}:{password}@example.test/acme/orders.git?{query}#{fragment}'"],
+            Path.GetTempPath(),
+            TimeSpan.FromSeconds(5),
+            "test redaction",
+            TestContext.Current.CancellationToken,
+            progress.Add);
+
+        var progressLine = Assert.Single(progress);
+        Assert.Equal(
+            "https://[REDACTED]@example.test/acme/orders.git?[REDACTED]#[REDACTED]",
+            progressLine);
+        Assert.Contains(progressLine, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(userName, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(password, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(query, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(fragment, result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Runner_redacts_labeled_credentials_and_authorization_values()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string password = "password with spaces";
+        const string token = "token-value";
+        const string bearer = "header.payload.signature";
+        var progress = new List<string>();
+
+        var result = await ModuleCliRunner.RunAsync(
+            "/bin/sh",
+            [
+                "-c",
+                $"printf '%s\\n' 'password: \"{password}\"'; " +
+                $"printf '%s\\n' 'GITHUB_TOKEN={token}' >&2; " +
+                $"printf '%s\\n' 'Authorization: Bearer {bearer}' >&2"
+            ],
+            Path.GetTempPath(),
+            TimeSpan.FromSeconds(5),
+            "test credentials",
+            TestContext.Current.CancellationToken,
+            progress.Add);
+
+        Assert.Contains("password: \"[REDACTED]\"", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("GITHUB_TOKEN=[REDACTED]", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("Authorization: Bearer [REDACTED]", result.StandardError, StringComparison.Ordinal);
+        Assert.All(progress, line =>
+        {
+            Assert.DoesNotContain(password, line, StringComparison.Ordinal);
+            Assert.DoesNotContain(token, line, StringComparison.Ordinal);
+            Assert.DoesNotContain(bearer, line, StringComparison.Ordinal);
+        });
+        Assert.DoesNotContain(password, result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain(token, result.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(bearer, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Runner_stops_a_command_at_the_configured_timeout()
     {
         if (OperatingSystem.IsWindows())
