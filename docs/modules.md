@@ -308,15 +308,13 @@ Modules containing only repository-independent resources, such as existing image
 
 ## Publishing module images
 
-Declare how each module image is built. `ExportAsContainer` publishes a project image, `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource, and the image-publishing `AddResource` overload does the same for a factory-created container resource. Resolve the command with `ContainerRuntimeResolver` when the module should follow Aspire's Docker or Podman selection:
+Declare how each module image is built. `ExportAsContainer` publishes a project image, `WithImagePublishCommand` attaches an explicit build command to an `AddContainer` resource, and the image-publishing `AddResource` overload does the same for a factory-created container resource. Use the container-runtime placeholder when the module should follow Aspire's Docker or Podman selection:
 
 ```csharp
-var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken);
-
 module.AddContainer("orders-static", "orders-static")
     .WithImagePublishCommand(new ModuleContainerExportOptions(
         imageName: "orders-static",
-        publishCommand: containerRuntime,
+        publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
         publishArguments:
         [
             "build",
@@ -326,7 +324,7 @@ module.AddContainer("orders-static", "orders-static")
         ]));
 ```
 
-The resolver reads `ASPIRE_CONTAINER_RUNTIME` first and also accepts `DOTNET_ASPIRE_CONTAINER_RUNTIME`. Without an explicit value, it probes Docker and Podman in parallel, prefers a running runtime over one that is merely installed, and uses Docker as its tie-breaker and fallback.
+The installer resolves `ContainerRuntimePlaceholder` only when the image command runs, so module declaration remains synchronous and does not probe local tools. Runtime resolution reads `ASPIRE_CONTAINER_RUNTIME` first and also accepts `DOTNET_ASPIRE_CONTAINER_RUNTIME`. Without an explicit value, it probes Docker and Podman in parallel, prefers a running runtime over one that is merely installed, and uses Docker as its tie-breaker and fallback.
 
 In run mode, a one-shot installer invokes the configured executable before the container starts when the image needs publishing:
 

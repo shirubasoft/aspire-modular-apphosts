@@ -49,6 +49,36 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
+    public void Distinct_remotes_with_the_same_repository_name_get_distinct_deterministic_siblings()
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var github = registry.Register(
+            "catalog",
+            "https://github.com/acme/services.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var gitlab = registry.Register(
+            "orders",
+            "https://gitlab.example.test/acme/services.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var repeatedPlan = new ModuleRepositoryPlanRegistry(workspace.AppHostPath).Register(
+            "catalog",
+            "https://github.com/acme/services.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+
+        Assert.NotEqual(github.NormalizedRepository, gitlab.NormalizedRepository);
+        Assert.NotEqual(github.RepositoryPath, gitlab.RepositoryPath);
+        Assert.StartsWith("services-", Path.GetFileName(github.RepositoryPath), StringComparison.Ordinal);
+        Assert.StartsWith("services-", Path.GetFileName(gitlab.RepositoryPath), StringComparison.Ordinal);
+        Assert.Equal(github.RepositoryPath, repeatedPlan.RepositoryPath);
+        Assert.Equal(2, registry.Requirements.Count);
+    }
+
+    [Fact]
     public void Local_repository_with_revision_uses_initializer_owned_sibling()
     {
         using var workspace = CreateGitWorkspace();

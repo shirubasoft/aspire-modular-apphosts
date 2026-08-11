@@ -2,7 +2,9 @@
 #pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics;
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -93,7 +95,14 @@ internal static class ModuleRepositoryInitializationPipeline
         Func<ModuleRepositoryInitializationSettings> settingsFactory)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Pipeline.AddStep(CreateRepositoryStep(requirement, settingsFactory));
+        var resource = new ModuleRepositoryInitializationResource(
+            GetRepositoryStepName(requirement),
+            requirement);
+        builder.AddResource(resource)
+            .ExcludeFromManifest()
+            .WithExplicitStart()
+            .WithIconName("SourceBranch");
+        builder.Pipeline.AddStep(CreateRepositoryStep(requirement, settingsFactory, resource));
     }
 
     internal static PipelineStep CreateAggregateStep() => new()
@@ -105,7 +114,8 @@ internal static class ModuleRepositoryInitializationPipeline
 
     internal static PipelineStep CreateRepositoryStep(
         ModuleRepositoryRequirement requirement,
-        Func<ModuleRepositoryInitializationSettings> settingsFactory)
+        Func<ModuleRepositoryInitializationSettings> settingsFactory,
+        ModuleRepositoryInitializationResource? resource = null)
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentNullException.ThrowIfNull(settingsFactory);
@@ -115,13 +125,23 @@ internal static class ModuleRepositoryInitializationPipeline
             Description =
                 $"Initializes repository {requirement.NormalizedRepository} for " +
                 $"{string.Join(", ", requirement.ModuleNames.Order(StringComparer.OrdinalIgnoreCase))}.",
-            Action = context => InitializeAsync(
-                requirement,
-                settingsFactory(),
-                context.Logger,
-                context.CancellationToken),
+            Action = context =>
+            {
+                var resourceLogger = resource is null
+                    ? context.Logger
+                    : context.Services
+                        .GetRequiredService<ResourceLoggerService>()
+                        .GetLogger(resource);
+                return InitializeAsync(
+                    requirement,
+                    settingsFactory(),
+                    context.Logger,
+                    resourceLogger,
+                    context.CancellationToken);
+            },
             RequiredBySteps = [StepName],
-            Tags = [RepositoryStepTag]
+            Tags = [RepositoryStepTag],
+            Resource = resource
         };
     }
 
@@ -140,6 +160,32 @@ internal static class ModuleRepositoryInitializationPipeline
             requirement,
             settings,
             logger,
+            logger,
+            static (plannedRepository, initializationSettings, progress, lifecycle, token) =>
+                RepositorySynchronizer.SynchronizeAsync(
+                    plannedRepository.RepositoryPath,
+                    plannedRepository.Repository,
+                    plannedRepository.UpdateOnInitialize,
+                    token,
+                    plannedRepository.Revision,
+                    initializationSettings.GitExecutablePath,
+                    initializationSettings.GitHubCliPath,
+                    initializationSettings.CommandTimeout,
+                    progress,
+                    lifecycle),
+            cancellationToken);
+
+    internal static Task InitializeAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings settings,
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken) =>
+        InitializeAsync(
+            requirement,
+            settings,
+            lifecycleLogger,
+            resourceLogger,
             static (plannedRepository, initializationSettings, progress, lifecycle, token) =>
                 RepositorySynchronizer.SynchronizeAsync(
                     plannedRepository.RepositoryPath,
@@ -166,35 +212,62 @@ internal static class ModuleRepositoryInitializationPipeline
             CancellationToken,
             Task> synchronizeAsync,
         CancellationToken cancellationToken)
+        => await InitializeAsync(
+            requirement,
+            settings,
+            logger,
+            logger,
+            synchronizeAsync,
+            cancellationToken).ConfigureAwait(false);
+
+    internal static async Task InitializeAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings settings,
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        Func<
+            ModuleRepositoryRequirement,
+            ModuleRepositoryInitializationSettings,
+            Action<string>,
+            Action<RepositorySyncLifecycleEvent>,
+            CancellationToken,
+            Task> synchronizeAsync,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentNullException.ThrowIfNull(settings);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(lifecycleLogger);
+        ArgumentNullException.ThrowIfNull(resourceLogger);
         ArgumentNullException.ThrowIfNull(synchronizeAsync);
         cancellationToken.ThrowIfCancellationRequested();
 
         var operationId = Guid.NewGuid().ToString("N");
-        using var scope = logger.BeginScope(new Dictionary<string, object?>
+        var scopeState = new Dictionary<string, object?>
         {
             ["OperationId"] = operationId,
             ["Repository"] = requirement.NormalizedRepository,
             ["RepositoryPath"] = requirement.RepositoryPath,
             ["RepositoryKind"] = requirement.Revision is null ? "branch" : "revision",
             ["Modules"] = requirement.ModuleNames.Order(StringComparer.OrdinalIgnoreCase).ToArray()
-        });
+        };
+        using var lifecycleScope = lifecycleLogger.BeginScope(scopeState);
+        using var resourceScope = ReferenceEquals(lifecycleLogger, resourceLogger)
+            ? null
+            : resourceLogger.BeginScope(scopeState);
         var modules = string.Join(", ", requirement.ModuleNames.Order(StringComparer.OrdinalIgnoreCase));
-        LogInitializationStarted(
-            logger,
-            requirement.NormalizedRepository,
-            requirement.RepositoryPath,
-            modules,
-            null);
+        LogBoth(lifecycleLogger, resourceLogger, target =>
+            LogInitializationStarted(
+                target,
+                requirement.NormalizedRepository,
+                requirement.RepositoryPath,
+                modules,
+                null));
         var stopwatch = Stopwatch.StartNew();
         await synchronizeAsync(
             requirement,
             settings,
             progress => LogInitializationProgress(
-                logger,
+                resourceLogger,
                 requirement.NormalizedRepository,
                 ModuleCliOutputRedactor.Redact(progress),
                 null),
@@ -202,25 +275,27 @@ internal static class ModuleRepositoryInitializationPipeline
             {
                 if (string.IsNullOrWhiteSpace(lifecycle.Reason))
                 {
-                    LogRepositoryOperation(
-                        logger,
-                        lifecycle.Operation,
-                        lifecycle.State,
-                        requirement.NormalizedRepository,
-                        requirement.RepositoryPath,
-                        lifecycle.ElapsedMilliseconds,
-                        null);
+                    LogBoth(lifecycleLogger, resourceLogger, target =>
+                        LogRepositoryOperation(
+                            target,
+                            lifecycle.Operation,
+                            lifecycle.State,
+                            requirement.NormalizedRepository,
+                            requirement.RepositoryPath,
+                            lifecycle.ElapsedMilliseconds,
+                            null));
                 }
                 else
                 {
-                    LogRepositoryOperationSkipped(
-                        logger,
-                        lifecycle.Operation,
-                        lifecycle.State,
-                        requirement.NormalizedRepository,
-                        requirement.RepositoryPath,
-                        lifecycle.Reason,
-                        null);
+                    LogBoth(lifecycleLogger, resourceLogger, target =>
+                        LogRepositoryOperationSkipped(
+                            target,
+                            lifecycle.Operation,
+                            lifecycle.State,
+                            requirement.NormalizedRepository,
+                            requirement.RepositoryPath,
+                            lifecycle.Reason,
+                            null));
                 }
             },
             cancellationToken).ConfigureAwait(false);
@@ -229,11 +304,21 @@ internal static class ModuleRepositoryInitializationPipeline
             DateTimeOffset.UtcNow,
             cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
-        LogInitializationCompleted(
-            logger,
-            requirement.NormalizedRepository,
-            requirement.RepositoryPath,
-            stopwatch.Elapsed.TotalMilliseconds,
-            null);
+        LogBoth(lifecycleLogger, resourceLogger, target =>
+            LogInitializationCompleted(
+                target,
+                requirement.NormalizedRepository,
+                requirement.RepositoryPath,
+                stopwatch.Elapsed.TotalMilliseconds,
+                null));
+    }
+
+    private static void LogBoth(ILogger lifecycleLogger, ILogger resourceLogger, Action<ILogger> log)
+    {
+        log(lifecycleLogger);
+        if (!ReferenceEquals(lifecycleLogger, resourceLogger))
+        {
+            log(resourceLogger);
+        }
     }
 }

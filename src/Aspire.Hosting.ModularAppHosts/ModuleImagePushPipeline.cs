@@ -120,6 +120,13 @@ internal static class ModuleImagePushPipeline
         var resourceLogger = context.Services
             .GetRequiredService<ResourceLoggerService>()
             .GetLogger(resource);
+        var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()
+            ?? throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a module image publisher.");
+        await publisher.PrepareAsync(
+            context.Logger,
+            resourceLogger,
+            context.CancellationToken).ConfigureAwait(false);
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
             context.CancellationToken,

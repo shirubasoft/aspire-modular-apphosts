@@ -106,7 +106,7 @@ public sealed class SynchronousModuleMaterializationTests
             definition.AddContainer("orders-api", "orders-api")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     "orders-api",
-                    "publisher-that-runs-later",
+                    ModuleContainerExportOptions.ContainerRuntimePlaceholder,
                     ModuleContainerExportOptions.ImageReferencePlaceholder));
         });
 
@@ -119,6 +119,7 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.False(publisher.TryGetPreparedImage(out _));
         var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         Assert.Equal("orders-api:aspire-run", installer.ImageReference);
+        Assert.Equal(ModuleContainerExportOptions.ContainerRuntimePlaceholder, installer.PublishCommand);
         Assert.NotNull(installer.Publisher);
     }
 
@@ -148,6 +149,33 @@ public sealed class SynchronousModuleMaterializationTests
         var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
         Assert.Equal(projectDirectory, publisher.WorkingDirectory);
         GetRegistry(builder).ValidateRepositoryPreflight();
+    }
+
+    [Fact]
+    public void Containerized_project_preflight_requires_the_declared_project_file()
+    {
+        using var appHost = CreateGitAppHost();
+        var projectDirectory = Path.Combine(appHost.Path, "Api");
+        Directory.CreateDirectory(projectDirectory);
+        var projectPath = Path.Combine(projectDirectory, "Missing.Api.csproj");
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options => options.ProjectMode = ModuleProjectMode.Container);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddProject("orders-api", projectPath)
+                .ExportAsContainer(new ModuleContainerExportOptions(
+                    "orders-api",
+                    "dotnet",
+                    "publish"));
+        });
+
+        builder.AddModule(module);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            GetRegistry(builder).ValidateRepositoryPreflight());
+        Assert.Contains(projectPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
     }
 
     private static TemporaryDirectory CreateGitAppHost()

@@ -37,6 +37,19 @@ public sealed class ModuleCliRunnerTests
     }
 
     [Theory]
+    [InlineData(
+        "credential.https://github.com/.helper=!gh auth git-credential",
+        "credential.https://github.com/.helper=[REDACTED]")]
+    [InlineData("UNEXPECTED_BUILD_VALUE=opaque-value", "UNEXPECTED_BUILD_VALUE=[REDACTED]")]
+    [InlineData("CUSTOM_OUTPUT = 'opaque value'", "CUSTOM_OUTPUT = '[REDACTED]'")]
+    public void Redactor_masks_credential_helpers_and_arbitrary_environment_assignments(
+        string value,
+        string expected)
+    {
+        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
+    }
+
+    [Theory]
     [InlineData("git+ssh://user@example.test/acme/repo.git", "git+ssh://[REDACTED]@example.test/acme/repo.git")]
     [InlineData("https://example.test/acme/repo.git?token=secret", "https://example.test/acme/repo.git?[REDACTED]")]
     [InlineData("https://example.test/acme/repo.git#secret", "https://example.test/acme/repo.git#[REDACTED]")]

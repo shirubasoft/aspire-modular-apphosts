@@ -88,6 +88,9 @@ internal static partial class ModuleCliOutputRedactor
         }
 
         var redacted = UriRegex().Replace(value, static match => RedactUri(match.Value));
+        redacted = CredentialHelperRegex().Replace(
+            redacted,
+            static match => $"{match.Groups["prefix"].Value}{RedactedValue}");
         redacted = CredentialRegex().Replace(redacted, static match =>
         {
             var prefix = match.Groups["prefix"].Value;
@@ -103,9 +106,24 @@ internal static partial class ModuleCliOutputRedactor
 
             return $"{prefix}{RedactedValue}";
         });
-        return AuthorizationRegex().Replace(
+        redacted = AuthorizationRegex().Replace(
             redacted,
             static match => $"{match.Groups["prefix"].Value}{RedactedValue}");
+        return EnvironmentAssignmentRegex().Replace(redacted, static match =>
+        {
+            var prefix = match.Groups["prefix"].Value;
+            if (match.Groups["doubleQuoted"].Success)
+            {
+                return $"{prefix}\"{RedactedValue}\"";
+            }
+
+            if (match.Groups["singleQuoted"].Success)
+            {
+                return $"{prefix}'{RedactedValue}'";
+            }
+
+            return $"{prefix}{RedactedValue}";
+        });
     }
 
     private static string RedactUri(string value)
@@ -146,6 +164,11 @@ internal static partial class ModuleCliOutputRedactor
     private static partial Regex UriRegex();
 
     [GeneratedRegex(
+        @"(?<prefix>\bcredential\.[^\r\n=]+\.helper\s*=\s*)[^\r\n]*",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CredentialHelperRegex();
+
+    [GeneratedRegex(
         @"(?<prefix>\b(?:[a-z0-9]+[-_])*(?:password|passwd|pwd|passphrase|token|access[-_]?token|refresh[-_]?token|id[-_]?token|auth[-_]?token|api[-_]?key|client[-_]?secret|secret)\b[\""']?\s*[:=]\s*)(?:\""(?<doubleQuoted>[^\""\r\n]*)\""|'(?<singleQuoted>[^'\r\n]*)'|(?<unquoted>[^\s,;]+))",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CredentialRegex();
@@ -154,4 +177,9 @@ internal static partial class ModuleCliOutputRedactor
         @"(?<prefix>\b(?:authorization\s*:\s*)?(?:bearer|basic)\s+)[a-z0-9._~+/=-]+",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AuthorizationRegex();
+
+    [GeneratedRegex(
+        @"(?<prefix>\b[A-Z_][A-Z0-9_]*\s*=\s*)(?:\""(?<doubleQuoted>[^\""\r\n]*)\""|'(?<singleQuoted>[^'\r\n]*)'|(?<unquoted>[^\s,;]+))",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex EnvironmentAssignmentRegex();
 }

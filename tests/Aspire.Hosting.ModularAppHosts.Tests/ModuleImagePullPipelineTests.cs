@@ -194,7 +194,7 @@ public sealed class ModuleImagePullPipelineTests
             container,
             stepContext,
             _ => Task.FromResult("test-runtime"),
-            (runtime, arguments, _) =>
+            (runtime, arguments, _, _) =>
             {
                 commands.Add((runtime, arguments.ToArray()));
                 return Task.CompletedTask;

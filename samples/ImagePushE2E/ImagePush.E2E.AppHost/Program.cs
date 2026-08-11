@@ -10,7 +10,6 @@ const string ProjectResourceName = "image-push-project";
 var builder = DistributedApplication.CreateBuilder(args);
 builder.UseModuleContainers();
 builder.AddDockerComposeEnvironment("compose");
-var containerRuntime = await ContainerRuntimeResolver.ResolveAsync();
 
 var registryEndpoint = builder.Configuration["ImagePush:RegistryEndpoint"];
 if (string.IsNullOrWhiteSpace(registryEndpoint))
@@ -35,7 +34,7 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
             ImageTag)
         .WithImagePublishCommand(new ModuleContainerExportOptions(
             "image-push/declared",
-            containerRuntime,
+            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
             ModuleContainerExportOptions.ImageReferencePlaceholder,
@@ -60,7 +59,7 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
         .ExportAsContainer(
             new ModuleContainerExportOptions(
                 ProjectResourceName,
-                containerRuntime,
+                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
                 "build",
                 "--tag",
                 ModuleContainerExportOptions.ImageReferencePlaceholder,
@@ -82,7 +81,7 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
             .WithExplicitStart(),
         new ModuleContainerExportOptions(
             "image-push/factory",
-            containerRuntime,
+            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
             ModuleContainerExportOptions.ImageReferencePlaceholder,
@@ -105,7 +104,7 @@ var extraModule = builder.ExportModule("image-push-extra", definition =>
             ImageTag)
         .WithImagePublishCommand(new ModuleContainerExportOptions(
             "image-push/extra",
-            containerRuntime,
+            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
             ModuleContainerExportOptions.ImageReferencePlaceholder,

@@ -222,6 +222,11 @@ public sealed class ModuleContainerExportOptions(
     string publishCommand,
     params string[] publishArguments)
 {
+    /// <summary>
+    /// Placeholder for the Docker or Podman executable selected when the image publish command runs.
+    /// </summary>
+    public const string ContainerRuntimePlaceholder = "{container-runtime}";
+
     /// <summary>Placeholder for the effective image name in a publish argument.</summary>
     public const string ImageNamePlaceholder = "{image-name}";
 
@@ -254,7 +259,10 @@ public sealed class ModuleContainerExportOptions(
     /// <summary>Gets or sets whether a missing clean image is pulled before the publish command is run.</summary>
     public bool PullBeforeBuild { get; set; }
 
-    /// <summary>Gets the executable invoked by the service installer.</summary>
+    /// <summary>
+    /// Gets the executable invoked by the service installer. Use <see cref="ContainerRuntimePlaceholder"/> to defer
+    /// Docker or Podman selection until the image publish command runs.
+    /// </summary>
     public string PublishCommand { get; } = publishCommand;
 
     /// <summary>

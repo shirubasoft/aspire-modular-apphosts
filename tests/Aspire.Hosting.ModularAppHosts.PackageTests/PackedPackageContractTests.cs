@@ -291,6 +291,9 @@ public sealed class PackedPackageContractTests
                     UpdateRepositoryOnInitialize = true
                 };
 
+                public static string ContainerRuntimePlaceholder =>
+                    ModuleContainerExportOptions.ContainerRuntimePlaceholder;
+
                 public static System.Threading.Tasks.Task<string> ResolveContainerRuntimeAsync(
                     System.Threading.CancellationToken cancellationToken = default) =>
                     ContainerRuntimeResolver.ResolveAsync(cancellationToken);

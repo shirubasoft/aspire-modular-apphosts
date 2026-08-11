@@ -264,11 +264,14 @@ public sealed class ModuleImageDeferredCoverageTests
     {
         using var repository = TemporaryDirectory.Create();
         var trackedFile = Path.Combine(repository.Path, "tracked.txt");
+        var untrackedFile = Path.Combine(repository.Path, "untracked.txt");
+        var ignoredFile = Path.Combine(repository.Path, "ignored.txt");
         File.WriteAllText(trackedFile, "clean");
+        File.WriteAllText(Path.Combine(repository.Path, ".gitignore"), "ignored.txt\n");
         await RunGitAsync(repository.Path, "init");
         await RunGitAsync(repository.Path, "config", "user.email", "coverage@example.test");
         await RunGitAsync(repository.Path, "config", "user.name", "Coverage Tests");
-        await RunGitAsync(repository.Path, "add", "tracked.txt");
+        await RunGitAsync(repository.Path, "add", "tracked.txt", ".gitignore");
         await RunGitAsync(repository.Path, "-c", "commit.gpgsign=false", "commit", "-m", "initial");
         var recipe = CreateRecipe(
             repositoryPath: repository.Path,
@@ -282,12 +285,82 @@ public sealed class ModuleImageDeferredCoverageTests
         var dirty = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
+        var dirtyPorcelain = await RunGitAsync(
+            repository.Path,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all");
+        File.WriteAllText(trackedFile, "different dirty content");
+        var changedTracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            recipe,
+            TestContext.Current.CancellationToken);
+        var changedTrackedPorcelain = await RunGitAsync(
+            repository.Path,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all");
+        ModuleImageSourceState? changedMode = null;
+        string? changedModePorcelain = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                trackedFile,
+                File.GetUnixFileMode(trackedFile) ^ UnixFileMode.UserExecute);
+            changedMode = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+                recipe,
+                TestContext.Current.CancellationToken);
+            changedModePorcelain = await RunGitAsync(
+                repository.Path,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all");
+        }
+
+        File.WriteAllText(untrackedFile, "first untracked content");
+        var untracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            recipe,
+            TestContext.Current.CancellationToken);
+        var untrackedPorcelain = await RunGitAsync(
+            repository.Path,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all");
+        File.WriteAllText(untrackedFile, "different untracked content");
+        var changedUntracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            recipe,
+            TestContext.Current.CancellationToken);
+        var changedUntrackedPorcelain = await RunGitAsync(
+            repository.Path,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all");
+        var beforeIgnored = changedUntracked.StatusFingerprint;
+        File.WriteAllText(ignoredFile, "first ignored content");
+        var ignored = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            recipe,
+            TestContext.Current.CancellationToken);
+        File.WriteAllText(ignoredFile, "different ignored content");
+        var changedIgnored = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            recipe,
+            TestContext.Current.CancellationToken);
 
         Assert.False(clean.IsDirty);
         Assert.NotNull(clean.Branch);
         Assert.Equal(12, clean.Commit!.Length);
         Assert.True(dirty.IsDirty);
         Assert.NotEqual(clean.StatusFingerprint, dirty.StatusFingerprint);
+        Assert.Equal(dirtyPorcelain, changedTrackedPorcelain);
+        Assert.NotEqual(dirty.StatusFingerprint, changedTracked.StatusFingerprint);
+        if (changedMode is not null)
+        {
+            Assert.Equal(changedTrackedPorcelain, changedModePorcelain);
+            Assert.NotEqual(changedTracked.StatusFingerprint, changedMode.StatusFingerprint);
+        }
+
+        Assert.Equal(untrackedPorcelain, changedUntrackedPorcelain);
+        Assert.NotEqual(untracked.StatusFingerprint, changedUntracked.StatusFingerprint);
+        Assert.Equal(beforeIgnored, ignored.StatusFingerprint);
+        Assert.Equal(beforeIgnored, changedIgnored.StatusFingerprint);
         Assert.False(await ModuleImageRecipeOperations.Instance.HasUpstreamAsync(
             recipe,
             TestContext.Current.CancellationToken));
@@ -334,6 +407,34 @@ public sealed class ModuleImageDeferredCoverageTests
         await ModuleImageRecipeOperations.Instance.BuildImageAsync(
             recipe,
             plan,
+            "dotnet",
+            output.Add,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(output);
+    }
+
+    [Fact]
+    public async Task Default_build_operation_resolves_the_container_runtime_placeholder()
+    {
+        using var workingDirectory = TemporaryDirectory.Create();
+        var recipe = CreateRecipe(
+            options: new ModuleContainerExportOptions(
+                "acme/api",
+                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                "--version"),
+            repositoryPath: workingDirectory.Path,
+            workingDirectory: workingDirectory.Path);
+        var plan = new ModuleImageExecutionPlan(
+            "acme/api:test",
+            ProducedImageReference: null,
+            PublishArguments: ["--version"]);
+        var output = new List<string>();
+
+        await ModuleImageRecipeOperations.Instance.BuildImageAsync(
+            recipe,
+            plan,
+            "dotnet",
             output.Add,
             TestContext.Current.CancellationToken);
 
@@ -357,6 +458,7 @@ public sealed class ModuleImageDeferredCoverageTests
             ModuleImageRecipeOperations.Instance.BuildImageAsync(
                 recipe,
                 invalidBuild,
+                "dotnet",
                 _ => { },
                 TestContext.Current.CancellationToken));
         var tagException = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -398,6 +500,7 @@ public sealed class ModuleImageDeferredCoverageTests
             ModuleImageRecipeOperations.Instance.BuildImageAsync(
                 recipe,
                 plan,
+                "dotnet",
                 _ => { },
                 TestContext.Current.CancellationToken));
 
@@ -424,18 +527,19 @@ public sealed class ModuleImageDeferredCoverageTests
             recipe.LocalImageReference,
             dirtySource,
             ModuleImagePreparationDisposition.Built);
+        var preparationCount = 0;
         var publisher = CreatePublisher(
             recipe,
-            (_, _, _, _) => Task.FromResult(prepared));
+            (_, _, _, _) =>
+            {
+                preparationCount++;
+                return Task.FromResult(prepared);
+            });
         var container = builder
             .AddContainer("api", recipe.Options.ImageName, ModuleImageBuildRecipe.LocalRunTag)
             .WithContainerRegistry(registry)
             .WithAnnotation(publisher);
         ModuleImagePushPipeline.AddPushStep(container);
-        await publisher.PrepareAsync(
-            NullLogger.Instance,
-            NullLogger.Instance,
-            TestContext.Current.CancellationToken);
         var imageManager = new RecordingImageManager();
         builder.Services.AddSingleton<IResourceContainerImageManager>(imageManager);
 
@@ -460,6 +564,8 @@ public sealed class ModuleImageDeferredCoverageTests
         });
 
         Assert.Same(container.Resource, Assert.Single(imageManager.PushedResources));
+        Assert.Equal(1, preparationCount);
+        Assert.True(publisher.TryGetPreparedImage(out _));
     }
 
     [Fact]
@@ -594,6 +700,54 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
+    public async Task Pull_runtime_output_is_redacted_in_the_resource_log_and_stderr_is_informational()
+    {
+        using var runtime = new FakeContainerRuntimeEnvironment(FakeRuntimeMode.Success, configured: true);
+        var builder = DistributedApplication.CreateBuilder();
+        await using var application = builder.Build();
+        await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
+            "pull-api",
+            TestContext.Current.CancellationToken);
+        var pipelineLogger = new RecordingLogger();
+        var resourceLogger = new RecordingLogger();
+        var pipelineContext = new PipelineContext(
+            application.Services.GetRequiredService<DistributedApplicationModel>(),
+            application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
+            application.Services,
+            pipelineLogger,
+            TestContext.Current.CancellationToken);
+        var stepContext = new PipelineStepContext
+        {
+            PipelineContext = pipelineContext,
+            ReportingStep = reportingStep
+        };
+
+        await ModuleImagePullPipeline.ExecuteRuntimeAsync(
+            "docker",
+            ["pull", "acme/api:test"],
+            stepContext,
+            resourceLogger);
+
+        Assert.Empty(pipelineLogger.Entries);
+        Assert.NotEmpty(resourceLogger.Entries);
+        Assert.All(resourceLogger.Entries, entry => Assert.Equal(LogLevel.Information, entry.Level));
+        Assert.Contains(
+            resourceLogger.Entries,
+            entry => entry.Message.Contains("runtime stdout", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceLogger.Entries,
+            entry => entry.Message.Contains("runtime stderr", StringComparison.Ordinal));
+        Assert.All(resourceLogger.Entries, entry =>
+        {
+            Assert.DoesNotContain("user:secret", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("token=secret", entry.Message, StringComparison.Ordinal);
+        });
+        Assert.Contains(
+            resourceLogger.Entries,
+            entry => entry.Message.Contains("[REDACTED]", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Container_inspector_rejects_empty_references_before_resolving_runtime()
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -690,7 +844,7 @@ public sealed class ModuleImageDeferredCoverageTests
             ModuleImagePreparationDisposition.Built);
     }
 
-    private static async Task RunGitAsync(string workingDirectory, params string[] arguments)
+    private static async Task<string> RunGitAsync(string workingDirectory, params string[] arguments)
     {
         var result = await ModuleCliRunner.RunAsync(
             "git",
@@ -701,6 +855,7 @@ public sealed class ModuleImageDeferredCoverageTests
             TestContext.Current.CancellationToken,
             static _ => { });
         Assert.True(result.IsSuccess, result.StandardError);
+        return result.StandardOutput;
     }
 
     private static async Task<IReadOnlyList<PipelineStep>> CreatePipelineStepsAsync(
@@ -791,6 +946,7 @@ public sealed class ModuleImageDeferredCoverageTests
         }
 
         public Task<bool> ImageExistsAsync(
+            string containerRuntime,
             string imageReference,
             CancellationToken cancellationToken)
         {
@@ -799,13 +955,16 @@ public sealed class ModuleImageDeferredCoverageTests
         }
 
         public Task<bool> PullImageAsync(
+            string containerRuntime,
             string imageReference,
+            Action<string> progress,
             CancellationToken cancellationToken) =>
             Task.FromResult(false);
 
         public Task BuildImageAsync(
             ModuleImageBuildRecipe recipe,
             ModuleImageExecutionPlan plan,
+            string containerRuntime,
             Action<string> progress,
             CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -839,6 +998,31 @@ public sealed class ModuleImageDeferredCoverageTests
         {
             PushedResources.Add(resource);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        private readonly object _lock = new();
+
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_lock)
+            {
+                Entries.Add((logLevel, formatter(state, exception)));
+            }
         }
     }
 

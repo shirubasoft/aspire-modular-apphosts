@@ -508,6 +508,7 @@ Aspire.Hosting.ModuleProjectMode.Container = 2 -> Aspire.Hosting.ModuleProjectMo
 Aspire.Hosting.ModuleProjectMode.Project = 1 -> Aspire.Hosting.ModuleProjectMode
 *REMOVED*const Aspire.Hosting.DistributedApplicationModuleExtensions.RepositoryBaseLocationParameterName = "module-repository-base-location" -> string!
 const Aspire.Hosting.ModularAppHostsOptions.ConfigurationSectionName = "Aspire:ModularAppHosts" -> string!
+const Aspire.Hosting.ModuleContainerExportOptions.ContainerRuntimePlaceholder = "{container-runtime}" -> string!
 const Aspire.Hosting.ModuleContainerExportOptions.ImageNamePlaceholder = "{image-name}" -> string!
 const Aspire.Hosting.ModuleContainerExportOptions.ImageReferencePlaceholder = "{image}" -> string!
 const Aspire.Hosting.ModuleContainerExportOptions.ImageTagPlaceholder = "{image-tag}" -> string!

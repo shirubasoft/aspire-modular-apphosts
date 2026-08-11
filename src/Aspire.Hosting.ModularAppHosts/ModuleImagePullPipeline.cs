@@ -23,12 +23,6 @@ internal static class ModuleImagePullPipeline
             new EventId(3, nameof(LogContainerRuntimeOutput)),
             "{ContainerRuntime}: {Output}");
 
-    private static readonly Action<ILogger, string, string, Exception?> LogContainerRuntimeError =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Warning,
-            new EventId(4, nameof(LogContainerRuntimeError)),
-            "{ContainerRuntime}: {Output}");
-
     private static readonly Action<ILogger, string, string, Exception?> LogImagePullStarted =
         LoggerMessage.Define<string, string>(
             LogLevel.Information,
@@ -161,7 +155,7 @@ internal static class ModuleImagePullPipeline
         IResource resource,
         PipelineStepContext context,
         Func<CancellationToken, Task<string>> resolveRuntimeAsync,
-        Func<string, IReadOnlyList<string>, PipelineStepContext, Task> executeRuntimeAsync)
+        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, Task> executeRuntimeAsync)
     {
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(context);
@@ -183,7 +177,8 @@ internal static class ModuleImagePullPipeline
         await executeRuntimeAsync(
             runtime,
             ["pull", remoteImage],
-            context).ConfigureAwait(false);
+            context,
+            resourceLogger).ConfigureAwait(false);
         if (!string.Equals(remoteImage, localImage, StringComparison.Ordinal))
         {
             LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
@@ -191,24 +186,45 @@ internal static class ModuleImagePullPipeline
             await executeRuntimeAsync(
                 runtime,
                 ["tag", remoteImage, localImage],
-                context).ConfigureAwait(false);
+                context,
+                resourceLogger).ConfigureAwait(false);
             LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
             LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }
     }
 
-    private static async Task ExecuteRuntimeAsync(
+    internal static async Task ExecuteRuntimeAsync(
         string runtime,
         IReadOnlyList<string> arguments,
-        PipelineStepContext context)
+        PipelineStepContext context,
+        ILogger resourceLogger)
     {
-        await CliCommand.Wrap(runtime)
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(resourceLogger);
+
+        var result = await CliCommand.Wrap(runtime)
             .WithArguments(arguments)
+            .WithValidation(CommandResultValidation.None)
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    ModuleCliOutputRedactor.Redact(runtime),
+                    ModuleCliOutputRedactor.Redact(line),
+                    null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeError(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    ModuleCliOutputRedactor.Redact(runtime),
+                    ModuleCliOutputRedactor.Redact(line),
+                    null)))
             .ExecuteAsync(context.CancellationToken)
             .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Container runtime '{ModuleCliOutputRedactor.Redact(runtime)}' failed with exit code {result.ExitCode}.");
+        }
     }
 }

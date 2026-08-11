@@ -3,7 +3,7 @@ using ModularSample.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-var exported = await AppHostAModule.RegisterAsync(builder, builder.AppHostDirectory);
+var exported = AppHostAModule.Register(builder, builder.AppHostDirectory);
 var module = builder.AddAppHostAModule(exported);
 
 _ = module.Api;

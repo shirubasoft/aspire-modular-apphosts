@@ -203,7 +203,8 @@ public static partial class DistributedApplicationModuleExtensions
                 registry,
                 options,
                 moduleOptions,
-                GetProjectWorkingDirectory(project));
+                GetProjectWorkingDirectory(project),
+                project.GetRepositoryRelativeProjectPath());
         var container = builder
             .AddContainer(
                 resourceName,
@@ -398,7 +399,8 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
-        string defaultWorkingDirectory)
+        string defaultWorkingDirectory,
+        string? requiredProjectRelativePath = null)
     {
         var effectiveOptions = ApplyImageRecipeOptions(declared, configured);
         var buildRepository = ModuleMaterializationPlanning.ResolveBuildRepository(
@@ -420,6 +422,17 @@ public static partial class DistributedApplicationModuleExtensions
             module.Name,
             $"image build directory for resource '{declaredResourceName}'",
             workingDirectory);
+        if (requiredProjectRelativePath is not null)
+        {
+            registry.RequireFile(
+                module.Name,
+                $"project '{declaredResourceName}'",
+                PathSafety.GetContainedPath(
+                    definitionRepository.RepositoryPath,
+                    requiredProjectRelativePath,
+                    nameof(IDistributedApplicationModuleProject.ProjectPath)));
+        }
+
         var refresh = configured?.RefreshBuildRepositoryOnRun ??
             options.RefreshBuildRepositoriesOnRun;
         var recipe = new ModuleImageBuildRecipe(

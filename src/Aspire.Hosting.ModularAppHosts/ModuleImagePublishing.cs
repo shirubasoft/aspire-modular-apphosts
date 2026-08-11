@@ -133,8 +133,22 @@ internal static class ContainerImageInspector
         ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
 
         var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
-        return await RunAsync(
+        return await ExistsAsync(
             runtime,
+            imageReference,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<bool> ExistsAsync(
+        string containerRuntime,
+        string imageReference,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerRuntime);
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
+
+        return await RunAsync(
+            containerRuntime,
             ["image", "inspect", imageReference],
             cancellationToken).ConfigureAwait(false) == 0;
     }
@@ -148,11 +162,53 @@ internal static class ContainerImageInspector
         try
         {
             var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
-            var result = await CliCommand.Wrap(runtime)
+            return await PullAsync(
+                runtime,
+                imageReference,
+                static _ => { },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException
+                or System.ComponentModel.Win32Exception
+                or IOException)
+        {
+            return false;
+        }
+    }
+
+    public static async Task<bool> PullAsync(
+        string containerRuntime,
+        string imageReference,
+        Action<string> progress,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(containerRuntime);
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
+        ArgumentNullException.ThrowIfNull(progress);
+
+        try
+        {
+            var progressLock = new object();
+            void ReportProgress(string line)
+            {
+                var redacted = ModuleCliOutputRedactor.Redact(line);
+                if (string.IsNullOrWhiteSpace(redacted))
+                {
+                    return;
+                }
+
+                lock (progressLock)
+                {
+                    progress(redacted);
+                }
+            }
+
+            var result = await CliCommand.Wrap(containerRuntime)
                 .WithArguments(["pull", imageReference])
                 .WithValidation(CommandResultValidation.None)
-                .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
-                .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
+                .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportProgress))
+                .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportProgress))
                 .ExecuteAsync(cancellationToken)
                 .ConfigureAwait(false);
             return result.ExitCode == 0;

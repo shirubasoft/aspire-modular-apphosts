@@ -73,6 +73,8 @@ public sealed class ModuleImageBuildRecipeTests
             operations.Tags);
         Assert.Equal(0, operations.PullCount);
         Assert.Equal(0, operations.BuildCount);
+        Assert.Equal(1, operations.ResolveRuntimeCount);
+        Assert.All(operations.UsedRuntimes, runtime => Assert.Equal("test-runtime", runtime));
     }
 
     [Fact]
@@ -91,6 +93,8 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Equal(1, operations.PullCount);
         Assert.Equal(0, operations.BuildCount);
         Assert.Single(operations.Tags);
+        Assert.Equal(1, operations.ResolveRuntimeCount);
+        Assert.All(operations.UsedRuntimes, runtime => Assert.Equal("test-runtime", runtime));
     }
 
     [Fact]
@@ -112,6 +116,8 @@ public sealed class ModuleImageBuildRecipeTests
                 (prepared.CanonicalImageReference, prepared.LocalImageReference)
             ],
             operations.Tags);
+        Assert.Equal(1, operations.ResolveRuntimeCount);
+        Assert.All(operations.UsedRuntimes, runtime => Assert.Equal("test-runtime", runtime));
     }
 
     [Fact]
@@ -260,6 +266,68 @@ public sealed class ModuleImageBuildRecipeTests
     }
 
     [Fact]
+    public async Task Pull_output_is_redacted_and_only_written_to_the_resource_logger()
+    {
+        var options = CreateOptions();
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations(CleanMain)
+        {
+            PullSucceeds = true
+        };
+        var lifecycleLogger = new RecordingLogger();
+        var resourceLogger = new RecordingLogger();
+
+        await ModuleImageRecipeEvaluator.PrepareAsync(
+            CreateRecipe(options: options),
+            lifecycleLogger,
+            resourceLogger,
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(
+            lifecycleLogger.Messages,
+            message => message.Contains("pull output", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceLogger.Messages,
+            message => message.Contains("pull output", StringComparison.Ordinal) &&
+                message.Contains("[REDACTED]", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            resourceLogger.Messages,
+            message => message.Contains("user:secret", StringComparison.Ordinal) ||
+                message.Contains("token=secret", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Retag_completion_includes_elapsed_time()
+    {
+        var operations = new FakeOperations(CleanMain)
+        {
+            ImageExists = true
+        };
+        var logger = new RecordingLogger();
+
+        await ModuleImageRecipeEvaluator.PrepareAsync(
+            CreateRecipe(),
+            logger,
+            logger,
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            logger.Messages,
+            message => message.StartsWith("Tagged image ", StringComparison.Ordinal) &&
+                message.Contains(" in ", StringComparison.Ordinal) &&
+                message.EndsWith(" ms.", StringComparison.Ordinal));
+        var retag = Assert.Single(
+            logger.Entries,
+            entry => string.Equals(
+                entry.EventId.Name,
+                "LogRetagCompleted",
+                StringComparison.Ordinal));
+        Assert.True(Assert.IsType<double>(retag.Properties["ElapsedMilliseconds"]) >= 0);
+    }
+
+    [Fact]
     public async Task Publisher_annotation_caches_one_in_flight_preparation_without_blocking()
     {
         var recipe = CreateRecipe();
@@ -370,10 +438,17 @@ public sealed class ModuleImageBuildRecipeTests
 
         public int RefreshCount { get; private set; }
 
+        public int ResolveRuntimeCount { get; private set; }
+
         public List<(string Source, string Target)> Tags { get; } = [];
 
-        public Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
-            Task.FromResult("docker");
+        public List<string> UsedRuntimes { get; } = [];
+
+        public Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken)
+        {
+            ResolveRuntimeCount++;
+            return Task.FromResult("test-runtime");
+        }
 
         public Task<ModuleImageSourceState> CaptureSourceStateAsync(
             ModuleImageBuildRecipe recipe,
@@ -406,28 +481,36 @@ public sealed class ModuleImageBuildRecipeTests
         }
 
         public Task<bool> ImageExistsAsync(
+            string containerRuntime,
             string imageReference,
             CancellationToken cancellationToken)
         {
             ImageExistsCount++;
+            UsedRuntimes.Add(containerRuntime);
             return Task.FromResult(ImageExists);
         }
 
         public Task<bool> PullImageAsync(
+            string containerRuntime,
             string imageReference,
+            Action<string> progress,
             CancellationToken cancellationToken)
         {
             PullCount++;
+            UsedRuntimes.Add(containerRuntime);
+            progress("pull output with https://user:secret@example.test/path?token=secret");
             return Task.FromResult(PullSucceeds);
         }
 
         public Task BuildImageAsync(
             ModuleImageBuildRecipe recipe,
             ModuleImageExecutionPlan plan,
+            string containerRuntime,
             Action<string> progress,
             CancellationToken cancellationToken)
         {
             BuildCount++;
+            UsedRuntimes.Add(containerRuntime);
             progress("build output with https://user:secret@example.test/path?token=secret");
             return Task.CompletedTask;
         }
@@ -440,6 +523,7 @@ public sealed class ModuleImageBuildRecipeTests
             Action<string> progress,
             CancellationToken cancellationToken)
         {
+            UsedRuntimes.Add(containerRuntime);
             Tags.Add((sourceImageReference, targetImageReference));
             return Task.CompletedTask;
         }
@@ -448,6 +532,8 @@ public sealed class ModuleImageBuildRecipeTests
     private sealed class RecordingLogger : ILogger
     {
         public List<string> Messages { get; } = [];
+
+        public List<RecordedLogEntry> Entries { get; } = [];
 
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull => null;
@@ -459,7 +545,18 @@ public sealed class ModuleImageBuildRecipeTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
+                : new Dictionary<string, object?>(StringComparer.Ordinal);
+            Entries.Add(new RecordedLogEntry(eventId, properties));
+        }
     }
+
+    private sealed record RecordedLogEntry(
+        EventId EventId,
+        IReadOnlyDictionary<string, object?> Properties);
 }

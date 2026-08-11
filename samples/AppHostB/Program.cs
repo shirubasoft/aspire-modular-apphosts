@@ -8,7 +8,7 @@ var appHostASource = Path.Combine(samplesRoot, "AppHostA");
 builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(AppHostAModule.Name)] =
     appHostASource;
 
-await AppHostAModule.RegisterAsync(builder, appHostASource);
+AppHostAModule.Register(builder, appHostASource);
 var imported = builder.ImportAppHostAModule();
 
 var api = imported.Api;

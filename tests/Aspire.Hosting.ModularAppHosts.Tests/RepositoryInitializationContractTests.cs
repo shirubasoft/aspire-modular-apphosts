@@ -88,7 +88,12 @@ public sealed class RepositoryInitializationContractTests
             Path.Combine(checkoutPath, "content.txt"),
             TestContext.Current.CancellationToken));
         Assert.Equal(
-            [("fast-forward", "started", (string?)null), ("fast-forward", "completed", (string?)null)],
+            [
+                ("fast-forward", "started", (string?)null),
+                ("fast-forward", "completed", (string?)null),
+                ("submodule-update", "started", (string?)null),
+                ("submodule-update", "completed", (string?)null)
+            ],
             lifecycle.Select(entry => (entry.Operation, entry.State, entry.Reason)).ToArray());
     }
 
@@ -119,8 +124,16 @@ public sealed class RepositoryInitializationContractTests
         await SynchronizeAsync(checkoutPath, sourcePath, updateRepository, lifecycle.Add);
 
         Assert.Equal(checkoutCommit, await ReadGitAsync(checkoutPath, "rev-parse", "HEAD"));
+        var expectedLifecycle = makeDirty
+            ? [("update", "skipped", expectedReason)]
+            : new[]
+            {
+                ("update", "skipped", expectedReason),
+                ("submodule-update", "started", (string?)null),
+                ("submodule-update", "completed", (string?)null)
+            };
         Assert.Equal(
-            [("update", "skipped", expectedReason)],
+            expectedLifecycle,
             lifecycle.Select(entry => (entry.Operation, entry.State, entry.Reason)).ToArray());
         Assert.Equal(
             makeDirty ? "local-change" : "first",
@@ -145,7 +158,11 @@ public sealed class RepositoryInitializationContractTests
 
         Assert.Equal(commit, await ReadGitAsync(repositoryPath, "rev-parse", "HEAD"));
         Assert.Equal(
-            [("update", "skipped", "no-upstream")],
+            [
+                ("update", "skipped", "no-upstream"),
+                ("submodule-update", "started", (string?)null),
+                ("submodule-update", "completed", (string?)null)
+            ],
             lifecycle.Select(entry => (entry.Operation, entry.State, entry.Reason)).ToArray());
     }
 
@@ -249,11 +266,13 @@ public sealed class RepositoryInitializationContractTests
             clone.Arguments);
 
         await SynchronizeAsync(checkoutPath, sourcePath, updateRepository: true);
-        Assert.Null(await RepositorySynchronizer.CreateCommandAsync(
+        var submoduleUpdate = await RepositorySynchronizer.CreateCommandAsync(
             checkoutPath,
             sourcePath,
             updateRepository: false,
-            cancellationToken: TestContext.Current.CancellationToken));
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(submoduleUpdate);
+        Assert.Equal("submodule-update", submoduleUpdate.Operation);
     }
 
     [Theory]
@@ -286,6 +305,34 @@ public sealed class RepositoryInitializationContractTests
             mismatchedSource ?? "(missing)",
             exception.Message,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repository_mismatch_errors_redact_remote_credentials_and_queries()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var checkoutPath = Path.Combine(workspace.Path, "checkout");
+        await InitializeRepositoryAsync(checkoutPath, "checkout");
+        const string actualRepository =
+            "https://actual-user:actual-password@example.test/acme/actual.git?auth=actual-query";
+        const string expectedRepository =
+            "https://expected-user:expected-password@example.test/acme/expected.git?auth=expected-query";
+        await RunGitAsync(checkoutPath, "remote", "add", "origin", actualRepository);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            RepositorySynchronizer.CreateCommandsAsync(
+                checkoutPath,
+                expectedRepository,
+                updateRepository: false,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("[REDACTED]", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("actual-user", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("actual-password", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("actual-query", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expected-user", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expected-password", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expected-query", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -401,6 +448,45 @@ public sealed class RepositoryInitializationContractTests
         Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
         Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
         Assert.Contains(missingProject, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Initialization_routes_lifecycle_to_both_loggers_and_raw_output_only_to_the_resource()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var plans = new ModuleRepositoryPlanRegistry(CreateAppHostRepository(workspace.Path));
+        var requirement = plans.Register(
+            "payments",
+            "https://example.test/acme/payments.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var lifecycleLogger = new CapturingLogger();
+        var resourceLogger = new CapturingLogger();
+
+        await ModuleRepositoryInitializationPipeline.InitializeAsync(
+            requirement,
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            lifecycleLogger,
+            resourceLogger,
+            (_, _, progress, lifecycle, _) =>
+            {
+                progress("clone output");
+                lifecycle(new RepositorySyncLifecycleEvent("clone", "started"));
+                lifecycle(new RepositorySyncLifecycleEvent(
+                    "clone",
+                    "completed",
+                    ElapsedMilliseconds: 12));
+                return Task.CompletedTask;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 4, 4, 3], lifecycleLogger.Entries.Select(entry => entry.EventId.Id));
+        Assert.Equal([1, 2, 4, 4, 3], resourceLogger.Entries.Select(entry => entry.EventId.Id));
+        Assert.DoesNotContain(lifecycleLogger.Entries, entry => entry.EventId.Id == 2);
+        Assert.Contains(resourceLogger.Entries, entry =>
+            entry.EventId.Id == 2 && Equals(entry.State["Output"], "clone output"));
+        Assert.Contains(lifecycleLogger.Scopes, scope => scope.ContainsKey("OperationId"));
+        Assert.Contains(resourceLogger.Scopes, scope => scope.ContainsKey("OperationId"));
     }
 
     private static string CreateAppHostRepository(string workspacePath)

@@ -202,16 +202,20 @@ internal interface IModuleImageRecipeOperations
         CancellationToken cancellationToken);
 
     Task<bool> ImageExistsAsync(
+        string containerRuntime,
         string imageReference,
         CancellationToken cancellationToken);
 
     Task<bool> PullImageAsync(
+        string containerRuntime,
         string imageReference,
+        Action<string> progress,
         CancellationToken cancellationToken);
 
     Task BuildImageAsync(
         ModuleImageBuildRecipe recipe,
         ModuleImageExecutionPlan plan,
+        string containerRuntime,
         Action<string> progress,
         CancellationToken cancellationToken);
 
@@ -292,11 +296,11 @@ internal static class ModuleImageRecipeEvaluator
             new EventId(11, nameof(LogRetagStarted)),
             "Tagging image {SourceImageReference} as {TargetImageReference}.");
 
-    private static readonly Action<ILogger, string, string, Exception?> LogRetagCompleted =
-        LoggerMessage.Define<string, string>(
+    private static readonly Action<ILogger, string, string, double, Exception?> LogRetagCompleted =
+        LoggerMessage.Define<string, string, double>(
             LogLevel.Information,
             new EventId(12, nameof(LogRetagCompleted)),
-            "Tagged image {SourceImageReference} as {TargetImageReference}.");
+            "Tagged image {SourceImageReference} as {TargetImageReference} in {ElapsedMilliseconds} ms.");
 
     private static readonly Action<ILogger, string, string, double, Exception?> LogPreparationCompleted =
         LoggerMessage.Define<string, string, double>(
@@ -382,6 +386,7 @@ internal static class ModuleImageRecipeEvaluator
                 cancellationToken).ConfigureAwait(false);
         }
         else if (await operations.ImageExistsAsync(
+                containerRuntime,
                 plan.CanonicalImageReference,
                 cancellationToken).ConfigureAwait(false))
         {
@@ -398,7 +403,9 @@ internal static class ModuleImageRecipeEvaluator
                 resourceLogger,
                 logger => LogPullStarted(logger, plan.CanonicalImageReference, null));
             if (await operations.PullImageAsync(
+                    containerRuntime,
                     plan.CanonicalImageReference,
+                    line => LogRawOutput(resourceLogger, line),
                     cancellationToken).ConfigureAwait(false))
             {
                 LogBoth(
@@ -539,6 +546,7 @@ internal static class ModuleImageRecipeEvaluator
         await operations.BuildImageAsync(
             recipe,
             plan,
+            containerRuntime,
             line => LogRawOutput(resourceLogger, line),
             cancellationToken).ConfigureAwait(false);
         var sourceStateAfterBuild = await operations.CaptureSourceStateAsync(recipe, cancellationToken)
@@ -594,6 +602,7 @@ internal static class ModuleImageRecipeEvaluator
             lifecycleLogger,
             resourceLogger,
             logger => LogRetagStarted(logger, sourceImageReference, targetImageReference, null));
+        var stopwatch = Stopwatch.StartNew();
         await operations.TagImageAsync(
             recipe,
             containerRuntime,
@@ -601,10 +610,16 @@ internal static class ModuleImageRecipeEvaluator
             targetImageReference,
             line => LogRawOutput(resourceLogger, line),
             cancellationToken).ConfigureAwait(false);
+        stopwatch.Stop();
         LogBoth(
             lifecycleLogger,
             resourceLogger,
-            logger => LogRetagCompleted(logger, sourceImageReference, targetImageReference, null));
+            logger => LogRetagCompleted(
+                logger,
+                sourceImageReference,
+                targetImageReference,
+                stopwatch.Elapsed.TotalMilliseconds,
+                null));
     }
 
     private static IDisposable? BeginScope(
@@ -678,9 +693,25 @@ internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
             cancellationToken).ConfigureAwait(false);
         var status = await RunGitAsync(
             recipe,
-            ["status", "--porcelain=v1", "--untracked-files=normal"],
+            ["status", "--porcelain=v1", "--untracked-files=all"],
             cancellationToken).ConfigureAwait(false);
-        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(status)));
+        var trackedPaths = await RunGitPathsAsync(
+            recipe,
+            ["diff", "--name-only", "-z", "--no-ext-diff", "HEAD", "--"],
+            cancellationToken).ConfigureAwait(false);
+        var stagedPaths = await RunGitPathsAsync(
+            recipe,
+            ["diff", "--cached", "--name-only", "-z", "--no-ext-diff", "HEAD", "--"],
+            cancellationToken).ConfigureAwait(false);
+        var untrackedPaths = await RunGitPathsAsync(
+            recipe,
+            ["ls-files", "--others", "--exclude-standard", "-z", "--"],
+            cancellationToken).ConfigureAwait(false);
+        var fingerprint = await CreateStatusFingerprintAsync(
+            recipe.RepositoryPath,
+            status,
+            [trackedPaths, stagedPaths, untrackedPaths],
+            cancellationToken).ConfigureAwait(false);
         return new ModuleImageSourceState(
             string.IsNullOrWhiteSpace(branch) ? null : branch.Trim(),
             string.IsNullOrWhiteSpace(commit) ? null : commit.Trim(),
@@ -713,18 +744,26 @@ internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
             progress);
 
     public Task<bool> ImageExistsAsync(
+        string containerRuntime,
         string imageReference,
         CancellationToken cancellationToken) =>
-        ContainerImageInspector.ExistsAsync(imageReference, cancellationToken);
+        ContainerImageInspector.ExistsAsync(containerRuntime, imageReference, cancellationToken);
 
     public Task<bool> PullImageAsync(
+        string containerRuntime,
         string imageReference,
+        Action<string> progress,
         CancellationToken cancellationToken) =>
-        ContainerImageInspector.PullAsync(imageReference, cancellationToken);
+        ContainerImageInspector.PullAsync(
+            containerRuntime,
+            imageReference,
+            progress,
+            cancellationToken);
 
     public async Task BuildImageAsync(
         ModuleImageBuildRecipe recipe,
         ModuleImageExecutionPlan plan,
+        string containerRuntime,
         Action<string> progress,
         CancellationToken cancellationToken)
     {
@@ -734,8 +773,14 @@ internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
             timeout.Token);
         try
         {
-            var result = await CliCommand.Wrap(recipe.Options.PublishCommand)
-                .WithArguments(plan.PublishArguments)
+            var publishCommand = ResolveContainerRuntimePlaceholder(
+                recipe.Options.PublishCommand,
+                containerRuntime);
+            var publishArguments = plan.PublishArguments
+                .Select(argument => ResolveContainerRuntimePlaceholder(argument, containerRuntime))
+                .ToArray();
+            var result = await CliCommand.Wrap(publishCommand)
+                .WithArguments(publishArguments)
                 .WithWorkingDirectory(recipe.WorkingDirectory)
                 .WithEnvironmentVariables(new Dictionary<string, string?>
                 {
@@ -811,4 +856,153 @@ internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
 
         return result.StandardOutput;
     }
+
+    private static async Task<string> CreateStatusFingerprintAsync(
+        string repositoryPath,
+        string status,
+        IEnumerable<IReadOnlyList<string>> pathLists,
+        CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendFingerprintValue(hash, "status");
+        AppendFingerprintValue(hash, status);
+
+        var paths = pathLists
+            .SelectMany(static pathList => pathList)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
+        var buffer = new byte[81920];
+        foreach (var relativePath in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            AppendFingerprintValue(hash, "path");
+            AppendFingerprintValue(hash, relativePath);
+            var fullPath = Path.GetFullPath(relativePath, repositoryPath);
+            var pathFromRoot = Path.GetRelativePath(repositoryPath, fullPath);
+            if (Path.IsPathRooted(pathFromRoot) ||
+                pathFromRoot.Equals("..", StringComparison.Ordinal) ||
+                pathFromRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                pathFromRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Git reported source path '{relativePath}' outside repository '{repositoryPath}'.");
+            }
+
+            var file = new FileInfo(fullPath);
+            if (file.LinkTarget is { } linkTarget)
+            {
+                AppendFingerprintValue(hash, "link");
+                AppendFingerprintValue(hash, linkTarget);
+                continue;
+            }
+
+            if (!file.Exists)
+            {
+                AppendFingerprintValue(
+                    hash,
+                    Directory.Exists(fullPath) ? "directory" : "missing");
+                continue;
+            }
+
+            AppendFingerprintValue(hash, "file");
+            var attributes = file.Attributes;
+            AppendFingerprintValue(
+                hash,
+                ((int)attributes).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if ((attributes & FileAttributes.Device) != 0)
+            {
+                AppendFingerprintValue(hash, "device");
+                continue;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                AppendFingerprintValue(
+                    hash,
+                    ((int)File.GetUnixFileMode(fullPath))
+                        .ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            var length = file.Length;
+            AppendFingerprintValue(hash, length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            if (length == 0)
+            {
+                continue;
+            }
+
+            var stream = new FileStream(
+                fullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                buffer.Length,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using (stream.ConfigureAwait(false))
+            {
+                int bytesRead;
+                while ((bytesRead = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    hash.AppendData(buffer, 0, bytesRead);
+                }
+            }
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static async Task<IReadOnlyList<string>> RunGitPathsAsync(
+        ModuleImageBuildRecipe recipe,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        using var output = new MemoryStream();
+        using var timeout = new CancellationTokenSource(recipe.CommandTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeout.Token);
+        try
+        {
+            var result = await CliCommand.Wrap(recipe.GitExecutablePath)
+                .WithArguments(["-C", recipe.RepositoryPath, .. arguments])
+                .WithWorkingDirectory(recipe.RepositoryPath)
+                .WithValidation(CommandResultValidation.None)
+                .WithStandardOutputPipe(PipeTarget.ToStream(output))
+                .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
+                .ExecuteAsync(linked.Token)
+                .ConfigureAwait(false);
+            if (result.ExitCode != 0)
+            {
+                throw CreateGitInspectionException(recipe);
+            }
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Image source inspection for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' " +
+                $"exceeded the configured timeout of {recipe.CommandTimeout}.",
+                exception);
+        }
+
+        return Encoding.UTF8.GetString(output.ToArray())
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static InvalidOperationException CreateGitInspectionException(
+        ModuleImageBuildRecipe recipe) =>
+        new(
+            $"Unable to inspect image build repository '{recipe.RepositoryPath}' for module " +
+            $"'{recipe.ModuleName}' resource '{recipe.ResourceName}' with Git executable " +
+            $"'{ModuleCliOutputRedactor.Redact(recipe.GitExecutablePath)}'.");
+
+    private static void AppendFingerprintValue(IncrementalHash hash, string value)
+    {
+        hash.AppendData(Encoding.UTF8.GetBytes(value));
+        hash.AppendData([0]);
+    }
+
+    private static string ResolveContainerRuntimePlaceholder(string value, string containerRuntime) =>
+        value.Replace(
+            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+            containerRuntime,
+            StringComparison.Ordinal);
 }

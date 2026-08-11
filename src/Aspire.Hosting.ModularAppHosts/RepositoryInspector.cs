@@ -476,7 +476,8 @@ internal static class RepositorySynchronizer
                 {
                     throw new InvalidOperationException(
                         $"Repository path '{repositoryPath}' already exists, but it is not a Git checkout of " +
-                        $"configured repository '{repository}'. Move that directory or correct the module configuration.");
+                        $"configured repository '{ModuleCliOutputRedactor.Redact(repository)}'. " +
+                        "Move that directory or correct the module configuration.");
                 }
 
                 lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "not-git"));
@@ -552,7 +553,11 @@ internal static class RepositorySynchronizer
         if (!updateRepository)
         {
             lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "disabled"));
-            return [];
+            return [CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)];
         }
 
         if (!await RepositoryInspector.HasUpstreamAsync(
@@ -562,16 +567,28 @@ internal static class RepositorySynchronizer
                 cancellationToken).ConfigureAwait(false))
         {
             lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "no-upstream"));
-            return [];
+            return [CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)];
         }
 
-        return [new RepositorySyncCommand(
-            gitExecutablePath,
-            GitHubGitAuthentication.ConfigureCredentialHelper(
-                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"],
-                actualRepository ?? repository,
-                githubCliPath),
-            "fast-forward")];
+        return
+        [
+            new RepositorySyncCommand(
+                gitExecutablePath,
+                GitHubGitAuthentication.ConfigureCredentialHelper(
+                    ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"],
+                    actualRepository ?? repository,
+                    githubCliPath),
+                "fast-forward"),
+            CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)
+        ];
     }
 
     public static async Task SynchronizeAsync(
@@ -654,14 +671,25 @@ internal static class RepositorySynchronizer
             gitExecutablePath,
             ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"],
             "checkout"));
-        commands.Add(new RepositorySyncCommand(
+        commands.Add(CreateSubmoduleUpdateCommand(
+            repositoryPath,
+            gitExecutablePath,
+            githubCliPath,
+            repository));
+    }
+
+    private static RepositorySyncCommand CreateSubmoduleUpdateCommand(
+        string repositoryPath,
+        string gitExecutablePath,
+        string githubCliPath,
+        string? repository) =>
+        new(
             gitExecutablePath,
             GitHubGitAuthentication.ConfigureCredentialHelper(
                 ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"],
                 repository,
                 githubCliPath),
-            "submodule-update"));
-    }
+            "submodule-update");
 
     private static async Task<string?> EnsureExpectedOriginAsync(
         string repositoryPath,
@@ -699,8 +727,10 @@ internal static class RepositorySynchronizer
         if (!matches)
         {
             throw new InvalidOperationException(
-                $"Repository '{repositoryPath}' has origin '{actualRepository ?? "(missing)"}', which does not match " +
-                $"configured repository '{expectedRepository}'. Move the checkout or correct the module configuration.");
+                $"Repository '{repositoryPath}' has origin " +
+                $"'{ModuleCliOutputRedactor.Redact(actualRepository ?? "(missing)")}', which does not match " +
+                $"configured repository '{ModuleCliOutputRedactor.Redact(expectedRepository)}'. " +
+                "Move the checkout or correct the module configuration.");
         }
 
         return actualRepository;

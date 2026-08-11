@@ -2,6 +2,13 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting;
 
+internal sealed class ModuleRepositoryInitializationResource(
+    string name,
+    ModuleRepositoryRequirement requirement) : Resource(name)
+{
+    public ModuleRepositoryRequirement Requirement { get; } = requirement;
+}
+
 /// <summary>A managed one-shot resource that prepares a module image before application resources start.</summary>
 public sealed class ModuleRepositoryInstallerResource
     : Resource

@@ -21,13 +21,11 @@ public static partial class AppHostAModule
     public const string ContainerRegistryResourceName = "sample-container-registry";
     public const string CustomResourceName = "sample-custom";
 
-    public static async Task<IDistributedApplicationModule> RegisterAsync(
+    public static IDistributedApplicationModule Register(
         IDistributedApplicationBuilder builder,
-        string sourceRoot,
-        CancellationToken cancellationToken = default)
+        string sourceRoot)
     {
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
-        var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
         return builder.ExportModule(Name, PackageId, module =>
         {
@@ -53,7 +51,7 @@ public static partial class AppHostAModule
                 .ExportAsContainer(
                     new ModuleContainerExportOptions(
                         imageName: "modular-sample-api",
-                        publishCommand: containerRuntime,
+                        publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
                         publishArguments:
                         [
                             "build",
@@ -104,7 +102,7 @@ public static partial class AppHostAModule
             module.AddContainer(GeneratedStaticResourceName, "modular-sample-static")
                 .WithImagePublishCommand(new ModuleContainerExportOptions(
                     imageName: "modular-sample-static",
-                    publishCommand: containerRuntime,
+                    publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
                     publishArguments:
                     [
                         "build",

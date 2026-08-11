@@ -22,6 +22,11 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (RuntimeProxy.IsInvocation())
+        {
+            return await RuntimeProxy.RunAsync(args, CancellationToken.None).ConfigureAwait(false);
+        }
+
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(GitProxy.LogEnvironmentVariable)))
         {
             return await GitProxy.RunAsync(args, CancellationToken.None).ConfigureAwait(false);
@@ -127,11 +132,14 @@ internal static class Program
         private readonly string _packageFeed = Path.Combine(temporaryRoot, "packages");
         private readonly string _nugetPackages = Path.Combine(temporaryRoot, "nuget-packages");
         private readonly string _gitProxyLog = Path.Combine(temporaryRoot, "git-proxy.jsonl");
+        private readonly string _runtimeProxyLogDirectory = Path.Combine(temporaryRoot, "runtime-proxy-log");
+        private readonly string _runtimeShimDirectory = Path.Combine(temporaryRoot, "runtime-shim");
         private readonly string _driverExecutable = GetDriverExecutable();
         private string _appHost = string.Empty;
         private string _pinnedRevision = string.Empty;
         private string _latestRevision = string.Empty;
         private string _remoteRepository = string.Empty;
+        private string? _realContainerRuntime;
 
         public async Task RunAsync(CancellationToken cancellationToken)
         {
@@ -172,7 +180,13 @@ internal static class Program
                     ["remote", "get-url", "origin"],
                     cancellationToken).ConfigureAwait(false)),
                 "The pinned checkout has the wrong producer origin.");
-            AssertInitializationLifecycle(pinnedInitialization.CombinedOutput);
+            AssertInitializationLifecycle(
+                pinnedInitialization.CombinedOutput,
+                pinnedCheckout,
+                "clone",
+                "fetch",
+                "checkout",
+                "submodule-update");
 
             var siblingCount = GetSiblingGitDirectories().Count;
             var pinnedRevisionBeforeRepeat = await GetRevisionAsync(pinnedCheckout, cancellationToken)
@@ -189,6 +203,7 @@ internal static class Program
 
             await WritePhaseAsync("Run the pinned image with read-only Git inspection").ConfigureAwait(false);
             DeleteGitProxyLog();
+            DeleteRuntimeProxyLog();
             var pinnedRunEnvironment = CreateAppHostEnvironment(
                 _resourceRepository,
                 _pinnedRevision,
@@ -196,6 +211,7 @@ internal static class Program
             await AssertResourceMarkerAsync(pinnedRunEnvironment, PinnedMarker, cancellationToken)
                 .ConfigureAwait(false);
             AssertNoRepositoryMutation(ReadGitProxyOperations());
+            AssertConfiguredContainerRuntimeUsed(ReadRuntimeProxyOperations());
 
             await WritePhaseAsync("Fail fast, initialize, and redact a credential-bearing remote")
                 .ConfigureAwait(false);
@@ -209,6 +225,7 @@ internal static class Program
             var remoteInitialization = await RunInitializeAsync(remoteEnvironment, cancellationToken)
                 .ConfigureAwait(false);
             var remoteCheckout = GetNewSiblingGitDirectory(remoteDirectoriesBefore);
+            AssertInitializationLifecycle(remoteInitialization.CombinedOutput, remoteCheckout, "clone");
             AssertRedacted(remoteInitialization.CombinedOutput);
             AssertReceiptsAreCredentialFree();
             AssertEqual(
@@ -228,7 +245,12 @@ internal static class Program
                 InitializedMarker,
                 "Change marker for another initialization",
                 cancellationToken).ConfigureAwait(false);
-            await RunInitializeAsync(remoteEnvironment, cancellationToken).ConfigureAwait(false);
+            var updateInitialization = await RunInitializeAsync(remoteEnvironment, cancellationToken)
+                .ConfigureAwait(false);
+            AssertInitializationLifecycle(
+                updateInitialization.CombinedOutput,
+                remoteCheckout,
+                "fast-forward");
             AssertEqual(
                 initializedRevision,
                 await GetRevisionAsync(remoteCheckout, cancellationToken).ConfigureAwait(false),
@@ -309,6 +331,7 @@ internal static class Program
         private async Task CreateFixtureAsync(CancellationToken cancellationToken)
         {
             Directory.CreateDirectory(_packageFeed);
+            ConfigureContainerRuntimeProxy();
             await RunRequiredAsync(
                 new ProcessInvocation(
                     "dotnet",
@@ -580,6 +603,34 @@ internal static class Program
             ["NUGET_PACKAGES"] = _nugetPackages
         };
 
+        private void ConfigureContainerRuntimeProxy()
+        {
+            if (options.ContainerRuntime is not { } containerRuntime)
+            {
+                return;
+            }
+
+            _realContainerRuntime = FindExecutableOnPath(containerRuntime);
+            Directory.CreateDirectory(_runtimeProxyLogDirectory);
+            Directory.CreateDirectory(_runtimeShimDirectory);
+            var shimExecutable = Path.Combine(
+                _runtimeShimDirectory,
+                OperatingSystem.IsWindows() ? $"{containerRuntime}.exe" : containerRuntime);
+            File.Copy(_driverExecutable, shimExecutable);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(shimExecutable, File.GetUnixFileMode(_driverExecutable));
+            }
+
+            var driverName = typeof(Program).Assembly.GetName().Name
+                ?? throw new InvalidOperationException("The E2E driver assembly has no name.");
+            foreach (var extension in new[] { ".deps.json", ".dll", ".runtimeconfig.json" })
+            {
+                var source = Path.Combine(AppContext.BaseDirectory, $"{driverName}{extension}");
+                File.Copy(source, Path.Combine(_runtimeShimDirectory, Path.GetFileName(source)));
+            }
+        }
+
         private Dictionary<string, string?> CreateAppHostEnvironment(
             string buildRepository,
             string? revision,
@@ -603,9 +654,40 @@ internal static class Program
             if (!string.IsNullOrWhiteSpace(options.ContainerRuntime))
             {
                 environment["ASPIRE_CONTAINER_RUNTIME"] = options.ContainerRuntime;
+                environment["PATH"] = string.Join(
+                    Path.PathSeparator,
+                    _runtimeShimDirectory,
+                    Environment.GetEnvironmentVariable("PATH"));
+                environment[RuntimeProxy.LogDirectoryEnvironmentVariable] = _runtimeProxyLogDirectory;
+                environment[RuntimeProxy.RealExecutableEnvironmentVariable] = _realContainerRuntime;
+                environment[RuntimeProxy.RuntimeEnvironmentVariable] = options.ContainerRuntime;
             }
 
             return environment;
+        }
+
+        private static string FindExecutableOnPath(string executable)
+        {
+            var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            var extensions = OperatingSystem.IsWindows()
+                ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+                    .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                : [string.Empty];
+            foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var unquotedDirectory = directory.Trim().Trim('"');
+                foreach (var extension in extensions)
+                {
+                    var candidate = Path.Combine(unquotedDirectory, executable + extension.ToLowerInvariant());
+                    if (File.Exists(candidate))
+                    {
+                        return Path.GetFullPath(candidate);
+                    }
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"Configured container runtime '{executable}' was not found on PATH.");
         }
 
         private HashSet<string> GetSiblingGitDirectories()
@@ -672,10 +754,94 @@ internal static class Program
             File.Delete(_gitProxyLog);
         }
 
-        private static void AssertInitializationLifecycle(string output)
+        private IReadOnlyList<RuntimeProxyOperation> ReadRuntimeProxyOperations()
+        {
+            if (!Directory.Exists(_runtimeProxyLogDirectory))
+            {
+                return [];
+            }
+
+            return Directory.EnumerateFiles(_runtimeProxyLogDirectory, "*.json")
+                .Order(StringComparer.Ordinal)
+                .Select(path => JsonSerializer.Deserialize<RuntimeProxyOperation>(File.ReadAllText(path))
+                    ?? throw new InvalidDataException("The container-runtime proxy wrote an empty operation."))
+                .ToArray();
+        }
+
+        private void DeleteRuntimeProxyLog()
+        {
+            if (!Directory.Exists(_runtimeProxyLogDirectory))
+            {
+                return;
+            }
+
+            foreach (var path in Directory.EnumerateFiles(_runtimeProxyLogDirectory, "*.json"))
+            {
+                File.Delete(path);
+            }
+        }
+
+        private void AssertConfiguredContainerRuntimeUsed(IEnumerable<RuntimeProxyOperation> operations)
+        {
+            if (options.ContainerRuntime is not { } expectedRuntime || _realContainerRuntime is null)
+            {
+                return;
+            }
+
+            var captured = operations.ToArray();
+            if (captured.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Configured container runtime '{expectedRuntime}' was never invoked.");
+            }
+
+            foreach (var operation in captured)
+            {
+                AssertEqual(
+                    expectedRuntime,
+                    operation.Runtime,
+                    "The container-runtime proxy observed the wrong selected executable.");
+                AssertEqual(
+                    _realContainerRuntime,
+                    operation.RealExecutable,
+                    "The container-runtime proxy did not forward to the configured runtime executable.");
+            }
+
+            if (!captured.Any(operation =>
+                    operation.Arguments is ["image", "inspect", var imageReference, ..] &&
+                    imageReference.StartsWith("multi-repo-e2e-resource:", StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"The image evaluator did not inspect its canonical image with configured runtime '{expectedRuntime}'.");
+            }
+        }
+
+        private static void AssertInitializationLifecycle(
+            string output,
+            string repositoryPath,
+            params string[] operations)
         {
             AssertContains(output, "Initializing repository", "Initialization did not log its start.");
             AssertContains(output, "Initialized repository", "Initialization did not log its completion.");
+            AssertContains(
+                RemoveWhitespace(output),
+                RemoveWhitespace(repositoryPath),
+                "Initialization lifecycle output did not include its structured repository path context.");
+            AssertContains(
+                output,
+                ModuleName,
+                "Initialization lifecycle output did not include its structured module context.");
+            foreach (var operation in operations)
+            {
+                AssertContains(
+                    output,
+                    $"Repository operation {operation} started",
+                    $"Initialization did not log the start of repository operation '{operation}'.");
+                AssertContains(
+                    output,
+                    $"Repository operation {operation} completed",
+                    $"Initialization did not log the completion of repository operation '{operation}'.");
+            }
         }
 
         private static void AssertNoRepositoryMutation(IEnumerable<GitProxyOperation> operations)
@@ -994,6 +1160,63 @@ internal static class Program
         Refresh
     }
 
+    private sealed record RuntimeProxyOperation(
+        string Runtime,
+        string RealExecutable,
+        string[] Arguments);
+
+    private static class RuntimeProxy
+    {
+        public const string LogDirectoryEnvironmentVariable = "MODULAR_E2E_RUNTIME_PROXY_LOG_DIRECTORY";
+        public const string RealExecutableEnvironmentVariable = "MODULAR_E2E_REAL_CONTAINER_RUNTIME";
+        public const string RuntimeEnvironmentVariable = "MODULAR_E2E_CONTAINER_RUNTIME";
+
+        public static bool IsInvocation()
+        {
+            var runtime = Environment.GetEnvironmentVariable(RuntimeEnvironmentVariable);
+            return !string.IsNullOrWhiteSpace(runtime) &&
+                string.Equals(
+                    Path.GetFileNameWithoutExtension(Environment.ProcessPath),
+                    runtime,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
+        {
+            var runtime = Environment.GetEnvironmentVariable(RuntimeEnvironmentVariable)
+                ?? throw new InvalidOperationException($"{RuntimeEnvironmentVariable} is not configured.");
+            var realExecutable = Environment.GetEnvironmentVariable(RealExecutableEnvironmentVariable)
+                ?? throw new InvalidOperationException($"{RealExecutableEnvironmentVariable} is not configured.");
+            var logDirectory = Environment.GetEnvironmentVariable(LogDirectoryEnvironmentVariable)
+                ?? throw new InvalidOperationException($"{LogDirectoryEnvironmentVariable} is not configured.");
+            Directory.CreateDirectory(logDirectory);
+            var logPath = Path.Combine(
+                logDirectory,
+                $"{DateTimeOffset.UtcNow.UtcTicks:D19}-{Guid.NewGuid():N}.json");
+            await File.WriteAllTextAsync(
+                logPath,
+                JsonSerializer.Serialize(new RuntimeProxyOperation(runtime, realExecutable, args)),
+                cancellationToken).ConfigureAwait(false);
+
+            var startInfo = new ProcessStartInfo(realExecutable)
+            {
+                UseShellExecute = false
+            };
+            foreach (var argument in args)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+
+            startInfo.Environment.Remove(LogDirectoryEnvironmentVariable);
+            startInfo.Environment.Remove(RealExecutableEnvironmentVariable);
+            startInfo.Environment.Remove(RuntimeEnvironmentVariable);
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException($"Unable to start '{realExecutable}'.");
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            return process.ExitCode;
+        }
+    }
+
     private sealed record GitProxyOperation(string Operation, string[] Arguments);
 
     private static class GitProxy
@@ -1217,6 +1440,11 @@ internal static class Program
             .Replace(DummyPassword, "[REDACTED]", StringComparison.Ordinal)
             .Replace(DummyQueryToken, "[REDACTED]", StringComparison.Ordinal)
             .Replace(DummyFragment, "[REDACTED]", StringComparison.Ordinal);
+    }
+
+    private static string RemoveWhitespace(string value)
+    {
+        return new string(value.Where(character => !char.IsWhiteSpace(character)).ToArray());
     }
 
     private static void AssertContains(string value, string expected, string message)
