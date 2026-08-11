@@ -128,6 +128,7 @@ internal sealed class ModuleApplicationRegistry(
         {
             configure(Options);
         }
+
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)

@@ -1,7 +1,31 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>modular-apphosts</ToolCommandName>
+    <PackageId>Shirubasoft.Aspire.ModularAppHosts.Tool</PackageId>
+    <Title>Shirubasoft Aspire Modular AppHosts Tool</Title>
+    <Authors>Shirubasoft</Authors>
+    <Description>Workflow image manifest tooling for Aspire modular AppHosts.</Description>
+    <PackageTags>aspire;apphost;modules;containers;dotnet-tool;github-actions</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Shirubasoft/aspire-modular-apphosts.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <AssemblyName>Shirubasoft.Aspire.ModularAppHosts.Tool</AssemblyName>
     <RootNamespace>Shirubasoft.Aspire.ModularAppHosts.Tool</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ActionsToolkit.Core" />
+    <PackageReference Include="CliWrap" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 </Project>

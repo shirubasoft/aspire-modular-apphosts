@@ -40,7 +40,14 @@ internal sealed record ModuleEffectiveImage(
     string? Registry,
     string Repository,
     string? Tag,
-    string? Digest);
+    string? Digest,
+    ModuleRemoteImage? PushImage);
+
+internal sealed record ModuleRemoteImage(
+    string Registry,
+    string Repository,
+    string Tag,
+    string Reference);
 
 internal enum ModuleImagePushTargetKind
 {
@@ -120,7 +127,7 @@ internal static class ModuleEffectiveImageResolver
             (moduleDeclaresRegistry
                 ? null
                 : await GetFallbackRegistryAsync(resource, cancellationToken).ConfigureAwait(false));
-        string? pushedImage = null;
+        ModuleRemoteImage? pushedImage = null;
         var pushTargetKind = ModuleImagePushTargetKind.None;
         if (registry is not null && image.SHA256 is not { Length: > 0 })
         {
@@ -133,14 +140,19 @@ internal static class ModuleEffectiveImageResolver
         }
         else if (moduleDeclaresRegistry && image.SHA256 is not { Length: > 0 })
         {
-            pushedImage = localImage;
+            var localIdentity = ParseReference(localImage, image);
+            pushedImage = new ModuleRemoteImage(
+                localIdentity.Registry!,
+                localIdentity.Repository,
+                localIdentity.Tag!,
+                localImage);
             pushTargetKind = ModuleImagePushTargetKind.ContainerRuntime;
         }
 
         var pullImage = mapping?.RemoteImageReference ??
             (explicitRegistry is null && image.Registry is { Length: > 0 }
                 ? localImage
-                : pushedImage) ??
+                : pushedImage?.Reference) ??
             (allowUnqualifiedPullReference
                 ? localImage
                 : throw new InvalidOperationException(
@@ -150,15 +162,16 @@ internal static class ModuleEffectiveImageResolver
         return new ModuleEffectiveImage(
             localImage,
             pullImage,
-            pushedImage,
+            pushedImage?.Reference,
             pushTargetKind,
             parsed.Registry,
             parsed.Repository,
             parsed.Tag,
-            parsed.Digest);
+            parsed.Digest,
+            pushedImage);
     }
 
-    private static async Task<string> ResolveRegistryImageAsync(
+    private static async Task<ModuleRemoteImage> ResolveRegistryImageAsync(
         IResource resource,
         ContainerImageAnnotation image,
         IContainerRegistry registry,
@@ -183,7 +196,28 @@ internal static class ModuleEffectiveImageResolver
             await annotation.Callback(context).ConfigureAwait(false);
         }
 
-        return await options.GetFullRemoteImageNameAsync(registry, cancellationToken).ConfigureAwait(false);
+        var reference = await options.GetFullRemoteImageNameAsync(registry, cancellationToken).ConfigureAwait(false);
+        var remoteName = options.RemoteImageName!;
+        var parsedName = ModuleImageReference.ParseRepository(remoteName);
+        var registryHost = parsedName.Registry ??
+            await registry.Endpoint.GetValueAsync(cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(registryHost))
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a remote container registry endpoint.");
+        }
+
+        var registryRepository = parsedName.Registry is null && registry.Repository is not null
+            ? await registry.Repository.GetValueAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        var repository = string.IsNullOrWhiteSpace(registryRepository)
+            ? parsedName.Name
+            : $"{registryRepository}/{parsedName.Name}";
+        return new ModuleRemoteImage(
+            registryHost,
+            repository,
+            options.RemoteImageTag ?? "latest",
+            reference);
     }
 
     private static (string? Registry, string Repository, string? Tag, string? Digest) ParseReference(

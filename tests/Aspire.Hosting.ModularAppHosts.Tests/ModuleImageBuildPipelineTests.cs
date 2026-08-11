@@ -107,7 +107,7 @@ public sealed class ModuleImageBuildPipelineTests
 
     [Theory]
     [InlineData("module:images", true)]
-    [InlineData("images", false)]
+    [InlineData("images", true)]
     [InlineData("api", true)]
     [InlineData("module:catalog", false)]
     public void Module_selectors_control_build_repository_preparation(

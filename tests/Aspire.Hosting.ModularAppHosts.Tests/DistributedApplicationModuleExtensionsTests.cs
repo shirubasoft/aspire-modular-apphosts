@@ -907,6 +907,133 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task External_image_configuration_avoids_the_imported_project_repository()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        var configured = $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:orders:Projects:orders-api";
+        builder.Configuration[$"{configured}:ImageRegistry"] = "workflow.example.test";
+        builder.Configuration[$"{configured}:ImageName"] = "acme/orders-api";
+        builder.Configuration[$"{configured}:ImageTag"] = "candidate";
+        builder.Configuration[$"{configured}:ProjectMode"] = nameof(ModuleProjectMode.Container);
+        builder.Configuration[$"{configured}:PublishImage"] = "false";
+        builder.Configuration[$"{configured}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
+        await builder.DefineModuleAsync("orders", "1", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/orders.git");
+            definition.AddProject(
+                    "orders-api",
+                    "src/Orders.Api/Orders.Api.csproj",
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("declared/orders-api", "dotnet", ["publish"]);
+            definition.AddContainer("cache", "redis", "7");
+        });
+        var importOptions = new ModuleImportOptions { ResourcePrefix = "external-" };
+        importOptions.ResourceAliases["orders-api"] = "external-api";
+
+        await builder.ImportModuleAsync("orders", importOptions);
+
+        Assert.Empty(builder.Resources.OfType<ProjectResource>());
+        Assert.Empty(builder.Resources.OfType<ParameterResource>());
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var containers = builder.Resources.OfType<ContainerResource>().ToDictionary(resource => resource.Name);
+        var api = containers["external-api"];
+        var image = Assert.Single(api.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("workflow.example.test", image.Registry);
+        Assert.Equal("acme/orders-api", image.Image);
+        Assert.Equal("candidate", image.Tag);
+        Assert.Equal(
+            ImagePullPolicy.Always,
+            Assert.Single(api.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        Assert.Empty(api.Annotations.OfType<ModuleImagePublisherAnnotation>());
+
+        var cacheImage = Assert.Single(containers["external-cache"].Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Null(cacheImage.Registry);
+        Assert.Equal("redis", cacheImage.Image);
+        Assert.Equal("7", cacheImage.Tag);
+    }
+
+    [Fact]
+    public async Task External_image_configuration_disables_declared_and_factory_container_publishers()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        ConfigureExternalImage("declared", "acme/declared");
+        ConfigureExternalImage("factory", "acme/factory");
+        var module = await builder.ExportModuleAsync("assets", definition =>
+        {
+            definition.AddContainer("declared", "local/declared", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "local/declared",
+                    "docker",
+                    "build")
+                {
+                    ImageTag = "dev"
+                });
+            definition.AddResource<ContainerResource>(
+                "factory",
+                context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+                new ModuleContainerExportOptions("local/factory", "docker", "build")
+                {
+                    ImageTag = "dev"
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var containers = builder.Resources.OfType<ContainerResource>().OrderBy(resource => resource.Name).ToArray();
+        Assert.Collection(
+            containers,
+            container => AssertExternalContainer(container, "acme/declared"),
+            container => AssertExternalContainer(container, "acme/factory"));
+        return;
+
+        void ConfigureExternalImage(string resource, string repository)
+        {
+            var section =
+                $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:assets:Containers:{resource}";
+            builder.Configuration[$"{section}:ImageRegistry"] = "workflow.example.test";
+            builder.Configuration[$"{section}:ImageName"] = repository;
+            builder.Configuration[$"{section}:ImageTag"] = "candidate";
+            builder.Configuration[$"{section}:PublishImage"] = "false";
+            builder.Configuration[$"{section}:ImagePullPolicy"] = nameof(ImagePullPolicy.Always);
+        }
+
+        static void AssertExternalContainer(ContainerResource container, string repository)
+        {
+            var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+            Assert.Equal("workflow.example.test", image.Registry);
+            Assert.Equal(repository, image.Image);
+            Assert.Equal("candidate", image.Tag);
+            Assert.Empty(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+            Assert.Equal(
+                ImagePullPolicy.Always,
+                Assert.Single(container.Annotations.OfType<ContainerImagePullPolicyAnnotation>()).ImagePullPolicy);
+        }
+    }
+
+    [Fact]
+    public async Task External_image_configuration_rejects_an_unknown_declared_resource()
+    {
+        using var appHost = TemporaryDirectory.Create();
+        var builder = CreateBuilder(appHost.Path);
+        var section =
+            $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:assets:Containers:missing";
+        builder.Configuration[$"{section}:ImageRegistry"] = "workflow.example.test";
+        builder.Configuration[$"{section}:ImageName"] = "acme/missing";
+        builder.Configuration[$"{section}:ImageTag"] = "candidate";
+        builder.Configuration[$"{section}:PublishImage"] = "false";
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.ExportModuleAsync("assets", definition =>
+                definition.AddContainer("declared", "redis", "7")));
+
+        Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Available containers", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Configuration_cannot_introduce_an_undeclared_container_publisher()
     {
         using var repository = await TestRepository.CreateAsync();

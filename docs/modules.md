@@ -381,15 +381,15 @@ positional selectors:
 ```bash
 aspire do push
 aspire do push orders-api orders-worker
-aspire do push module:orders module:catalog
-aspire do push module:orders catalog-worker
+aspire do push orders catalog/api
+aspire do push module:orders resource:catalog-worker
 ```
 
-Plain selectors always match a declared or effective resource name. Module selection deliberately
-requires `module:<name>` so a typo cannot broaden a state-changing push from one resource to every
-publisher in a module; `resource:<name>` is the corresponding explicit resource form. Mixed
-selectors are unioned and deduplicated. Unknown selectors fail with both the available resources
-and modules.
+Plain selectors match a module, declared resource, or effective resource when the name is
+unambiguous. Use `module:<name>` or `resource:<name>` when a module and resource share a name, and
+use `<module>/<resource>` for one declared resource identity. Ambiguous and unknown selectors fail
+with the available identities instead of broadening the operation. Mixed selectors are unioned and
+deduplicated.
 
 When selectors are present, non-selected image push steps are detached from the `push` aggregate,
 including ordinary Aspire project and Dockerfile steps. Only matching module build dependencies run.
@@ -404,7 +404,7 @@ aspire do describe-images --output-path artifacts
 aspire do describe-images orders-api orders-worker --output-path artifacts
 ```
 
-The command writes deterministic schema-version-2 JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, the pushed tagged reference when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file gives automation the module and image identities without duplicating contract configuration.
+The command writes deterministic schema-version-3 JSON to `artifacts/module-images.json` and logs a concise reference summary. Its `modules` collection contains every materialized module name and declared contract package ID, including modules without container images. Each `images` entry contains the declared resource name, effective prefixed or aliased Aspire name, resource kind, registry, repository without tag, effective tag or digest, complete run and pull references, a structured registry/repository/tag push target when a push step exists, and the resolved build command and source when the module publishes that image. Resource selection accepts both declared and effective names. This file gives automation the module and image identities without duplicating contract configuration.
 
 ### Pull module images
 

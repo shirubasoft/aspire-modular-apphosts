@@ -46,7 +46,10 @@ public sealed class ModuleImageDescriptionDocumentTests
         Assert.Null(image.Digest);
         Assert.Equal("registry.example.test/acme/catalog:candidate", image.Reference);
         Assert.Equal("mirror.example.test/acme/catalog:candidate", image.PullReference);
-        Assert.Equal("registry.example.test/acme/catalog:candidate", image.PushReference);
+        Assert.Equal("registry.example.test", image.Push!.Registry);
+        Assert.Equal("acme/catalog", image.Push.Repository);
+        Assert.Equal("candidate", image.Push.Tag);
+        Assert.Equal("registry.example.test/acme/catalog:candidate", image.Push.Reference);
         Assert.Equal("dotnet", image.Build!.Command);
         Assert.Equal(["publish", "Catalog.csproj"], image.Build.Arguments);
         Assert.Equal("/work/catalog", image.Build.WorkingDirectory);
@@ -192,7 +195,12 @@ public sealed class ModuleImageDescriptionDocumentTests
             Tag = "candidate",
             Reference = "registry.example.test/acme/catalog:candidate",
             PullReference = "mirror.example.test/acme/catalog:candidate",
-            PushReference = "registry.example.test/acme/catalog:candidate",
+            Push = new ModuleImagePushDescription
+            {
+                Registry = "registry.example.test",
+                Repository = "acme/catalog",
+                Tag = "candidate"
+            },
             Build = build
         };
     }

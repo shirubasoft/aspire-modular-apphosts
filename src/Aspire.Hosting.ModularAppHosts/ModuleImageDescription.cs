@@ -17,7 +17,7 @@ public enum ModuleResourceKind
 public sealed class ModuleImageDescriptionDocument
 {
     /// <summary>The schema version understood by this release.</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     /// <summary>Gets or sets the document schema version.</summary>
     [JsonPropertyOrder(0)]
@@ -209,9 +209,9 @@ public sealed class ModuleImageDescription
     [JsonPropertyOrder(9)]
     public string PullReference { get; set; } = string.Empty;
 
-    /// <summary>Gets or sets the complete tagged reference pushed by the pipeline, or <see langword="null"/> when no push step exists.</summary>
+    /// <summary>Gets or sets the resolved remote push target, or <see langword="null"/> when no push step exists.</summary>
     [JsonPropertyOrder(10)]
-    public string? PushReference { get; set; }
+    public ModuleImagePushDescription? Push { get; set; }
 
     /// <summary>Gets or sets the image build origin, or <see langword="null"/> for images without a publisher.</summary>
     [JsonPropertyOrder(11)]
@@ -229,6 +229,35 @@ public sealed class ModuleImageDescription
         {
             throw new InvalidDataException($"Unsupported resource kind '{ResourceKind}'.");
         }
+
+        Push?.Validate();
+    }
+}
+
+/// <summary>Describes the structured tagged image target used by the push pipeline.</summary>
+public sealed class ModuleImagePushDescription
+{
+    /// <summary>Gets or sets the registry host.</summary>
+    [JsonPropertyOrder(0)]
+    public string Registry { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the repository path within the registry.</summary>
+    [JsonPropertyOrder(1)]
+    public string Repository { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the tag pushed by the pipeline.</summary>
+    [JsonPropertyOrder(2)]
+    public string Tag { get; set; } = string.Empty;
+
+    /// <summary>Gets the complete tagged reference pushed by the pipeline.</summary>
+    [JsonIgnore]
+    public string Reference => $"{Registry}/{Repository}:{Tag}";
+
+    internal void Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(Registry);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Tag);
     }
 }
 

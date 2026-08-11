@@ -25,6 +25,8 @@ Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppH
     --configuration Release --no-build --no-restore --output artifacts @versionArguments
 Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj `
     --configuration Release --no-build --no-restore --output artifacts @versionArguments
+Invoke-DotNet pack src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj `
+    --configuration Release --no-build --no-restore --output artifacts @versionArguments
 Invoke-DotNet pack templates/Aspire.Hosting.ModularAppHosts.Templates.csproj `
     --configuration Release --no-build --no-restore --output artifacts @versionArguments
 

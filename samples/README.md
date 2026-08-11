@@ -114,6 +114,7 @@ the [sample README](ImagePushE2E/README.md) for commands.
 ## Multi-repository E2E sample
 
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
-sample API from the separate `Shirubasoft/spire` repository. CI runs it from an isolated Git root,
-so the real GitHub CLI must discover and clone the missing sibling repository before Aspire can
-start the service.
+sample API from a contract package while its image build inputs live in a separately initialized
+local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
+and a second local-registry producer-to-consumer image-manifest handoff; it does not depend on an
+external `Shirubasoft/spire` checkout.
