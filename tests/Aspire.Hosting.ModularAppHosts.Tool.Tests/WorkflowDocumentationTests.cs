@@ -77,6 +77,7 @@ public sealed class WorkflowDocumentationTests
         var workflow = await File.ReadAllTextAsync(
             workflowPath,
             TestContext.Current.CancellationToken);
+        workflow = workflow.ReplaceLineEndings("\n");
 
         var applyIndex = workflow.IndexOf("manifest apply", StringComparison.Ordinal);
         var commandBoundaryIndex = workflow.IndexOf("\n          --\n", StringComparison.Ordinal);
