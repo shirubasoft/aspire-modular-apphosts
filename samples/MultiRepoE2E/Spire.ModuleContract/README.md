@@ -1,14 +1,15 @@
 # Spire sample module contract
 
-This sample-only package demonstrates a producer-owned Aspire module contract. It declares the
-stable `multi-repo-api` container and its image build command while the configured build repository
-owns the Dockerfile and build script.
+This sample-only package demonstrates a producer-owned Aspire module contract. It declares its
+definition repository, the stable `multi-repo-api` container, and its image build command while a
+separately configured build repository owns the Dockerfile and build script.
 
 At AppHost startup, the module binds `SpireModuleOptions` from its conventional
-`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` configuration section. The build
-repository is required and its revision is optional. Modular AppHosts checks out a configured
-revision into a managed worktree before invoking `build-image.sh` there. The isolated CI consumer
-references this package and supplies the build repository independently.
+`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` configuration section. The definition and
+build repositories are required and the build revision is optional. Modular AppHosts checks out a
+configured build revision into a managed worktree before invoking `build-image.sh` there. When a
+workflow manifest supplies the complete external image identity, the isolated CI consumer proves
+that neither declared repository nor the managed repository base is touched.
 
 Reference the package from an AppHost and import its typed module:
 

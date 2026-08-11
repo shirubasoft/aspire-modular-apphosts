@@ -951,6 +951,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Null(cacheImage.Registry);
         Assert.Equal("redis", cacheImage.Image);
         Assert.Equal("7", cacheImage.Tag);
+        Assert.False(Directory.Exists(Path.Combine(appHost.Path, ".aspire")));
     }
 
     [Fact]
@@ -1519,6 +1520,7 @@ public sealed class DistributedApplicationModuleExtensionsTests
         Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
         Assert.False(Directory.Exists(annotation.RepositoryPath));
         Assert.False(Directory.Exists(missingBuildRepository));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(imports.Path));
     }
 
     [Fact]

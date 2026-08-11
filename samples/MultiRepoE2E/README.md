@@ -52,8 +52,9 @@ A second CI job starts an ordinary local registry service and uses only the pack
 1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged
    reference plus GitHub step outputs.
 2. `manifest apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
-   the consumer AppHost with a deliberately missing build repository and verify `/marker.txt` from
-   the image that Repo B published.
+   the consumer AppHost with deliberately missing definition and build repositories plus a missing
+   managed repository base. They verify `/marker.txt` from the image that Repo B published and prove
+   that complete manifest identities do not prepare or clone source checkouts.
 
 ## Run manually
 
