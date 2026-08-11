@@ -8,6 +8,54 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class ModuleCliRunnerTests
 {
+    [Theory]
+    [InlineData("passwd='secret value'", "passwd='[REDACTED]'")]
+    [InlineData("pwd = secret,keep", "pwd = [REDACTED],keep")]
+    [InlineData("passphrase: secret;keep", "passphrase: [REDACTED];keep")]
+    [InlineData("token=secret", "token=[REDACTED]")]
+    [InlineData("ACCESS-TOKEN: secret", "ACCESS-TOKEN: [REDACTED]")]
+    [InlineData("refresh_token=secret", "refresh_token=[REDACTED]")]
+    [InlineData("id-token=secret", "id-token=[REDACTED]")]
+    [InlineData("auth_token=secret", "auth_token=[REDACTED]")]
+    [InlineData("api-key=secret", "api-key=[REDACTED]")]
+    [InlineData("client_secret=secret", "client_secret=[REDACTED]")]
+    [InlineData("secret=secret", "secret=[REDACTED]")]
+    [InlineData("github_access_token=secret", "github_access_token=[REDACTED]")]
+    [InlineData("password: \"\"", "password: \"[REDACTED]\"")]
+    public void Redactor_masks_supported_credential_labels(string value, string expected)
+    {
+        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
+    }
+
+    [Theory]
+    [InlineData("Bearer abc.DEF-123_~=+/", "Bearer [REDACTED]")]
+    [InlineData("basic Zm9vOmJhcg==", "basic [REDACTED]")]
+    [InlineData("AUTHORIZATION : BASIC Zm9v", "AUTHORIZATION : BASIC [REDACTED]")]
+    public void Redactor_masks_supported_authorization_values(string value, string expected)
+    {
+        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
+    }
+
+    [Theory]
+    [InlineData("git+ssh://user@example.test/acme/repo.git", "git+ssh://[REDACTED]@example.test/acme/repo.git")]
+    [InlineData("https://example.test/acme/repo.git?token=secret", "https://example.test/acme/repo.git?[REDACTED]")]
+    [InlineData("https://example.test/acme/repo.git#secret", "https://example.test/acme/repo.git#[REDACTED]")]
+    [InlineData("https://example.test?token=secret#fragment", "https://example.test?[REDACTED]#[REDACTED]")]
+    [InlineData("prefix HTTP://user:secret@example.test suffix", "prefix HTTP://[REDACTED]@example.test suffix")]
+    public void Redactor_masks_supported_URI_shapes(string value, string expected)
+    {
+        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("ordinary output")]
+    [InlineData("ssh://example.test/acme/repo.git")]
+    public void Redactor_preserves_non_sensitive_output(string value)
+    {
+        Assert.Equal(value, ModuleCliOutputRedactor.Redact(value));
+    }
+
     [Fact]
     public async Task Runner_streams_and_captures_standard_output_and_error()
     {

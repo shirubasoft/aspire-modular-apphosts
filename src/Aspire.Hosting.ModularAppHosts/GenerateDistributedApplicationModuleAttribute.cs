@@ -6,7 +6,7 @@ namespace Aspire.Hosting;
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class GenerateDistributedApplicationModuleAttribute(string name) : Attribute
 {
-    /// <summary>Gets the name passed to <c>ExportModuleAsync</c> and <c>ImportModuleAsync</c>.</summary>
+    /// <summary>Gets the name passed to <c>ExportModule</c> and <c>ImportModule</c>.</summary>
     public string Name { get; } = name;
 
     /// <summary>Gets or sets the module contract version.</summary>

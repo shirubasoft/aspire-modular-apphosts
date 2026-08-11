@@ -5,6 +5,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -16,7 +17,7 @@ public sealed class ModuleImagePushPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
@@ -27,7 +28,7 @@ public sealed class ModuleImagePushPipelineTests
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var step = Assert.Single(await CreatePushStepsAsync(container));
@@ -45,7 +46,7 @@ public sealed class ModuleImagePushPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("assets", definition =>
+        var module = builder.ExportModule("assets", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer(
@@ -70,7 +71,7 @@ public sealed class ModuleImagePushPipelineTests
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var containers = builder.Resources.OfType<ContainerResource>().ToArray();
         Assert.Equal(2, containers.Length);
@@ -90,7 +91,7 @@ public sealed class ModuleImagePushPipelineTests
             "registry",
             "registry.example.test",
             "acme");
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
@@ -105,7 +106,7 @@ public sealed class ModuleImagePushPipelineTests
                         .WithRemoteImageTag("candidate"));
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var registryAnnotation = Assert.Single(
@@ -419,21 +420,38 @@ public sealed class ModuleImagePushPipelineTests
         {
             ImageTag = "candidate"
         };
-        var plan = await ModuleImagePublishPlan.CreateAsync(
-            options,
-            repositoryDirty,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
-        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+        var recipe = new ModuleImageBuildRecipe(
             "orders",
             "api",
-            ModuleResourceKind.Container,
             options,
-            plan,
+            "/work",
             "/work",
             "https://example.test/orders.git",
-            null,
-            branchImageTag));
+            revision: null,
+            refreshCleanCheckout: false,
+            "git",
+            "gh",
+            TimeSpan.FromMinutes(2));
+        var sourceState = new ModuleImageSourceState(
+            branchImageTag,
+            "abcdef012345",
+            repositoryDirty,
+            repositoryDirty ? "DIRTY" : "CLEAN");
+        var plan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        var prepared = new ModulePreparedImage(
+            plan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            sourceState,
+            ModuleImagePreparationDisposition.Built);
+        var publisher = new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, _) => Task.FromResult(prepared));
+        resource.Annotations.Add(publisher);
+        await publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
         return resource;
     }
 

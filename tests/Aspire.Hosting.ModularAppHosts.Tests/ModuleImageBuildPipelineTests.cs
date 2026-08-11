@@ -21,7 +21,7 @@ public sealed class ModuleImageBuildPipelineTests
             projectPath,
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("images", definition =>
+        var module = builder.ExportModule("images", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("project", projectPath)
@@ -34,7 +34,7 @@ public sealed class ModuleImageBuildPipelineTests
                 Publisher("factory"));
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         foreach (var resource in builder.Resources.OfType<ContainerResource>())
         {
@@ -122,94 +122,39 @@ public sealed class ModuleImageBuildPipelineTests
     }
 
     [Fact]
-    public async Task Clean_available_or_pulled_images_skip_the_build_command()
+    public async Task Build_step_delegates_to_the_publisher_recipe_once()
     {
         var options = Publisher("api");
-        options.PullBeforeBuild = true;
-        var (resource, context, application) = await CreateContextAsync(options);
+        var preparations = 0;
+        var (resource, context, application) = await CreateContextAsync(
+            options,
+            (_, _, _, _) =>
+            {
+                preparations++;
+                return Task.FromResult(CreatePreparedImage(options));
+            });
         await using (application)
         {
-            var builds = 0;
-            var pulls = 0;
-            await ModuleImageBuildPipeline.BuildAsync(
-                resource,
-                context,
-                (_, _) => Task.FromResult(false),
-                (_, _) =>
-                {
-                    pulls++;
-                    return Task.FromResult(true);
-                },
-                (_, _) =>
-                {
-                    builds++;
-                    return Task.CompletedTask;
-                },
-                (_, _, _) => Task.CompletedTask);
+            await ModuleImageBuildPipeline.BuildAsync(resource, context);
+            await ModuleImageBuildPipeline.BuildAsync(resource, context);
 
-            Assert.Equal(1, pulls);
-            Assert.Equal(0, builds);
+            Assert.Equal(1, preparations);
         }
     }
 
     [Fact]
-    public async Task Dirty_images_build_and_retag_the_declared_output()
+    public async Task Recipe_preparation_failures_propagate_from_the_build_step()
     {
         var options = Publisher("api");
-        options.ProducedImageReference = "legacy/api:output";
-        var (resource, context, application) = await CreateContextAsync(options, repositoryDirty: true);
+        var (resource, context, application) = await CreateContextAsync(
+            options,
+            (_, _, _, _) => throw new InvalidOperationException("build failed"));
         await using (application)
         {
-            ModuleImagePublisherAnnotation? executed = null;
-            (string Source, string Target)? retag = null;
-            await ModuleImageBuildPipeline.BuildAsync(
-                resource,
-                context,
-                (_, _) => throw new InvalidOperationException("Dirty images must not be inspected."),
-                (_, _) => throw new InvalidOperationException("Dirty images must not be pulled."),
-                (publisher, _) =>
-                {
-                    executed = publisher;
-                    return Task.CompletedTask;
-                },
-                (source, target, _) =>
-                {
-                    retag = (source, target);
-                    return Task.CompletedTask;
-                });
-
-            Assert.NotNull(executed);
-            Assert.Equal("registry.example.test/acme/api:ci-dirty", executed.Plan.ImageReference);
-            Assert.Equal(
-                ("legacy/api:output", "registry.example.test/acme/api:ci-dirty"),
-                retag);
-        }
-    }
-
-    [Fact]
-    public async Task Build_command_failures_propagate_without_retagging()
-    {
-        var options = Publisher("api");
-        options.ProducedImageReference = "legacy/api:output";
-        var (resource, context, application) = await CreateContextAsync(options, repositoryDirty: true);
-        await using (application)
-        {
-            var retagged = false;
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                ModuleImageBuildPipeline.BuildAsync(
-                    resource,
-                    context,
-                    (_, _) => Task.FromResult(false),
-                    (_, _) => Task.FromResult(false),
-                    (_, _) => throw new InvalidOperationException("build failed"),
-                    (_, _, _) =>
-                    {
-                        retagged = true;
-                        return Task.CompletedTask;
-                    }));
+                ModuleImageBuildPipeline.BuildAsync(resource, context));
 
             Assert.Equal("build failed", exception.Message);
-            Assert.False(retagged);
         }
     }
 
@@ -225,27 +170,25 @@ public sealed class ModuleImageBuildPipelineTests
         PipelineStepContext Context,
         DistributedApplication Application)> CreateContextAsync(
         ModuleContainerExportOptions options,
-        bool repositoryDirty = false)
+        Func<
+            ModuleImageBuildRecipe,
+            Microsoft.Extensions.Logging.ILogger,
+            Microsoft.Extensions.Logging.ILogger,
+            CancellationToken,
+            Task<ModulePreparedImage>> prepareAsync)
     {
         var builder = DistributedApplication.CreateBuilder();
         var resource = builder
-            .AddContainer("api", options.ImageName, options.ImageTag!)
+            .AddContainer("api", options.ImageName, ModuleImageBuildRecipe.LocalRunTag)
             .WithImageRegistry(options.ImageRegistry)
             .Resource;
-        var plan = await ModuleImagePublishPlan.CreateAsync(
+        var recipe = CreateRecipe(
             options,
-            repositoryDirty,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
+            "api");
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
-            "images",
-            "api",
             ModuleResourceKind.Container,
-            options,
-            plan,
-            "/work",
-            "https://example.test/images.git",
-            "main"));
+            recipe,
+            prepareAsync));
         var application = builder.Build();
         var pipelineContext = new PipelineContext(
             application.Services.GetRequiredService<DistributedApplicationModel>(),
@@ -268,24 +211,9 @@ public sealed class ModuleImageBuildPipelineTests
     {
         var resource = new ContainerResource(effectiveName);
         var options = Publisher(declaredName);
-        var plan = new ModuleImagePublishPlan(
-            options.ImageRegistry,
-            options.ImageName,
-            options.ImageTag!,
-            $"{options.ImageRegistry}/{options.ImageName}:{options.ImageTag}",
-            null,
-            options.PublishArguments,
-            false,
-            true);
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
-            "images",
-            declaredName,
             ModuleResourceKind.Container,
-            options,
-            plan,
-            "/work",
-            null,
-            null));
+            CreateRecipe(options, declaredName)));
         return new PipelineStep
         {
             Name = $"build-{effectiveName}",
@@ -294,6 +222,38 @@ public sealed class ModuleImageBuildPipelineTests
             Tags = [ModuleImageBuildPipeline.BuildContainerImageTag],
             Resource = resource
         };
+    }
+
+    private static ModuleImageBuildRecipe CreateRecipe(
+        ModuleContainerExportOptions options,
+        string resourceName) =>
+        new(
+            "images",
+            resourceName,
+            options,
+            "/work",
+            "/work",
+            "https://example.test/images.git",
+            revision: null,
+            refreshCleanCheckout: false,
+            "git",
+            "gh",
+            TimeSpan.FromMinutes(2));
+
+    private static ModulePreparedImage CreatePreparedImage(ModuleContainerExportOptions options)
+    {
+        var sourceState = new ModuleImageSourceState(
+            "main",
+            "abcdef012345",
+            IsDirty: false,
+            StatusFingerprint: "CLEAN");
+        var recipe = CreateRecipe(options, "api");
+        var plan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        return new ModulePreparedImage(
+            plan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            sourceState,
+            ModuleImagePreparationDisposition.Built);
     }
 
     private static async Task<IReadOnlyList<PipelineStep>> CreateBuildStepsAsync(IResource resource)

@@ -325,9 +325,7 @@ jobs:
 
   e2e-multi-repo:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      ASPIRE_CONTAINER_RUNTIME: docker
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -341,103 +339,11 @@ jobs:
       - name: Restore the pinned Aspire CLI
         run: dotnet tool restore
 
-      - name: Create isolated consumer and resource repositories
-        shell: bash
-        run: |
-          set -euo pipefail
-          multi_repo_root="$(mktemp -d "$RUNNER_TEMP/multi-repo-e2e.XXXXXX")"
-          package_version="0.0.0-multi-repo-e2e"
-          package_feed="$multi_repo_root/packages"
-          consumer_repository="$multi_repo_root/consumer"
-          resource_repository="$multi_repo_root/resource-build-source"
-          mkdir -p "$package_feed"
-
-          dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj \
-            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
-          dotnet pack samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj \
-            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
-
-          git clone --no-local "$GITHUB_WORKSPACE" "$consumer_repository"
-          mv "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract" \
-            "$multi_repo_root/producer-contract-source"
-          mv "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository" \
-            "$resource_repository"
-          test ! -e "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract"
-          test ! -e "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository"
-
-          git -C "$resource_repository" init --initial-branch main
-          git -C "$resource_repository" config user.name "MultiRepo E2E"
-          git -C "$resource_repository" config user.email "multi-repo@example.invalid"
-          git -C "$resource_repository" add .
-          git -C "$resource_repository" commit -m "Add pinned resource build"
-          resource_revision="$(git -C "$resource_repository" rev-parse HEAD)"
-
-          printf '%s\n' 'multi-repo-resource-unpinned-latest' \
-            > "$resource_repository/marker.txt"
-          git -C "$resource_repository" add marker.txt
-          git -C "$resource_repository" commit -m "Change marker after pinned revision"
-          resource_latest_revision="$(git -C "$resource_repository" rev-parse HEAD)"
-          test "$resource_revision" != "$resource_latest_revision"
-
-          {
-            echo "MULTI_REPO_ROOT=$multi_repo_root"
-            echo "MULTI_REPO_APPHOST=$consumer_repository/samples/MultiRepoE2E/Spire.Consumer.AppHost"
-            echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository"
-            echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision"
-            echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision"
-            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepository=$resource_repository"
-            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepositoryRevision=$resource_revision"
-            echo "SpireContractPackageVersion=$package_version"
-            echo "RestoreAdditionalProjectSources=$package_feed"
-          } >> "$GITHUB_ENV"
-
-      - name: Restore the isolated package consumer
-        run: dotnet restore "$MULTI_REPO_APPHOST"
-
-      - name: Validate a real multi-repository AppHost
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet tool run aspire -- start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
-          trap 'dotnet tool run aspire -- stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
-
-          dotnet tool run aspire -- wait multi-repo-api \
-            --apphost "$MULTI_REPO_APPHOST" \
-            --timeout 180 \
-            --non-interactive
-
-          mapfile -t managed_git_directories < <(
-            find "$MULTI_REPO_APPHOST/.aspire/module-repositories" \
-              -type d \
-              -name .git \
-              -print
-          )
-          if (( ${#managed_git_directories[@]} != 1 )); then
-            echo "Expected exactly one managed build repository checkout." >&2
-            exit 1
-          fi
-          build_checkout="${managed_git_directories[0]%/.git}"
-          actual_revision="$(git -C "$build_checkout" rev-parse HEAD)"
-          test "$actual_revision" = "$MULTI_REPO_RESOURCE_BUILD_REVISION"
-          test "$(git -C "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY" rev-parse HEAD)" = \
-            "$MULTI_REPO_RESOURCE_LATEST_REVISION"
-          test -z "$(git -C "$build_checkout" branch --show-current)"
-
-          origin="$(git -C "$build_checkout" remote get-url origin)"
-          test "$(realpath "$origin")" = "$(realpath "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY")"
-          test -n "$(docker image ls \
-            --filter 'reference=multi-repo-e2e-resource:*' \
-            --format '{{.Repository}}:{{.Tag}}')"
-
-          resource_url="$(
-            dotnet tool run aspire -- describe multi-repo-api \
-              --apphost "$MULTI_REPO_APPHOST" \
-              --format Json \
-              --non-interactive |
-              jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
-          )"
-          test -n "$resource_url"
-          test "$(curl --fail --show-error --silent "${resource_url%/}/health.txt")" = \
-            "healthy-from-separate-build-repository"
-          test "$(curl --fail --show-error --silent "${resource_url%/}/marker.txt")" = \
-            "multi-repo-resource-pinned-revision"
+      - name: Validate initialization and runtime repository policies
+        run: >-
+          dotnet run
+          --project samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj
+          --configuration Release
+          --
+          --repository-root "${{ github.workspace }}"
+          --container-runtime docker

@@ -22,14 +22,13 @@ public sealed class ModuleImageDescriptionPipelineTests
     public async Task Describes_contract_modules_without_container_images()
     {
         var builder = CreatePublishBuilder(Directory.GetCurrentDirectory());
-        var module = await builder.ExportModuleAsync(
+        var module = builder.ExportModule(
             "contract-only",
             "Sample.ContractOnly",
             definition => definition.AddResource<ParameterResource>(
                 "marker",
-                context => context.ApplicationBuilder.AddParameter(context.ResourceName)),
-            TestContext.Current.CancellationToken);
-        await builder.AddAsync(module, TestContext.Current.CancellationToken);
+                context => context.ApplicationBuilder.AddParameter(context.ResourceName)));
+        builder.AddModule(module);
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             builder.Resources,
@@ -55,7 +54,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         ConfigureImage(builder, "Projects", "project", "acme/project", "project-ci");
         ConfigureImage(builder, "Containers", "declared", "acme/declared", "declared-ci");
         ConfigureImage(builder, "Containers", "factory", "acme/factory", "factory-ci");
-        var module = await builder.ExportModuleAsync(
+        var module = builder.ExportModule(
             "images",
             "Sample.Images.Contract",
             definition =>
@@ -85,10 +84,10 @@ public sealed class ModuleImageDescriptionPipelineTests
                         ImageTag = "old"
                     });
                 definition.AddContainer("consumed", "registry.example.test/library/redis", "7");
-            },
-            TestContext.Current.CancellationToken);
+            });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
+        UsePreparedPublishers(builder.Resources);
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             builder.Resources,
@@ -134,20 +133,32 @@ public sealed class ModuleImageDescriptionPipelineTests
             ImageRegistry = "registry.example.test",
             ImageTag = "candidate"
         };
-        var plan = await ModuleImagePublishPlan.CreateAsync(
-            options,
-            repositoryDirty: false,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
-        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+        var recipe = new ModuleImageBuildRecipe(
             "orders",
             "api",
-            ModuleResourceKind.Container,
             options,
-            plan,
+            "/work",
             "/work",
             "https://example.test/orders.git",
-            "main"));
+            "main",
+            refreshCleanCheckout: false,
+            "git",
+            "gh",
+            TimeSpan.FromMinutes(2));
+        var sourceState = new ModuleImageSourceState(
+            "main",
+            "abcdef012345",
+            IsDirty: false,
+            StatusFingerprint: "CLEAN");
+        var executionPlan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, _) => Task.FromResult(new ModulePreparedImage(
+                executionPlan.CanonicalImageReference,
+                recipe.LocalImageReference,
+                sourceState,
+                ModuleImagePreparationDisposition.Built))));
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "api",
@@ -279,6 +290,35 @@ public sealed class ModuleImageDescriptionPipelineTests
         builder.Configuration[$"{section}:ImageRegistry"] = "registry.example.test";
         builder.Configuration[$"{section}:ImageName"] = repository;
         builder.Configuration[$"{section}:ImageTag"] = tag;
+    }
+
+    private static void UsePreparedPublishers(IEnumerable<IResource> resources)
+    {
+        foreach (var resource in resources)
+        {
+            var publisher = resource.Annotations
+                .OfType<ModuleImagePublisherAnnotation>()
+                .LastOrDefault();
+            if (publisher is null)
+            {
+                continue;
+            }
+
+            var sourceState = new ModuleImageSourceState(
+                "main",
+                "abcdef012345",
+                IsDirty: false,
+                StatusFingerprint: "CLEAN");
+            var executionPlan = ModuleImageExecutionPlan.Create(publisher.Recipe, sourceState);
+            resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+                publisher.ResourceKind,
+                publisher.Recipe,
+                (_, _, _, _) => Task.FromResult(new ModulePreparedImage(
+                    executionPlan.CanonicalImageReference,
+                    publisher.Recipe.LocalImageReference,
+                    sourceState,
+                    ModuleImagePreparationDisposition.Built))));
+        }
     }
 
     private static IDistributedApplicationBuilder CreatePublishBuilder(string projectDirectory)

@@ -25,7 +25,7 @@ var registry = builder.AddContainerRegistry(
     "image-push-registry",
     registryEndpoint,
     "image-push");
-var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush.Contract", definition =>
+var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract", definition =>
 {
     definition.WithRepository(builder.AppHostDirectory);
 
@@ -94,9 +94,9 @@ var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush
         });
 });
 
-await builder.AddAsync(module);
+builder.AddModule(module);
 
-var extraModule = await builder.ExportModuleAsync("image-push-extra", definition =>
+var extraModule = builder.ExportModule("image-push-extra", definition =>
 {
     definition.WithRepository(builder.AppHostDirectory);
     definition.AddContainer(
@@ -118,9 +118,9 @@ var extraModule = await builder.ExportModuleAsync("image-push-extra", definition
         .Configure((_, container) => container.WithExplicitStart());
 });
 
-await builder.AddAsync(extraModule);
+builder.AddModule(extraModule);
 
-var contractOnlyModule = await builder.ExportModuleAsync(
+var contractOnlyModule = builder.ExportModule(
     "contract-only",
     "Sample.ContractOnly",
     definition => definition.AddResource<ParameterResource>(
@@ -130,5 +130,5 @@ var contractOnlyModule = await builder.ExportModuleAsync(
             "contract metadata without an image publisher",
             publishValueAsDefault: true)));
 
-await builder.AddAsync(contractOnlyModule);
+builder.AddModule(contractOnlyModule);
 await builder.Build().RunAsync();

@@ -18,7 +18,7 @@ public sealed class ModuleImagePullPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
@@ -29,7 +29,7 @@ public sealed class ModuleImagePullPipelineTests
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var step = Assert.Single(await CreatePullStepsAsync(container));
@@ -46,7 +46,7 @@ public sealed class ModuleImagePullPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("assets", definition =>
+        var module = builder.ExportModule("assets", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer(
@@ -71,7 +71,7 @@ public sealed class ModuleImagePullPipelineTests
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var containers = builder.Resources.OfType<ContainerResource>().ToArray();
         Assert.Equal(2, containers.Length);
@@ -91,7 +91,7 @@ public sealed class ModuleImagePullPipelineTests
             "registry",
             "registry.example.test",
             "acme");
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
@@ -106,7 +106,7 @@ public sealed class ModuleImagePullPipelineTests
                         .WithRemoteImageTag("candidate"));
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
@@ -114,7 +114,7 @@ public sealed class ModuleImagePullPipelineTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("registry.example.test/acme/services/orders:candidate", references.RemoteImage);
-        Assert.Equal("orders-api:local", references.LocalImage);
+        Assert.Equal("orders-api:aspire-run", references.LocalImage);
     }
 
     [Fact]
@@ -229,14 +229,14 @@ public sealed class ModuleImagePullPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer("orders-api", "orders-api", "1-0")
                 .WithImagePullMapping("source.example.test/images:api-1-0");
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Single(await CreatePullStepsAsync(container));
@@ -362,7 +362,7 @@ public sealed class ModuleImagePullPipelineTests
             "registry",
             "registry.example.test",
             "mirror");
-        var module = await builder.ExportModuleAsync("database", definition =>
+        var module = builder.ExportModule("database", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer("postgres", "owner/database", "ci")
@@ -374,7 +374,7 @@ public sealed class ModuleImagePullPipelineTests
                     ImageTag = "ci"
                 });
         });
-        await builder.AddAsync(module);
+        builder.AddModule(module);
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         container.Annotations.Add(new RegistryTargetAnnotation(registry.Resource));
 
@@ -383,7 +383,7 @@ public sealed class ModuleImagePullPipelineTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal("registry.example.test/mirror/owner/database:ci", references.RemoteImage);
-        Assert.Equal("owner/database:ci", references.LocalImage);
+        Assert.Equal("owner/database:aspire-run", references.LocalImage);
         Assert.DoesNotContain("postgres:latest", references.RemoteImage, StringComparison.Ordinal);
     }
 

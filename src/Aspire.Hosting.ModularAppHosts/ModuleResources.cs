@@ -2,52 +2,37 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting;
 
-/// <summary>A one-shot Git repository installer displayed as a child of an imported service.</summary>
-public sealed class ModuleRepositoryInstallerResource(
-    string name,
-    string repositoryPath,
-    string? repository,
-    bool updatesRepository,
-    string publishCommand,
-    IReadOnlyList<string> publishArguments,
-    string workingDirectory,
-    string imageReference,
-    bool repositoryDirty)
-    : ExecutableResource(name, publishCommand, workingDirectory)
+/// <summary>A managed one-shot resource that prepares a module image before application resources start.</summary>
+public sealed class ModuleRepositoryInstallerResource
+    : Resource
 {
+    internal ModuleRepositoryInstallerResource(
+        string name,
+        ModuleImagePublisherAnnotation publisher)
+        : base(name)
+    {
+        Publisher = publisher;
+    }
+
+    internal ModuleImagePublisherAnnotation Publisher { get; }
+
     /// <summary>Gets the local repository path.</summary>
-    public string RepositoryPath { get; } = repositoryPath;
+    public string RepositoryPath => Publisher.Recipe.RepositoryPath;
 
     /// <summary>Gets the configured Git remote.</summary>
-    public string? Repository { get; } = repository;
+    public string? Repository => Publisher.Recipe.Repository;
 
     /// <summary>Gets whether the installer pulls updates for an existing clean worktree.</summary>
-    public bool UpdatesRepository { get; } = updatesRepository;
+    public bool UpdatesRepository => Publisher.Recipe.RefreshCleanCheckout;
 
     /// <summary>Gets the caller-supplied image publish executable.</summary>
-    public string PublishCommand { get; } = publishCommand;
+    public string PublishCommand => Publisher.Recipe.Options.PublishCommand;
 
-    /// <summary>Gets the effective image publish arguments after image placeholders are resolved.</summary>
-    public IReadOnlyList<string> PublishArguments { get; } = publishArguments;
+    /// <summary>Gets the declared image publish arguments; placeholders are resolved at execution time.</summary>
+    public IReadOnlyList<string> PublishArguments => Publisher.Recipe.Options.PublishArguments;
 
-    /// <summary>Gets the effective image reference prepared by this installer and any chained retag step.</summary>
-    public string ImageReference { get; } = imageReference;
-
-    /// <summary>Gets whether the repository was dirty when the module was materialized.</summary>
-    public bool RepositoryDirty { get; } = repositoryDirty;
-}
-
-internal sealed class ModuleImageRetagResource(
-    string name,
-    string containerRuntime,
-    string workingDirectory,
-    string sourceImageReference,
-    string targetImageReference)
-    : ExecutableResource(name, containerRuntime, workingDirectory)
-{
-    public string SourceImageReference { get; } = sourceImageReference;
-
-    public string TargetImageReference { get; } = targetImageReference;
+    /// <summary>Gets the stable local image alias prepared by this installer.</summary>
+    public string ImageReference => Publisher.Recipe.LocalImageReference;
 }
 
 /// <summary>Associates a materialized resource with its module definition.</summary>
@@ -71,7 +56,7 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
     /// <summary>Gets the module-definition worktree associated with the resource.</summary>
     public string RepositoryPath { get; } = repositoryPath;
 
-    /// <summary>Gets whether the resource came from <c>ImportModuleAsync</c>.</summary>
+    /// <summary>Gets whether the resource came from <c>ImportModule</c>.</summary>
     public bool Imported { get; } = imported;
 
     /// <summary>Gets the NuGet package ID that publishes the owning module contract, when declared.</summary>

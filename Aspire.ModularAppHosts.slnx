@@ -14,6 +14,7 @@
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.AppHost/Spire.Consumer.AppHost.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
+    <Project Path="samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Producer.AppHost/Spire.Producer.AppHost.csproj" />
   </Folder>
   <Folder Name="/src/">

@@ -2,37 +2,96 @@
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
 
 internal sealed class ModuleImagePublisherAnnotation(
-    string moduleName,
-    string resourceName,
     ModuleResourceKind resourceKind,
-    ModuleContainerExportOptions options,
-    ModuleImagePublishPlan plan,
-    string workingDirectory,
-    string? repository,
-    string? revision,
-    string? branchImageTag = null) : IResourceAnnotation
+    ModuleImageBuildRecipe recipe,
+    Func<
+        ModuleImageBuildRecipe,
+        ILogger,
+        ILogger,
+        CancellationToken,
+        Task<ModulePreparedImage>>? prepareAsync = null) : IResourceAnnotation
 {
-    public string ModuleName { get; } = moduleName;
+    private readonly object _preparationLock = new();
+    private readonly Func<
+        ModuleImageBuildRecipe,
+        ILogger,
+        ILogger,
+        CancellationToken,
+        Task<ModulePreparedImage>> _prepareAsync = prepareAsync ?? ModuleImageRecipeEvaluator.PrepareAsync;
+    private Task<ModulePreparedImage>? _preparationTask;
+    private ModulePreparedImage? _preparedImage;
 
-    public string ResourceName { get; } = resourceName;
+    public string ModuleName => Recipe.ModuleName;
+
+    public string ResourceName => Recipe.ResourceName;
 
     public ModuleResourceKind ResourceKind { get; } = resourceKind;
 
-    public ModuleContainerExportOptions Options { get; } = options;
+    public ModuleImageBuildRecipe Recipe { get; } = recipe;
 
-    public ModuleImagePublishPlan Plan { get; } = plan;
+    public ModuleContainerExportOptions Options => Recipe.Options;
 
-    public string WorkingDirectory { get; } = workingDirectory;
+    public string WorkingDirectory => Recipe.WorkingDirectory;
 
-    public string? Repository { get; } = repository;
+    public string? Repository => Recipe.Repository;
 
-    public string? Revision { get; } = revision;
+    public string? Revision => Recipe.Revision;
 
-    public string? BranchImageTag { get; } = branchImageTag;
+    public Task<ModulePreparedImage> PrepareAsync(
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lifecycleLogger);
+        ArgumentNullException.ThrowIfNull(resourceLogger);
+
+        lock (_preparationLock)
+        {
+            _preparationTask ??= PrepareCoreAsync(
+                lifecycleLogger,
+                resourceLogger,
+                cancellationToken);
+            return _preparationTask;
+        }
+    }
+
+    public bool TryGetPreparedImage(out ModulePreparedImage preparedImage)
+    {
+        lock (_preparationLock)
+        {
+            if (_preparedImage is not null)
+            {
+                preparedImage = _preparedImage;
+                return true;
+            }
+
+            preparedImage = null!;
+            return false;
+        }
+    }
+
+    private async Task<ModulePreparedImage> PrepareCoreAsync(
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
+    {
+        var preparedImage = await _prepareAsync(
+            Recipe,
+            lifecycleLogger,
+            resourceLogger,
+            cancellationToken).ConfigureAwait(false);
+        lock (_preparationLock)
+        {
+            _preparedImage = preparedImage;
+        }
+
+        return preparedImage;
+    }
 }
 
 internal sealed record ModuleEffectiveImage(
@@ -104,7 +163,8 @@ internal static class ModuleEffectiveImageResolver
     public static async Task<ModuleEffectiveImage> ResolveAsync(
         IResource resource,
         CancellationToken cancellationToken,
-        bool allowUnqualifiedPullReference = false)
+        bool allowUnqualifiedPullReference = false,
+        bool usePreparedPublisherImage = false)
     {
         ArgumentNullException.ThrowIfNull(resource);
         if (!resource.TryGetContainerImageName(out var localImage))
@@ -116,6 +176,20 @@ internal static class ModuleEffectiveImageResolver
         var image = resource.Annotations.OfType<ContainerImageAnnotation>().LastOrDefault()
             ?? throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a container image annotation.");
+        var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
+        ModulePreparedImage? preparedImage = null;
+        if (usePreparedPublisherImage && publisher is not null &&
+            !publisher.TryGetPreparedImage(out preparedImage))
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' has not prepared its module image. Run its image preparation step first.");
+        }
+
+        if (preparedImage is not null)
+        {
+            localImage = preparedImage.CanonicalImageReference;
+        }
+
         var mapping = GetPullMapping(resource);
         if (mapping is not null)
         {
@@ -138,6 +212,9 @@ internal static class ModuleEffectiveImageResolver
                 resource,
                 image,
                 registry,
+                publisher,
+                preparedImage,
+                localImage,
                 cancellationToken).ConfigureAwait(false);
             pushTargetKind = ModuleImagePushTargetKind.AspireRegistry;
         }
@@ -178,15 +255,22 @@ internal static class ModuleEffectiveImageResolver
         IResource resource,
         ContainerImageAnnotation image,
         IContainerRegistry registry,
+        ModuleImagePublisherAnnotation? publisher,
+        ModulePreparedImage? preparedImage,
+        string localImageReference,
         CancellationToken cancellationToken)
     {
-        var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
+        var effectiveIdentity = ParseReference(
+            preparedImage?.CanonicalImageReference ?? localImageReference,
+            image);
         var options = new ContainerImagePushOptions
         {
 #pragma warning disable CA1308
-            RemoteImageName = publisher?.Plan.ImageName ?? resource.Name.ToLowerInvariant(),
+            RemoteImageName = publisher?.Options.ImageName ?? resource.Name.ToLowerInvariant(),
 #pragma warning restore CA1308
-            RemoteImageTag = publisher?.Plan.ImageTag ?? "latest"
+            RemoteImageTag = preparedImage is not null
+                ? effectiveIdentity.Tag ?? "latest"
+                : publisher?.Options.ImageTag ?? "latest"
         };
         var context = new ContainerImagePushOptionsCallbackContext
         {

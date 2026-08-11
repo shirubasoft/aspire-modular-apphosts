@@ -16,7 +16,7 @@ Reference the package from an AppHost and import its typed module:
 ```csharp
 using Spire.ModuleContract;
 
-var spire = await builder.ImportSpireModuleAsync();
+var spire = builder.ImportSpireModule();
 ```
 
 The complete validation lives in the repository's `samples/MultiRepoE2E` directory.

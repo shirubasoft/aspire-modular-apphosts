@@ -1,0 +1,465 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace Aspire.Hosting.ModularAppHosts.Tests;
+
+public sealed class ModuleImageBuildRecipeTests
+{
+    private static readonly ModuleImageSourceState CleanMain = new(
+        "main",
+        "abcdef012345",
+        IsDirty: false,
+        StatusFingerprint: "CLEAN");
+
+    [Fact]
+    public void Recipe_uses_a_stable_resource_specific_local_alias()
+    {
+        var recipe = CreateRecipe("acme/orders-api");
+        var anotherRecipe = CreateRecipe("acme/orders-worker");
+
+        Assert.Equal("registry.example.test/acme/orders-api:aspire-run", recipe.LocalImageReference);
+        Assert.Equal("registry.example.test/acme/orders-worker:aspire-run", anotherRecipe.LocalImageReference);
+        Assert.DoesNotContain("main", recipe.LocalImageReference, StringComparison.Ordinal);
+        Assert.DoesNotContain("abcdef", recipe.LocalImageReference, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Execution_plan_resolves_runtime_source_identity_and_publish_placeholders()
+    {
+        var options = CreateOptions("acme/orders-api");
+        var recipe = CreateRecipe(options: new ModuleContainerExportOptions(
+            options.ImageName,
+            options.PublishCommand,
+            "publish",
+            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleContainerExportOptions.ImageTagPlaceholder)
+        {
+            ImageRegistry = options.ImageRegistry,
+            ProducedImageReference = "legacy/orders-api:{image-tag}"
+        });
+
+        var plan = ModuleImageExecutionPlan.Create(recipe, CleanMain);
+
+        Assert.Equal(
+            "registry.example.test/acme/orders-api:main-abcdef012345",
+            plan.CanonicalImageReference);
+        Assert.Equal("legacy/orders-api:main-abcdef012345", plan.ProducedImageReference);
+        Assert.Equal(
+            [
+                "publish",
+                "registry.example.test/acme/orders-api:main-abcdef012345",
+                "main-abcdef012345"
+            ],
+            plan.PublishArguments);
+    }
+
+    [Fact]
+    public async Task Clean_local_canonical_image_is_reused_and_retagged_to_the_run_alias()
+    {
+        var operations = new FakeOperations(CleanMain)
+        {
+            ImageExists = true
+        };
+
+        var prepared = await PrepareAsync(CreateRecipe(), operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Reused, prepared.Disposition);
+        Assert.Equal(
+            "registry.example.test/acme/orders-api:main-abcdef012345",
+            prepared.CanonicalImageReference);
+        Assert.Equal(
+            [(prepared.CanonicalImageReference, prepared.LocalImageReference)],
+            operations.Tags);
+        Assert.Equal(0, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+    }
+
+    [Fact]
+    public async Task Clean_missing_image_is_pulled_before_build_when_enabled()
+    {
+        var options = CreateOptions();
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations(CleanMain)
+        {
+            PullSucceeds = true
+        };
+
+        var prepared = await PrepareAsync(CreateRecipe(options: options), operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Pulled, prepared.Disposition);
+        Assert.Equal(1, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+        Assert.Single(operations.Tags);
+    }
+
+    [Fact]
+    public async Task Failed_pull_falls_back_to_build_and_retags_legacy_output_then_run_alias()
+    {
+        var options = CreateOptions();
+        options.PullBeforeBuild = true;
+        options.ProducedImageReference = "legacy/orders-api:output";
+        var operations = new FakeOperations(CleanMain, CleanMain);
+
+        var prepared = await PrepareAsync(CreateRecipe(options: options), operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Built, prepared.Disposition);
+        Assert.Equal(1, operations.PullCount);
+        Assert.Equal(1, operations.BuildCount);
+        Assert.Equal(
+            [
+                ("legacy/orders-api:output", prepared.CanonicalImageReference),
+                (prepared.CanonicalImageReference, prepared.LocalImageReference)
+            ],
+            operations.Tags);
+    }
+
+    [Fact]
+    public async Task Dirty_source_always_builds_without_image_inspection_or_pull()
+    {
+        var dirty = CleanMain with
+        {
+            IsDirty = true,
+            StatusFingerprint = "DIRTY"
+        };
+        var options = CreateOptions();
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations(dirty, dirty)
+        {
+            ImageExists = true,
+            PullSucceeds = true
+        };
+
+        var prepared = await PrepareAsync(CreateRecipe(options: options), operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Built, prepared.Disposition);
+        Assert.EndsWith("main-abcdef012345-dirty", prepared.CanonicalImageReference, StringComparison.Ordinal);
+        Assert.Equal(0, operations.ImageExistsCount);
+        Assert.Equal(0, operations.PullCount);
+        Assert.Equal(1, operations.BuildCount);
+    }
+
+    [Fact]
+    public void Dirty_literal_clean_references_are_rewritten_for_publish_and_legacy_output()
+    {
+        var options = CreateOptions();
+        options.ImageTag = "candidate";
+        options.ProducedImageReference = "registry.example.test/acme/orders-api:candidate";
+        var recipe = CreateRecipe(options: new ModuleContainerExportOptions(
+            options.ImageName,
+            options.PublishCommand,
+            "registry.example.test/acme/orders-api:candidate")
+        {
+            ImageRegistry = options.ImageRegistry,
+            ImageTag = options.ImageTag,
+            ProducedImageReference = options.ProducedImageReference
+        });
+        var dirty = CleanMain with { IsDirty = true, StatusFingerprint = "DIRTY" };
+
+        var plan = ModuleImageExecutionPlan.Create(recipe, dirty);
+
+        Assert.Equal(
+            "registry.example.test/acme/orders-api:candidate-dirty",
+            plan.CanonicalImageReference);
+        Assert.Equal(plan.CanonicalImageReference, plan.ProducedImageReference);
+        Assert.Equal([plan.CanonicalImageReference], plan.PublishArguments);
+    }
+
+    [Fact]
+    public async Task Optional_refresh_only_updates_clean_unpinned_checkouts_and_uses_refreshed_state()
+    {
+        var refreshed = new ModuleImageSourceState(
+            "main",
+            "fedcba987654",
+            IsDirty: false,
+            StatusFingerprint: "CLEAN");
+        var operations = new FakeOperations(CleanMain, refreshed)
+        {
+            HasUpstream = true,
+            ImageExists = true
+        };
+
+        var prepared = await PrepareAsync(
+            CreateRecipe(refreshCleanCheckout: true),
+            operations);
+
+        Assert.Equal(1, operations.HasUpstreamCount);
+        Assert.Equal(1, operations.RefreshCount);
+        Assert.EndsWith("main-fedcba987654", prepared.CanonicalImageReference, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, null)]
+    [InlineData(false, "v1.2.3")]
+    public async Task Runtime_refresh_preserves_dirty_and_pinned_checkouts(
+        bool dirty,
+        string? revision)
+    {
+        var state = CleanMain with
+        {
+            IsDirty = dirty,
+            StatusFingerprint = dirty ? "DIRTY" : "CLEAN"
+        };
+        var operations = new FakeOperations(state, state)
+        {
+            HasUpstream = true,
+            ImageExists = true
+        };
+
+        await PrepareAsync(
+            CreateRecipe(
+                refreshCleanCheckout: true,
+                revision: revision),
+            operations);
+
+        Assert.Equal(0, operations.HasUpstreamCount);
+        Assert.Equal(0, operations.RefreshCount);
+    }
+
+    [Fact]
+    public async Task Build_fails_before_retagging_when_source_changes_during_the_command()
+    {
+        var changed = CleanMain with { StatusFingerprint = "CHANGED" };
+        var operations = new FakeOperations(CleanMain, changed);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PrepareAsync(CreateRecipe(), operations));
+
+        Assert.Contains("Build inputs changed", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(1, operations.BuildCount);
+        Assert.Empty(operations.Tags);
+    }
+
+    [Fact]
+    public async Task Command_output_is_redacted_and_only_written_to_the_resource_logger()
+    {
+        var operations = new FakeOperations(CleanMain, CleanMain);
+        var lifecycleLogger = new RecordingLogger();
+        var resourceLogger = new RecordingLogger();
+
+        await ModuleImageRecipeEvaluator.PrepareAsync(
+            CreateRecipe(),
+            lifecycleLogger,
+            resourceLogger,
+            operations,
+            TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(
+            lifecycleLogger.Messages,
+            message => message.Contains("build output", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceLogger.Messages,
+            message => message.Contains("build output", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceLogger.Messages,
+            message => message.Contains("[REDACTED]", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            resourceLogger.Messages,
+            message => message.Contains("user:secret", StringComparison.Ordinal) ||
+                message.Contains("token=secret", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Publisher_annotation_caches_one_in_flight_preparation_without_blocking()
+    {
+        var recipe = CreateRecipe();
+        var completion = new TaskCompletionSource<ModulePreparedImage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var publisher = new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, _) =>
+            {
+                calls++;
+                return completion.Task;
+            });
+
+        var first = publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+        var second = publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+
+        Assert.Same(first, second);
+        Assert.Equal(1, calls);
+        Assert.False(first.IsCompleted);
+
+        var prepared = CreatePreparedImage(recipe, CleanMain);
+        completion.SetResult(prepared);
+        Assert.Same(prepared, await first);
+        Assert.Same(prepared, await second);
+        Assert.True(publisher.TryGetPreparedImage(out var cached));
+        Assert.Same(prepared, cached);
+    }
+
+    private static Task<ModulePreparedImage> PrepareAsync(
+        ModuleImageBuildRecipe recipe,
+        IModuleImageRecipeOperations operations) =>
+        ModuleImageRecipeEvaluator.PrepareAsync(
+            recipe,
+            NullLogger.Instance,
+            NullLogger.Instance,
+            operations,
+            TestContext.Current.CancellationToken);
+
+    private static ModuleImageBuildRecipe CreateRecipe(
+        string imageName = "acme/orders-api",
+        ModuleContainerExportOptions? options = null,
+        bool refreshCleanCheckout = false,
+        string? revision = null) =>
+        new(
+            "orders",
+            "orders-api",
+            options ?? CreateOptions(imageName),
+            "/work/orders",
+            "/work/orders/src",
+            "https://example.test/acme/orders.git",
+            revision,
+            refreshCleanCheckout,
+            "git",
+            "gh",
+            TimeSpan.FromMinutes(2));
+
+    private static ModuleContainerExportOptions CreateOptions(string imageName = "acme/orders-api") =>
+        new(imageName, "build-image", "publish", ModuleContainerExportOptions.ImageReferencePlaceholder)
+        {
+            ImageRegistry = "registry.example.test"
+        };
+
+    private static ModulePreparedImage CreatePreparedImage(
+        ModuleImageBuildRecipe recipe,
+        ModuleImageSourceState sourceState)
+    {
+        var executionPlan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        return new ModulePreparedImage(
+            executionPlan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            sourceState,
+            ModuleImagePreparationDisposition.Built);
+    }
+
+    private sealed class FakeOperations : IModuleImageRecipeOperations
+    {
+        private readonly Queue<ModuleImageSourceState> _sourceStates;
+        private ModuleImageSourceState _lastSourceState;
+
+        public FakeOperations(params ModuleImageSourceState[] sourceStates)
+        {
+            Assert.NotEmpty(sourceStates);
+            _sourceStates = new Queue<ModuleImageSourceState>(sourceStates);
+            _lastSourceState = sourceStates[^1];
+        }
+
+        public bool ImageExists { get; init; }
+
+        public bool PullSucceeds { get; init; }
+
+        public bool HasUpstream { get; init; }
+
+        public int ImageExistsCount { get; private set; }
+
+        public int PullCount { get; private set; }
+
+        public int BuildCount { get; private set; }
+
+        public int HasUpstreamCount { get; private set; }
+
+        public int RefreshCount { get; private set; }
+
+        public List<(string Source, string Target)> Tags { get; } = [];
+
+        public Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
+            Task.FromResult("docker");
+
+        public Task<ModuleImageSourceState> CaptureSourceStateAsync(
+            ModuleImageBuildRecipe recipe,
+            CancellationToken cancellationToken)
+        {
+            if (_sourceStates.TryDequeue(out var state))
+            {
+                _lastSourceState = state;
+            }
+
+            return Task.FromResult(_lastSourceState);
+        }
+
+        public Task<bool> HasUpstreamAsync(
+            ModuleImageBuildRecipe recipe,
+            CancellationToken cancellationToken)
+        {
+            HasUpstreamCount++;
+            return Task.FromResult(HasUpstream);
+        }
+
+        public Task RefreshRepositoryAsync(
+            ModuleImageBuildRecipe recipe,
+            Action<string> progress,
+            CancellationToken cancellationToken)
+        {
+            RefreshCount++;
+            progress("fetch completed with token=secret");
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> ImageExistsAsync(
+            string imageReference,
+            CancellationToken cancellationToken)
+        {
+            ImageExistsCount++;
+            return Task.FromResult(ImageExists);
+        }
+
+        public Task<bool> PullImageAsync(
+            string imageReference,
+            CancellationToken cancellationToken)
+        {
+            PullCount++;
+            return Task.FromResult(PullSucceeds);
+        }
+
+        public Task BuildImageAsync(
+            ModuleImageBuildRecipe recipe,
+            ModuleImageExecutionPlan plan,
+            Action<string> progress,
+            CancellationToken cancellationToken)
+        {
+            BuildCount++;
+            progress("build output with https://user:secret@example.test/path?token=secret");
+            return Task.CompletedTask;
+        }
+
+        public Task TagImageAsync(
+            ModuleImageBuildRecipe recipe,
+            string containerRuntime,
+            string sourceImageReference,
+            string targetImageReference,
+            Action<string> progress,
+            CancellationToken cancellationToken)
+        {
+            Tags.Add((sourceImageReference, targetImageReference));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+    }
+}

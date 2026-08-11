@@ -3,39 +3,14 @@
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
-using CliWrap;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
 
 internal static class ModuleImageBuildPipeline
 {
     internal const string BuildContainerImageTag = "build-module-container-image";
-
-    private static readonly Action<ILogger, string, string, Exception?> LogBuildStarted =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Information,
-            new EventId(1, nameof(LogBuildStarted)),
-            "Building image {ImageReference} for resource {ResourceName}.");
-
-    private static readonly Action<ILogger, string, string, Exception?> LogImageAvailable =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Information,
-            new EventId(2, nameof(LogImageAvailable)),
-            "Using available image {ImageReference} for resource {ResourceName}.");
-
-    private static readonly Action<ILogger, string, string, Exception?> LogCommandOutput =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Information,
-            new EventId(3, nameof(LogCommandOutput)),
-            "{Command}: {Output}");
-
-    private static readonly Action<ILogger, string, string, Exception?> LogCommandError =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Warning,
-            new EventId(4, nameof(LogCommandError)),
-            "{Command}: {Output}");
 
     public static void ConfigureResourceSelection(IDistributedApplicationBuilder builder)
     {
@@ -161,83 +136,21 @@ internal static class ModuleImageBuildPipeline
         }
     }
 
-    private static Task BuildAsync(IResource resource, PipelineStepContext context) =>
-        BuildAsync(
-            resource,
-            context,
-            ContainerImageInspector.ExistsAsync,
-            ContainerImageInspector.PullAsync,
-            ExecuteBuildCommandAsync,
-            ExecuteRetagAsync);
-
     internal static async Task BuildAsync(
         IResource resource,
-        PipelineStepContext context,
-        Func<string, CancellationToken, Task<bool>> imageExistsAsync,
-        Func<string, CancellationToken, Task<bool>> pullImageAsync,
-        Func<ModuleImagePublisherAnnotation, PipelineStepContext, Task> executeBuildAsync,
-        Func<string, string, PipelineStepContext, Task> retagAsync)
+        PipelineStepContext context)
     {
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(context);
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()
             ?? throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a module image publisher.");
-        var plan = publisher.Plan;
-        if (!plan.RepositoryDirty)
-        {
-            if (await imageExistsAsync(plan.ImageReference, context.CancellationToken).ConfigureAwait(false) ||
-                (publisher.Options.PullBeforeBuild &&
-                 await pullImageAsync(plan.ImageReference, context.CancellationToken).ConfigureAwait(false)))
-            {
-                LogImageAvailable(context.Logger, plan.ImageReference, resource.Name, null);
-                return;
-            }
-        }
-
-        LogBuildStarted(context.Logger, plan.ImageReference, resource.Name, null);
-        await executeBuildAsync(publisher, context).ConfigureAwait(false);
-        if (plan.RequiresRetag)
-        {
-            await retagAsync(
-                plan.ProducedImageReference!,
-                plan.ImageReference,
-                context).ConfigureAwait(false);
-        }
-    }
-
-    private static async Task ExecuteBuildCommandAsync(
-        ModuleImagePublisherAnnotation publisher,
-        PipelineStepContext context)
-    {
-        await CliCommand.Wrap(publisher.Options.PublishCommand)
-            .WithArguments(publisher.Plan.PublishArguments)
-            .WithWorkingDirectory(publisher.WorkingDirectory)
-            .WithEnvironmentVariables(new Dictionary<string, string?>
-            {
-                ["ASPIRE_MODULE_IMAGE"] = publisher.Plan.ImageReference
-            })
-            .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogCommandOutput(context.Logger, publisher.Options.PublishCommand, line, null)))
-            .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogCommandError(context.Logger, publisher.Options.PublishCommand, line, null)))
-            .ExecuteAsync(context.CancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private static async Task ExecuteRetagAsync(
-        string source,
-        string target,
-        PipelineStepContext context)
-    {
-        var runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
-        await CliCommand.Wrap(runtime)
-            .WithArguments(["tag", source, target])
-            .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogCommandOutput(context.Logger, runtime, line, null)))
-            .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogCommandError(context.Logger, runtime, line, null)))
-            .ExecuteAsync(context.CancellationToken)
-            .ConfigureAwait(false);
+        var resourceLogger = context.Services
+            .GetRequiredService<ResourceLoggerService>()
+            .GetLogger(resource);
+        await publisher.PrepareAsync(
+            context.Logger,
+            resourceLogger,
+            context.CancellationToken).ConfigureAwait(false);
     }
 }

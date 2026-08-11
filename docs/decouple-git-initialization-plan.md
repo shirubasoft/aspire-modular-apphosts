@@ -15,7 +15,7 @@ Synchronous module declaration
 ## Assumed policies
 
 - Pinned revisions use collision-resistant, revision-specific sibling directories beside the AppHost Git root. This supports multiple revisions without detaching a developer checkout.
-- Runtime Git access is off by default. An explicit option may fast-forward clean build checkouts; dirty checkouts are preserved and rebuilt.
+- Runtime Git mutation and network access are off by default. Installers may use read-only Git inspection to identify source state. An explicit option may fetch and fast-forward clean build checkouts; dirty checkouts are preserved and rebuilt.
 - Repository-backed factories must be declarative: they may compose repository paths but must not read repository content while constructing the model.
 
 ## 1. Introduce pure repository and image plans
@@ -36,7 +36,7 @@ The repository registry should:
 - Use collision-resistant names based on normalized remote identity.
 - Give pinned revisions distinct sibling paths.
 - Deduplicate shared repositories and reject incompatible policies.
-- Exclude same-worktree, explicit existing local paths, and external-image-only modules.
+- Exclude same-worktree, unpinned explicit existing local paths, and external-image-only modules. A local repository paired with a revision is a clone source for an initializer-owned revision sibling.
 
 Store per-repository receipts under the AppHost's `.aspire/modular-apphosts/` directory. A receipt records the normalized remote, destination, requested revision, and configuration fingerprint, but no credentials.
 
@@ -44,7 +44,7 @@ Remove the two-layout model:
 
 - Remove `RepositoryBasePath` and the legacy base-location parameter.
 - Remove all `AutoClone*` options; `initialize` becomes the only automatic acquisition mechanism.
-- Replace ambiguous update flags with an initialization update policy and a separate image-build refresh policy.
+- Replace ambiguous update flags with `UpdateRepositoriesOnInitialize` / `UpdateRepositoryOnInitialize` and the separate `RefreshBuildRepositoriesOnRun` / `RefreshBuildRepositoryOnRun` image-build refresh policy.
 
 ## 2. Add the `initialize` pipeline
 
@@ -106,7 +106,7 @@ Return one actionable exception listing all affected modules and paths and endin
 Run 'aspire do initialize --non-interactive'.
 ```
 
-Except for explicitly enabled installer refresh, `aspire run` must not invoke `git` or `gh`.
+Except for explicitly enabled installer refresh, `aspire run` must not perform Git mutation or network access; read-only Git inspection is allowed.
 
 ## 4. Move image decisions into installer execution
 
@@ -154,7 +154,7 @@ The E2E scenario should verify:
 1. Run fails fast before initialization.
 2. `aspire do initialize --non-interactive` creates the expected siblings.
 3. Initialization is idempotent.
-4. Normal run invokes no Git by default.
+4. Normal run performs no Git mutation or network access by default; read-only source inspection is allowed.
 5. A clean upstream change is picked up by another initialization.
 6. A dirty checkout is preserved and rebuilt.
 7. Optional runtime refresh fast-forwards only clean checkouts.

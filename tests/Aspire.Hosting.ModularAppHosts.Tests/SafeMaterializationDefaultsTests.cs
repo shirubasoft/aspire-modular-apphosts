@@ -7,27 +7,27 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class SafeMaterializationDefaultsTests
 {
     [Fact]
-    public void Defaults_update_imported_repositories_without_executing_image_builds()
+    public void Defaults_keep_repository_mutation_out_of_run()
     {
         var options = new ModularAppHostsOptions();
 
         Assert.Equal(ModuleProjectMode.Auto, options.ProjectMode);
-        Assert.True(options.UpdateImportedRepositories);
-        Assert.False(options.PublishImages);
+        Assert.True(options.UpdateRepositoriesOnInitialize);
+        Assert.False(options.RefreshBuildRepositoriesOnRun);
         Assert.Equal("git", options.GitExecutablePath);
         Assert.Equal("gh", options.GitHubCliPath);
         Assert.Equal(TimeSpan.FromMinutes(2), options.RepositoryCommandTimeout);
     }
 
     [Fact]
-    public async Task Auto_mode_runs_local_projects_directly_without_an_installer()
+    public void Auto_mode_runs_local_projects_directly_without_an_installer()
     {
         using var source = TemporaryDirectory.Create();
         var projectPath = CreateProject(source.Path);
         var builder = CreateBuilder(source.Path);
-        var module = await ExportProjectAsync(builder, projectPath);
+        var module = ExportProject(builder, projectPath);
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         Assert.Single(builder.Resources.OfType<ProjectResource>());
         Assert.Empty(builder.Resources.OfType<ContainerResource>());
@@ -35,37 +35,36 @@ public sealed class SafeMaterializationDefaultsTests
     }
 
     [Fact]
-    public async Task Auto_mode_runs_imported_projects_as_containers_without_building_images()
+    public void Auto_mode_runs_imported_projects_as_containers_with_a_deferred_installer()
     {
         using var source = TemporaryDirectory.Create();
         using var appHost = TemporaryDirectory.Create();
         var projectPath = CreateProject(source.Path);
         var builder = CreateBuilder(appHost.Path);
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(source.Path);
             definition.AddProject("orders-api", projectPath)
                 .ExportAsContainer("example/orders-api", "dotnet", ["publish"]);
         });
 
-        await builder.ImportModuleAsync(module.Name);
+        builder.ImportModule(module.Name);
 
         Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Empty(builder.Resources.OfType<ProjectResource>());
-        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
     }
 
     [Fact]
-    public async Task Fluent_opt_ins_select_containers_and_image_builds()
+    public void Fluent_container_mode_selects_containers_and_image_installers()
     {
         using var source = TemporaryDirectory.Create();
         var projectPath = CreateProject(source.Path);
         var builder = CreateBuilder(source.Path)
-            .UseModuleContainers()
-            .BuildModuleImages();
-        var module = await ExportProjectAsync(builder, projectPath);
+            .UseModuleContainers();
+        var module = ExportProject(builder, projectPath);
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
@@ -96,15 +95,15 @@ public sealed class SafeMaterializationDefaultsTests
     }
 
     [Fact]
-    public async Task Non_positive_repository_timeout_is_rejected_from_configuration_or_code()
+    public void Non_positive_repository_timeout_is_rejected_from_configuration_or_code()
     {
         using var source = TemporaryDirectory.Create();
         var section = ModularAppHostsOptions.ConfigurationSectionName;
         var configuredBuilder = CreateBuilder(source.Path);
         configuredBuilder.Configuration[$"{section}:RepositoryCommandTimeout"] = "00:00:00";
 
-        var configuredException = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            configuredBuilder.ExportModuleAsync("cache", module =>
+        var configuredException = Assert.Throws<InvalidOperationException>(() =>
+            configuredBuilder.ExportModule("cache", module =>
                 module.AddContainer("redis", "redis")));
         Assert.Contains(nameof(ModularAppHostsOptions.RepositoryCommandTimeout), configuredException.Message);
 
@@ -125,11 +124,11 @@ public sealed class SafeMaterializationDefaultsTests
         });
     }
 
-    private static async Task<IDistributedApplicationModule> ExportProjectAsync(
+    private static IDistributedApplicationModule ExportProject(
         IDistributedApplicationBuilder builder,
         string projectPath)
     {
-        return await builder.ExportModuleAsync("orders", definition =>
+        return builder.ExportModule("orders", definition =>
             definition.AddProject("orders-api", projectPath)
                 .ExportAsContainer(
                     $"module-defaults-{Guid.NewGuid():N}",

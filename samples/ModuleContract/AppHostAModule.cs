@@ -29,7 +29,7 @@ public static partial class AppHostAModule
         var absoluteSourceRoot = Path.GetFullPath(sourceRoot, builder.AppHostDirectory);
         var containerRuntime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
-        return await builder.ExportModuleAsync(Name, PackageId, module =>
+        return builder.ExportModule(Name, PackageId, module =>
         {
             module.WithRepository(absoluteSourceRoot);
 
@@ -151,7 +151,7 @@ public static partial class AppHostAModule
 
             module.AddResource<SampleCustomResource>(CustomResourceName, context =>
                 context.ApplicationBuilder.AddResource(new SampleCustomResource(context.ResourceName)));
-        }, cancellationToken).ConfigureAwait(false);
+        });
     }
 
 }

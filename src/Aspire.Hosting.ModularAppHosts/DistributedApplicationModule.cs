@@ -72,7 +72,7 @@ internal sealed class DistributedApplicationModule(
         if (_materializedApplicationBuilder is null)
         {
             throw new InvalidOperationException(
-                $"Module '{Name}' has not been materialized. Await AddAsync(module) or ImportModuleAsync('{Name}') first.");
+                $"Module '{Name}' has not been materialized. Call AddModule(module) or ImportModule('{Name}') first.");
         }
 
         if (!_materializedResources.TryGetValue(name, out var resource))
@@ -163,67 +163,6 @@ internal sealed class DistributedApplicationModule(
         return _materializedApplicationBuilder!.CreateResourceBuilder(typedResource);
     }
 
-    internal async Task ValidateAsync(
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        CancellationToken cancellationToken)
-    {
-        ValidateResourceDefinitions();
-
-        var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
-        foreach (var project in _projects)
-        {
-            if (project.PathBase == ModuleProjectPathBase.Repository)
-            {
-                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
-                    Repository,
-                    appHostDirectory);
-                continue;
-            }
-
-            var repositoryRoot = await RepositoryInspector.FindRepositoryRootAsync(
-                project.ProjectPath,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-            var configuredRepositoryRoot = await TryGetConfiguredLocalRepositoryRootAsync(
-                Repository,
-                appHostDirectory,
-                project.ProjectPath,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-
-            if (configuredRepositoryRoot is not null)
-            {
-                repositoryRoot = configuredRepositoryRoot;
-            }
-            else if (!await RepositoryInspector.IsGitRepositoryAsync(
-                    repositoryRoot,
-                    gitExecutablePath,
-                    repositoryCommandTimeout,
-                    requireSuccessfulInspection: true,
-                    cancellationToken).ConfigureAwait(false) &&
-                PathSafety.IsContainedBy(appHostDirectory, project.ProjectPath))
-            {
-                repositoryRoot = appHostDirectory;
-            }
-
-            project.SourceRepositoryRoot = repositoryRoot;
-        }
-
-        var repositoryRoots = ValidateRepositoryRoots();
-
-        if (repositoryRoots.Length == 1)
-        {
-            Repository ??= await RepositoryInspector.TryGetRemoteAsync(
-                repositoryRoots[0],
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     private void ValidateResourceDefinitions()
     {
         if (_resources.Count == 0)
@@ -280,72 +219,12 @@ internal sealed class DistributedApplicationModule(
             return null;
         }
 
-        string candidate;
         if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
-        {
-            var appHostRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(appHostDirectory);
-            var repositoryParent = appHostRepositoryRoot is null
-                ? null
-                : Path.GetDirectoryName(appHostRepositoryRoot);
-            if (repositoryParent is null)
-            {
-                return null;
-            }
-
-            candidate = Path.Combine(
-                repositoryParent,
-                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
-        }
-        else
-        {
-            candidate = Path.GetFullPath(repository, appHostDirectory);
-        }
-
-        return PathSafety.IsContainedBy(candidate, projectPath)
-            ? candidate
-            : null;
-    }
-
-    private static async Task<string?> TryGetConfiguredLocalRepositoryRootAsync(
-        string? repository,
-        string appHostDirectory,
-        string projectPath,
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(repository))
         {
             return null;
         }
 
-        string candidate;
-        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
-        {
-            var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
-                appHostDirectory,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-            if (appHostRepositoryRoot is null)
-            {
-                return null;
-            }
-
-            var repositoryParent = Path.GetDirectoryName(appHostRepositoryRoot);
-            if (repositoryParent is null)
-            {
-                return null;
-            }
-
-            candidate = Path.Combine(
-                repositoryParent,
-                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
-        }
-        else
-        {
-            candidate = Path.GetFullPath(repository, appHostDirectory);
-        }
+        var candidate = Path.GetFullPath(repository, appHostDirectory);
 
         return PathSafety.IsContainedBy(candidate, projectPath)
             ? candidate

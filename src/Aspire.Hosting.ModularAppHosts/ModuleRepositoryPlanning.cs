@@ -16,7 +16,7 @@ internal sealed class ModuleRepositoryRequirement
         string normalizedRepository,
         string repositoryPath,
         string? revision,
-        bool updateRepository,
+        bool updateOnInitialize,
         string stepKey,
         string receiptPath)
     {
@@ -25,14 +25,14 @@ internal sealed class ModuleRepositoryRequirement
         NormalizedRepository = normalizedRepository;
         RepositoryPath = Path.GetFullPath(repositoryPath);
         Revision = NormalizeRevision(revision);
-        UpdateRepository = Revision is null && updateRepository;
+        UpdateOnInitialize = Revision is null && updateOnInitialize;
         StepKey = stepKey;
         ReceiptPath = Path.GetFullPath(receiptPath);
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
             Revision,
-            UpdateRepository);
+            UpdateOnInitialize);
     }
 
     public IReadOnlyCollection<string> ModuleNames => _moduleNames;
@@ -45,7 +45,7 @@ internal sealed class ModuleRepositoryRequirement
 
     public string? Revision { get; }
 
-    public bool UpdateRepository { get; }
+    public bool UpdateOnInitialize { get; }
 
     public string StepKey { get; }
 
@@ -62,16 +62,16 @@ internal sealed class ModuleRepositoryRequirement
     internal void EnsureCompatible(
         string normalizedRepository,
         string? revision,
-        bool updateRepository)
+        bool updateOnInitialize)
     {
         var normalizedRevision = NormalizeRevision(revision);
-        var normalizedUpdateRepository = normalizedRevision is null && updateRepository;
+        var normalizedUpdateOnInitialize = normalizedRevision is null && updateOnInitialize;
         if (!string.Equals(
                 NormalizedRepository,
                 normalizedRepository,
                 StringComparison.Ordinal) ||
             !string.Equals(Revision, normalizedRevision, StringComparison.Ordinal) ||
-            UpdateRepository != normalizedUpdateRepository)
+            UpdateOnInitialize != normalizedUpdateOnInitialize)
         {
             throw new InvalidOperationException(
                 $"Modules sharing repository checkout '{RepositoryPath}' configure conflicting repositories, " +
@@ -86,7 +86,7 @@ internal sealed class ModuleRepositoryRequirement
         string normalizedRepository,
         string repositoryPath,
         string? revision,
-        bool updateRepository)
+        bool updateOnInitialize)
     {
         var configuration = string.Join(
             '\n',
@@ -94,7 +94,7 @@ internal sealed class ModuleRepositoryRequirement
             normalizedRepository,
             Path.GetFullPath(repositoryPath),
             revision ?? string.Empty,
-            updateRepository ? "update" : "preserve");
+            updateOnInitialize ? "update" : "preserve");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(configuration)))
             .ToLowerInvariant();
     }
@@ -113,7 +113,8 @@ internal sealed class ModuleRepositoryPlanRegistry
     public ModuleRepositoryPlanRegistry(string appHostDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
-        AppHostRepositoryRoot = ModuleRepositoryPathPlanner.FindGitRoot(appHostDirectory);
+        AppHostDirectory = Path.GetFullPath(appHostDirectory);
+        AppHostRepositoryRoot = ModuleRepositoryPathPlanner.FindGitRoot(AppHostDirectory);
         SiblingParent = Path.GetDirectoryName(AppHostRepositoryRoot)
             ?? throw new InvalidOperationException(
                 $"Unable to determine the parent of AppHost repository '{AppHostRepositoryRoot}'.");
@@ -123,6 +124,8 @@ internal sealed class ModuleRepositoryPlanRegistry
             "modular-apphosts",
             ReceiptDirectoryName);
     }
+
+    public string AppHostDirectory { get; }
 
     public string AppHostRepositoryRoot { get; }
 
@@ -137,19 +140,20 @@ internal sealed class ModuleRepositoryPlanRegistry
         string moduleName,
         string repository,
         string? revision,
-        bool updateRepository)
+        bool updateOnInitialize)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         var repositoryPath = ModuleRepositoryPathPlanner.GetSiblingPath(
             SiblingParent,
             repository,
-            revision);
+            revision,
+            AppHostDirectory);
         return Register(
             moduleName,
             repository,
             repositoryPath,
             revision,
-            updateRepository);
+            updateOnInitialize);
     }
 
     public ModuleRepositoryPlanRegistration Register(
@@ -157,7 +161,7 @@ internal sealed class ModuleRepositoryPlanRegistry
         string repository,
         string repositoryPath,
         string? revision,
-        bool updateRepository)
+        bool updateOnInitialize)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
@@ -169,10 +173,12 @@ internal sealed class ModuleRepositoryPlanRegistry
             SiblingParent,
             fullRepositoryPath);
 
-        var normalizedRepository = ModuleRepositoryPathPlanner.NormalizeRemoteIdentity(repository);
+        var normalizedRepository = ModuleRepositoryPathPlanner.NormalizeRepositoryIdentity(
+            repository,
+            AppHostDirectory);
         if (_requirements.TryGetValue(fullRepositoryPath, out var existing))
         {
-            existing.EnsureCompatible(normalizedRepository, revision, updateRepository);
+            existing.EnsureCompatible(normalizedRepository, revision, updateOnInitialize);
             existing.AddModule(moduleName);
             return new ModuleRepositoryPlanRegistration(existing, IsNew: false);
         }
@@ -187,7 +193,7 @@ internal sealed class ModuleRepositoryPlanRegistry
             normalizedRepository,
             fullRepositoryPath,
             revision,
-            updateRepository,
+            updateOnInitialize,
             stepKey,
             Path.Combine(ReceiptDirectory, $"{stepKey}.json"));
         _requirements.Add(fullRepositoryPath, requirement);
@@ -235,11 +241,13 @@ internal static class ModuleRepositoryPathPlanner
     public static string GetSiblingPath(
         string siblingParent,
         string repository,
-        string? revision)
+        string? revision,
+        string baseDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(siblingParent);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        var normalizedRepository = NormalizeRemoteIdentity(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        var normalizedRepository = NormalizeRepositoryIdentity(repository, baseDirectory);
         var repositorySlug = CreateSlug(GetRepositoryName(normalizedRepository), 30);
         var repositoryHash = GetStableHash(normalizedRepository);
         var directoryName = $"{repositorySlug}-{repositoryHash}";
@@ -261,16 +269,16 @@ internal static class ModuleRepositoryPathPlanner
         return Path.Combine(Path.GetFullPath(siblingParent), directoryName);
     }
 
-    public static string NormalizeRemoteIdentity(string repository)
+    public static string NormalizeRepositoryIdentity(string repository, string baseDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
         var value = repository.Trim().TrimEnd('/', '\\');
         if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
         {
             if (uri.IsFile)
             {
-                throw new InvalidOperationException(
-                    $"Repository '{repository}' is a local path. Only remote repositories require initialization.");
+                return NormalizeLocalIdentity(uri.LocalPath, baseDirectory);
             }
 
             var host = uri.IdnHost.ToLowerInvariant();
@@ -278,6 +286,13 @@ internal static class ModuleRepositoryPathPlanner
                 ? string.Empty
                 : $":{uri.Port.ToString(CultureInfo.InvariantCulture)}";
             return NormalizeHostAndPath(host, port, uri.AbsolutePath);
+        }
+
+        if (Path.IsPathRooted(value) ||
+            value.StartsWith('.') ||
+            Directory.Exists(Path.GetFullPath(value, baseDirectory)))
+        {
+            return NormalizeLocalIdentity(value, baseDirectory);
         }
 
         var queryOrFragment = value.IndexOfAny(['?', '#']);
@@ -315,6 +330,9 @@ internal static class ModuleRepositoryPathPlanner
             string.Empty,
             string.Join('/', components[pathStart..]));
     }
+
+    public static string NormalizeRemoteIdentity(string repository) =>
+        NormalizeRepositoryIdentity(repository, Directory.GetCurrentDirectory());
 
     public static string GetStepKey(
         string normalizedRepository,
@@ -364,6 +382,13 @@ internal static class ModuleRepositoryPathPlanner
         }
 
         return $"{host}{port}/{normalizedPath}";
+    }
+
+    private static string NormalizeLocalIdentity(string repository, string baseDirectory)
+    {
+        var fullPath = Path.GetFullPath(repository, baseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return $"file:{fullPath.Replace(Path.DirectorySeparatorChar, '/')}";
     }
 
     private static string GetRepositoryName(string normalizedRepository)

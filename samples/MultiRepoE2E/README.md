@@ -2,7 +2,7 @@
 
 This sample proves that an Aspire module contract can define a container whose Docker build inputs
 live in a different Git repository. CI packs `Spire.ModuleContract`, removes its source and the
-build fixture from an isolated consumer clone, and restores only the package. The local project
+build fixture from an isolated consumer repository, and restores only the package. The local project
 reference remains as a development convenience.
 
 The contract declares:
@@ -25,38 +25,69 @@ marker files copied into the nginx image.
 
 ## What CI proves
 
-CI creates this layout outside the checked-out source tree:
+The .NET E2E driver creates this layout outside the checked-out source tree:
 
 ```text
 <temporary-root>/
-├── consumer/                 # isolated clone containing only the AppHost
+├── consumer/                 # isolated Git repository containing only the AppHost
 ├── resource-build-source/    # separately initialized producer Git repository
 ├── packages/                 # packed runtime and module contract
-└── consumer/.../.aspire/module-repositories/
-    └── <managed-checkout>/    # detached checkout used by the image builder
+├── <remote-hash>/            # initializer-owned unpinned sibling
+├── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
+└── consumer/.aspire/modular-apphosts/repositories/
+    └── *.json                # credential-free initialization receipts
 ```
 
-The producer repository gets two commits. CI records the first commit, then changes `marker.txt` in
-the second. The AppHost requests the first SHA. It must clone the producer repository into its
-managed checkout, detach at that exact SHA, execute the checked-in build script and Dockerfile, wait
-for the resulting container to become healthy, and return `multi-repo-resource-pinned-revision`
-from `/marker.txt`. Building the producer's latest commit would return a different marker and fail
-the job.
+The driver packs the contract, removes its source and the build fixture from the isolated consumer,
+and creates independent local producer repositories. It then exercises the real Aspire CLI and
+verifies all of these behaviors in one locally reproducible command:
 
-The validation restores the contract package into an isolated consumer, verifies the managed
+1. `aspire start` fails fast before initialization with the exact initialization command.
+2. `aspire do initialize --non-interactive` creates direct sibling checkouts and credential-free receipts.
+3. Repeated initialization is idempotent.
+4. A configured local source plus a revision uses a detached initializer-owned sibling without moving
+   the developer checkout.
+5. Another initialization fast-forwards a clean unpinned checkout.
+6. Default run performs only read-only Git inspection for image state; it never clones, fetches, pulls,
+   checks out, or otherwise moves a repository.
+7. Opt-in runtime refresh fast-forwards a clean build checkout.
+8. A dirty checkout is preserved and rebuilt, including when runtime refresh is enabled.
+9. Repository lifecycle output is emitted and credential-bearing command output and receipts are redacted.
+10. The requested Docker or Podman executable is selected through the existing runtime resolver.
+
+The build command and Dockerfile are executed from the initialized build checkout. Each run waits for
+the resulting container to become healthy and verifies the exact `/marker.txt` content, so using the
+wrong revision, reusing a dirty image, or moving the wrong checkout fails the scenario.
+
+The validation restores the contract package into an isolated consumer, verifies the initializer-owned
 checkout's independent producer origin, checks the expected Docker image and producer-owned
 `/health.txt` marker, and stops the AppHost cleanly.
 
-A second CI job starts an ordinary local registry service and uses only the packed tool's commands:
+A separate CI job starts an ordinary local registry service and uses only the packed tool's commands:
 
 1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged
    reference plus GitHub step outputs.
 2. `manifest apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
    the consumer AppHost with deliberately missing definition and build repositories plus a missing
-   managed repository base. They verify `/marker.txt` from the image that Repo B published and prove
+   initialization siblings. They verify `/marker.txt` from the image that Repo B published and prove
    that complete manifest identities do not prepare or clone source checkouts.
 
 ## Run manually
+
+Run the complete initialization scenario from the repository root. This is the same command CI uses;
+add `--keep-temporary` to preserve its isolated repositories for inspection after a successful run:
+
+```bash
+dotnet tool restore
+dotnet run \
+  --project samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj \
+  --configuration Release \
+  -- \
+  --repository-root . \
+  --container-runtime docker
+```
+
+Use `--container-runtime podman` to validate the same scenario with Podman.
 
 From the repository root, start the AppHost. Its normal configuration points the module at the
 checked-in build fixture, and the build script selects a running Docker or Podman installation:

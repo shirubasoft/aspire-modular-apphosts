@@ -276,19 +276,19 @@ public sealed class PackedPackageContractTests
             {
                 public static System.Type GeneratedModuleType => typeof(OrdersModule.Module);
 
-                public static System.Threading.Tasks.Task<OrdersModule.Module> ImportAsync(
+                public static OrdersModule.Module Import(
                     Aspire.Hosting.IDistributedApplicationBuilder builder) =>
-                    builder.ImportOrdersModuleAsync();
+                    builder.ImportOrdersModule();
 
-                public static ModularAppHostsOptions AutoCloneOptions => new()
+                public static ModularAppHostsOptions InitializationOptions => new()
                 {
-                    AutoCloneRepositories = true,
+                    UpdateRepositoriesOnInitialize = true,
                     GitHubCliPath = "gh"
                 };
 
                 public static DistributedApplicationModuleOptions ModuleOptions => new()
                 {
-                    AutoCloneRepository = true
+                    UpdateRepositoryOnInitialize = true
                 };
 
                 public static System.Threading.Tasks.Task<string> ResolveContainerRuntimeAsync(

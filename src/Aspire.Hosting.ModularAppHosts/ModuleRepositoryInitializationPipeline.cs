@@ -59,6 +59,19 @@ internal static class ModuleRepositoryInitializationPipeline
             new EventId(3, nameof(LogInitializationCompleted)),
             "Initialized repository {Repository} at {RepositoryPath} in {ElapsedMilliseconds} ms.");
 
+    private static readonly Action<ILogger, string, string, string, string, double, Exception?> LogRepositoryOperation =
+        LoggerMessage.Define<string, string, string, string, double>(
+            LogLevel.Information,
+            new EventId(4, nameof(LogRepositoryOperation)),
+            "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}. " +
+            "Elapsed: {ElapsedMilliseconds} ms.");
+
+    private static readonly Action<ILogger, string, string, string, string, string, Exception?> LogRepositoryOperationSkipped =
+        LoggerMessage.Define<string, string, string, string, string>(
+            LogLevel.Information,
+            new EventId(5, nameof(LogRepositoryOperationSkipped)),
+            "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
+
     public static bool IsInitializeCommand(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
@@ -127,17 +140,18 @@ internal static class ModuleRepositoryInitializationPipeline
             requirement,
             settings,
             logger,
-            static (plannedRepository, initializationSettings, progress, token) =>
+            static (plannedRepository, initializationSettings, progress, lifecycle, token) =>
                 RepositorySynchronizer.SynchronizeAsync(
                     plannedRepository.RepositoryPath,
                     plannedRepository.Repository,
-                    plannedRepository.UpdateRepository,
+                    plannedRepository.UpdateOnInitialize,
                     token,
                     plannedRepository.Revision,
                     initializationSettings.GitExecutablePath,
                     initializationSettings.GitHubCliPath,
                     initializationSettings.CommandTimeout,
-                    progress),
+                    progress,
+                    lifecycle),
             cancellationToken);
 
     internal static async Task InitializeAsync(
@@ -148,6 +162,7 @@ internal static class ModuleRepositoryInitializationPipeline
             ModuleRepositoryRequirement,
             ModuleRepositoryInitializationSettings,
             Action<string>,
+            Action<RepositorySyncLifecycleEvent>,
             CancellationToken,
             Task> synchronizeAsync,
         CancellationToken cancellationToken)
@@ -183,6 +198,31 @@ internal static class ModuleRepositoryInitializationPipeline
                 requirement.NormalizedRepository,
                 ModuleCliOutputRedactor.Redact(progress),
                 null),
+            lifecycle =>
+            {
+                if (string.IsNullOrWhiteSpace(lifecycle.Reason))
+                {
+                    LogRepositoryOperation(
+                        logger,
+                        lifecycle.Operation,
+                        lifecycle.State,
+                        requirement.NormalizedRepository,
+                        requirement.RepositoryPath,
+                        lifecycle.ElapsedMilliseconds,
+                        null);
+                }
+                else
+                {
+                    LogRepositoryOperationSkipped(
+                        logger,
+                        lifecycle.Operation,
+                        lifecycle.State,
+                        requirement.NormalizedRepository,
+                        requirement.RepositoryPath,
+                        lifecycle.Reason,
+                        null);
+                }
+            },
             cancellationToken).ConfigureAwait(false);
         await ModuleInitializationReceiptStore.WriteAsync(
             requirement,

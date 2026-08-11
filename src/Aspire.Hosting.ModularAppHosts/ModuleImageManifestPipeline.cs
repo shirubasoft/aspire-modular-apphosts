@@ -75,9 +75,12 @@ internal static class ModuleImageManifestPipeline
         foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var usePreparedPublisherImage = item.Publisher!
+                .TryGetPreparedImage(out _);
             var effective = await ModuleEffectiveImageResolver.ResolveAsync(
                 item.Resource,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                usePreparedPublisherImage: usePreparedPublisherImage).ConfigureAwait(false);
             var remote = effective.PushImage ?? throw new InvalidOperationException(
                 $"Resource '{item.Resource.Name}' does not resolve to a complete remote image identity.");
             document.Images.Add(new ModuleImageManifestEntry

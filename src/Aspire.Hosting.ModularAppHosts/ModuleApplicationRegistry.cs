@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
@@ -15,13 +13,10 @@ public interface IDistributedApplicationModuleCatalog
     bool TryGetModule(string name, out IDistributedApplicationModule? exportedModule);
 }
 
-[SuppressMessage(
-    "Design",
-    "CA1001:Types that own disposable fields should be disposable",
-    Justification = "The registry and its operation gate live for the AppHost builder lifetime; disposing the gate could race active module operations.")]
 internal sealed class ModuleApplicationRegistry(
     ModularAppHostsOptions? options = null,
-    IConfiguration? configuration = null)
+    IConfiguration? configuration = null,
+    ModuleRepositoryPlanRegistry? repositoryPlans = null)
     : IDistributedApplicationModuleCatalog
 {
     private readonly Dictionary<string, DistributedApplicationModule> _modules =
@@ -33,13 +28,14 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private readonly ConcurrentDictionary<string, RepositorySynchronization> _repositorySynchronizations =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
     private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
-    private readonly SemaphoreSlim _moduleOperationGate = new(1, 1);
+    private readonly List<ModuleRequiredPath> _requiredPaths = [];
+    private readonly HashSet<string> _requiredPathKeys = new(StringComparer.Ordinal);
+    private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
 
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
+
+    internal ModuleRepositoryPlanRegistry? RepositoryPlans => _repositoryPlans;
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 
@@ -79,41 +75,53 @@ internal sealed class ModuleApplicationRegistry(
         _resources.TryAdd(resource.Name, resource);
     }
 
-    internal async Task<T> RunModuleOperationAsync<T>(
-        Func<Task<T>> operation,
-        CancellationToken cancellationToken)
+    internal ModuleRepositoryRequirement RegisterRepository(
+        IDistributedApplicationBuilder builder,
+        string moduleName,
+        string repository,
+        string? revision,
+        bool updateRepository)
     {
-        await _moduleOperationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        ArgumentNullException.ThrowIfNull(builder);
+        if (_repositoryPlans is null)
         {
-            return await operation().ConfigureAwait(false);
+            _repositoryPlans = new ModuleRepositoryPlanRegistry(builder.AppHostDirectory);
+            ModuleRepositoryInitializationPipeline.Configure(builder);
         }
-        finally
+
+        var plans = _repositoryPlans;
+        var registration = plans.Register(
+            moduleName,
+            repository,
+            revision,
+            updateRepository);
+        if (registration.IsNew)
         {
-            _moduleOperationGate.Release();
+            var settings = new ModuleRepositoryInitializationSettings(
+                GetConfiguredValue(Options.GitExecutablePath) ?? "git",
+                GetConfiguredValue(Options.GitHubCliPath) ?? "gh",
+                Options.RepositoryCommandTimeout);
+            ModuleRepositoryInitializationPipeline.AddRepositoryStep(
+                builder,
+                registration.Requirement,
+                () => settings);
         }
+
+        return registration.Requirement;
     }
 
-    internal Task SynchronizeRepositoryAsync(
-        string repositoryKey,
-        RepositorySynchronizationPolicy policy,
-        Func<Action<string>, Task> synchronize,
-        Action<string>? progress = null)
+    internal void RequireFile(string moduleName, string description, string path) =>
+        RequirePath(moduleName, description, path, ModuleRequiredPathKind.File);
+
+    internal void RequireDirectory(string moduleName, string description, string path) =>
+        RequirePath(moduleName, description, path, ModuleRequiredPathKind.Directory);
+
+    internal void ValidateRepositoryPreflight(Microsoft.Extensions.Logging.ILogger? logger = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryKey);
-        ArgumentNullException.ThrowIfNull(synchronize);
-
-        var normalizedKey = Path.GetFullPath(repositoryKey);
-        var synchronization = _repositorySynchronizations.GetOrAdd(
-            normalizedKey,
-            _ => new RepositorySynchronization(policy, synchronize));
-        synchronization.EnsureCompatiblePolicy(policy, normalizedKey);
-        if (progress is not null)
-        {
-            synchronization.AttachProgress(progress);
-        }
-
-        return synchronization.Task;
+        ModuleRepositoryPreflight.Validate(
+            RepositoryPlans?.Requirements ?? [],
+            _requiredPaths,
+            logger);
     }
 
     internal void RefreshConfiguration()
@@ -149,14 +157,12 @@ internal sealed class ModuleApplicationRegistry(
     private void ResetOptions()
     {
         var defaults = new ModularAppHostsOptions();
-        Options.RepositoryBasePath = defaults.RepositoryBasePath;
-        Options.AutoCloneRepositories = defaults.AutoCloneRepositories;
         Options.GitHubCliPath = defaults.GitHubCliPath;
         Options.GitExecutablePath = defaults.GitExecutablePath;
         Options.RepositoryCommandTimeout = defaults.RepositoryCommandTimeout;
-        Options.UpdateImportedRepositories = defaults.UpdateImportedRepositories;
+        Options.UpdateRepositoriesOnInitialize = defaults.UpdateRepositoriesOnInitialize;
+        Options.RefreshBuildRepositoriesOnRun = defaults.RefreshBuildRepositoriesOnRun;
         Options.ProjectMode = defaults.ProjectMode;
-        Options.PublishImages = defaults.PublishImages;
         Options.Modules.Clear();
     }
 
@@ -177,86 +183,28 @@ internal sealed class ModuleApplicationRegistry(
             $"Configuration references module '{missingModule}', but no exported module with that name was found. " +
             $"Available modules: {availableModules}.");
     }
-}
 
-internal sealed class RepositorySynchronization
-{
-    private readonly object _progressGate = new();
-    private readonly List<string> _progressBacklog = [];
-    private readonly Lazy<Task> _task;
-    private readonly RepositorySynchronizationPolicy _policy;
-    private Action<string>? _progress;
-
-    public RepositorySynchronization(
-        RepositorySynchronizationPolicy policy,
-        Func<Action<string>, Task> synchronize)
+    private void RequirePath(
+        string moduleName,
+        string description,
+        string path,
+        ModuleRequiredPathKind kind)
     {
-        ArgumentNullException.ThrowIfNull(synchronize);
-        _policy = policy;
-        _task = new Lazy<Task>(
-            () => synchronize(ReportProgress),
-            LazyThreadSafetyMode.ExecutionAndPublication);
-    }
-
-    public Task Task => _task.Value;
-
-    public void EnsureCompatiblePolicy(
-        RepositorySynchronizationPolicy policy,
-        string repositoryPath)
-    {
-        if (_policy != policy)
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = Path.GetFullPath(path);
+        var key = $"{moduleName}\n{description}\n{kind}\n{fullPath}";
+        if (_requiredPathKeys.Add(key))
         {
-            throw new InvalidOperationException(
-                $"Modules sharing repository '{repositoryPath}' configure conflicting update or revision policies. " +
-                $"All modules using the same checkout must use the same {nameof(DistributedApplicationModuleOptions.UpdateRepository)} " +
-                $"and {nameof(DistributedApplicationModuleOptions.RepositoryRevision)} values.");
+            _requiredPaths.Add(new ModuleRequiredPath(
+                moduleName,
+                description,
+                fullPath,
+                kind));
         }
     }
 
-    public void AttachProgress(Action<string> progress)
-    {
-        ArgumentNullException.ThrowIfNull(progress);
-
-        lock (_progressGate)
-        {
-            if (_progress is not null)
-            {
-                return;
-            }
-
-            _progress = progress;
-            foreach (var line in _progressBacklog)
-            {
-                progress(line);
-            }
-
-            _progressBacklog.Clear();
-        }
-    }
-
-    private void ReportProgress(string line)
-    {
-        lock (_progressGate)
-        {
-            if (_progress is null)
-            {
-                _progressBacklog.Add(line);
-            }
-            else
-            {
-                _progress(line);
-            }
-        }
-    }
-}
-
-internal readonly record struct RepositorySynchronizationPolicy(bool UpdateRepository, string? Revision)
-{
-    public static RepositorySynchronizationPolicy Create(bool updateRepository, string? revision)
-    {
-        var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
-        return new RepositorySynchronizationPolicy(
-            normalizedRevision is null && updateRepository,
-            normalizedRevision);
-    }
+    private static string? GetConfiguredValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

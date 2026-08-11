@@ -32,13 +32,9 @@ public sealed class ExternalImageTests
         var unavailableBuildRepository = Path.Combine(
             Path.GetTempPath(),
             $"missing-workflow-image-build-{Guid.NewGuid():N}");
-        var unavailableManagedBase = Path.Combine(
-            Path.GetTempPath(),
-            $"missing-workflow-image-managed-{Guid.NewGuid():N}");
         await using var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.Spire_Consumer_AppHost>(
                 [
-                    $"Aspire:ModularAppHosts:RepositoryBasePath={unavailableManagedBase}",
                     $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:DefinitionRepository=" +
                     unavailableDefinitionRepository,
                     $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:BuildRepository=" +
@@ -59,6 +55,5 @@ public sealed class ExternalImageTests
         Assert.Equal("multi-repo-resource-pinned-revision", marker.Trim());
         Assert.False(Directory.Exists(unavailableDefinitionRepository));
         Assert.False(Directory.Exists(unavailableBuildRepository));
-        Assert.False(Directory.Exists(unavailableManagedBase));
     }
 }

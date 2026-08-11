@@ -58,7 +58,7 @@ public sealed class ModuleImageManifestPipelineTests
         Assert.Contains("api", exception.Message, StringComparison.Ordinal);
     }
 
-    private static async Task AddPublisherAsync(
+    private static Task AddPublisherAsync(
         ContainerResource resource,
         string module,
         string declaredResource)
@@ -68,24 +68,26 @@ public sealed class ModuleImageManifestPipelineTests
             ImageRegistry = "registry.example.test",
             ImageTag = "local"
         };
-        var plan = await ModuleImagePublishPlan.CreateAsync(
-            options,
-            repositoryDirty: false,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
-        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+        var recipe = new ModuleImageBuildRecipe(
             module,
             declaredResource,
-            ModuleResourceKind.Project,
             options,
-            plan,
             "/work",
-            null,
-            null));
+            "/work",
+            repository: null,
+            revision: null,
+            refreshCleanCheckout: false,
+            "git",
+            "gh",
+            TimeSpan.FromMinutes(2));
+        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Project,
+            recipe));
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             module,
             declaredResource,
             "/work",
             imported: true));
+        return Task.CompletedTask;
     }
 }

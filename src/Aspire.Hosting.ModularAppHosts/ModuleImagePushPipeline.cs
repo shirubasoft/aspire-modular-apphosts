@@ -20,12 +20,6 @@ internal static class ModuleImagePushPipeline
             new EventId(1, nameof(LogContainerRuntimeOutput)),
             "{ContainerRuntime}: {Output}");
 
-    private static readonly Action<ILogger, string, string, Exception?> LogContainerRuntimeError =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Warning,
-            new EventId(2, nameof(LogContainerRuntimeError)),
-            "{ContainerRuntime}: {Output}");
-
     private static readonly Action<ILogger, string, string, Exception?> LogBranchAlias =
         LoggerMessage.Define<string, string>(
             LogLevel.Information,
@@ -123,9 +117,13 @@ internal static class ModuleImagePushPipeline
 
     private static async Task PushAsync(IResource resource, PipelineStepContext context)
     {
+        var resourceLogger = context.Services
+            .GetRequiredService<ResourceLoggerService>()
+            .GetLogger(resource);
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
-            context.CancellationToken).ConfigureAwait(false);
+            context.CancellationToken,
+            usePreparedPublisherImage: true).ConfigureAwait(false);
         string? runtime = null;
         if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
         {
@@ -133,7 +131,8 @@ internal static class ModuleImagePushPipeline
             await RunContainerRuntimeAsync(
                 runtime,
                 ["push", resolved.PushReference!],
-                context).ConfigureAwait(false);
+                context,
+                resourceLogger).ConfigureAwait(false);
         }
         else if (resolved.PushTargetKind == ModuleImagePushTargetKind.AspireRegistry)
         {
@@ -154,14 +153,17 @@ internal static class ModuleImagePushPipeline
 
         runtime ??= await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
         LogBranchAlias(context.Logger, branchAlias, resource.Name, null);
+        LogBranchAlias(resourceLogger, branchAlias, resource.Name, null);
         await RunContainerRuntimeAsync(
             runtime,
             ["tag", resolved.Reference, branchAlias],
-            context).ConfigureAwait(false);
+            context,
+            resourceLogger).ConfigureAwait(false);
         await RunContainerRuntimeAsync(
             runtime,
             ["push", branchAlias],
-            context).ConfigureAwait(false);
+            context,
+            resourceLogger).ConfigureAwait(false);
     }
 
     internal static string? GetBranchAliasReference(IResource resource, ModuleEffectiveImage resolved)
@@ -170,14 +172,16 @@ internal static class ModuleImagePushPipeline
         ArgumentNullException.ThrowIfNull(resolved);
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
         if (publisher is null ||
-            publisher.Plan.RepositoryDirty ||
-            string.IsNullOrWhiteSpace(publisher.BranchImageTag) ||
+            !publisher.TryGetPreparedImage(out var preparedImage) ||
+            preparedImage.SourceState.IsDirty ||
+            string.IsNullOrWhiteSpace(preparedImage.SourceState.Branch) ||
             resolved.PushImage is null)
         {
             return null;
         }
 
-        var alias = $"{resolved.PushImage.Registry}/{resolved.PushImage.Repository}:{publisher.BranchImageTag}";
+        var branchImageTag = ModuleImageTag.FromBranch(preparedImage.SourceState.Branch);
+        var alias = $"{resolved.PushImage.Registry}/{resolved.PushImage.Repository}:{branchImageTag}";
         return string.Equals(alias, resolved.PushReference, StringComparison.OrdinalIgnoreCase)
             ? null
             : alias;
@@ -186,14 +190,23 @@ internal static class ModuleImagePushPipeline
     private static async Task RunContainerRuntimeAsync(
         string runtime,
         IReadOnlyList<string> arguments,
-        PipelineStepContext context)
+        PipelineStepContext context,
+        ILogger resourceLogger)
     {
         await CliCommand.Wrap(runtime)
             .WithArguments(arguments)
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    ModuleCliOutputRedactor.Redact(runtime),
+                    ModuleCliOutputRedactor.Redact(line),
+                    null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeError(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    ModuleCliOutputRedactor.Redact(runtime),
+                    ModuleCliOutputRedactor.Redact(line),
+                    null)))
             .ExecuteAsync(context.CancellationToken)
             .ConfigureAwait(false);
     }
