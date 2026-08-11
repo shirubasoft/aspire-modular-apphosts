@@ -13,3 +13,5 @@ Prefer standard configuration APIs (`IConfiguration`/`IOptions<T>`) over reading
 Tool commands must have the same invocation and behavior locally and in CI.
 
 Keep tool-backed CI workflows script-free; put orchestration in the tool instead of inline shell or jq.
+
+Run local container-backed tests with Docker or Podman; check which runtime is installed and available before choosing.
