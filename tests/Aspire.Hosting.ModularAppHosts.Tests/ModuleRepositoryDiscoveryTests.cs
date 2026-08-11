@@ -385,6 +385,63 @@ public sealed class ModuleRepositoryDiscoveryTests
     }
 
     [Fact]
+    public async Task Missing_pinned_imports_nested_under_the_AppHost_repository_use_distinct_synchronization_keys()
+    {
+        using var appHostRepository = TemporaryDirectory.Create();
+        using var firstModuleRepository = TemporaryDirectory.Create();
+        using var secondModuleRepository = TemporaryDirectory.Create();
+        var appHostDirectory = Path.Combine(appHostRepository.Path, "src", "AppHost");
+        Directory.CreateDirectory(appHostDirectory);
+        File.WriteAllText(Path.Combine(appHostRepository.Path, "README.md"), "consumer");
+        File.WriteAllText(Path.Combine(firstModuleRepository.Path, "README.md"), "first");
+        File.WriteAllText(Path.Combine(secondModuleRepository.Path, "README.md"), "second");
+        File.WriteAllText(Path.Combine(firstModuleRepository.Path, "First.Api.csproj"), ProjectContents);
+        File.WriteAllText(Path.Combine(secondModuleRepository.Path, "Second.Api.csproj"), ProjectContents);
+        await InitializeGitAsync(appHostRepository.Path, "consumer");
+        await InitializeGitAsync(firstModuleRepository.Path, "first");
+        await InitializeGitAsync(secondModuleRepository.Path, "second");
+        var firstRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            firstModuleRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var secondRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            secondModuleRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(appHostDirectory, publishMode: false);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] =
+            Path.Combine(appHostRepository.Path, ".aspire", "module-repositories");
+        await builder.ExportModuleAsync("first", definition =>
+        {
+            definition.WithRepository(firstModuleRepository.Path, firstRevision);
+            definition.AddProject("first-api", "First.Api.csproj", ModuleProjectPathBase.Repository)
+                .ExportAsContainer("first-api", "dotnet", ["publish"]);
+        });
+        await builder.ExportModuleAsync("second", definition =>
+        {
+            definition.WithRepository(secondModuleRepository.Path, secondRevision);
+            definition.AddProject("second-api", "Second.Api.csproj", ModuleProjectPathBase.Repository)
+                .ExportAsContainer("second-api", "dotnet", ["publish"]);
+        });
+
+        await builder.ImportModuleAsync("first");
+        await builder.ImportModuleAsync("second");
+
+        var annotations = builder.Resources
+            .OfType<ContainerResource>()
+            .SelectMany(resource => resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>())
+            .OrderBy(annotation => annotation.ModuleName, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, annotations.Length);
+        Assert.NotEqual(annotations[0].RepositoryPath, annotations[1].RepositoryPath);
+        Assert.Equal(firstRevision, await RepositoryInspector.TryResolveCommitAsync(
+            annotations.Single(annotation => annotation.ModuleName == "first").RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(secondRevision, await RepositoryInspector.TryResolveCommitAsync(
+            annotations.Single(annotation => annotation.ModuleName == "second").RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Repository_relative_project_does_not_inherit_the_consumer_repository_identity()
     {
         using var parent = TemporaryDirectory.Create();

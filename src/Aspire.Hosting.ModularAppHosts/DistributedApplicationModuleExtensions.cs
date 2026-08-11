@@ -371,13 +371,16 @@ public static partial class DistributedApplicationModuleExtensions
                     repository,
                     options,
                     cancellationToken).ConfigureAwait(false));
-        var repositorySynchronizationKey =
+        var discoveredRepositoryRoot =
             await RepositoryInspector.TryFindRepositoryRootAsync(
                 repositoryPath,
                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
                 options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false) ??
             Path.GetFullPath(repositoryPath);
+        var repositorySynchronizationKey = PathSafety.AreEqual(discoveredRepositoryRoot, repositoryPath)
+            ? discoveredRepositoryRoot
+            : Path.GetFullPath(repositoryPath);
         var updateRepository =
             (moduleOptions?.UpdateRepository ?? options.UpdateImportedRepositories) &&
             repositoryResolution?.UsesSiblingLayout is not false &&
