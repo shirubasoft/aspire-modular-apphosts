@@ -220,19 +220,22 @@ internal static class ModuleEffectiveImageResolver
         }
         else if (moduleDeclaresRegistry && image.SHA256 is not { Length: > 0 })
         {
-            var localIdentity = ParseReference(localImage, image);
+            var remoteImage = publisher is null
+                ? localImage
+                : preparedImage?.CanonicalImageReference ??
+                    $"{ModuleImageReference.GetRepository(publisher.Options)}:{publisher.Options.ImageTag ?? "latest"}";
+            var remoteIdentity = ParseReference(remoteImage, image);
             pushedImage = new ModuleRemoteImage(
-                localIdentity.Registry!,
-                localIdentity.Repository,
-                localIdentity.Tag!,
-                localImage);
+                remoteIdentity.Registry!,
+                remoteIdentity.Repository,
+                remoteIdentity.Tag!,
+                remoteImage);
             pushTargetKind = ModuleImagePushTargetKind.ContainerRuntime;
         }
 
         var pullImage = mapping?.RemoteImageReference ??
-            (explicitRegistry is null && image.Registry is { Length: > 0 }
-                ? localImage
-                : pushedImage?.Reference) ??
+            pushedImage?.Reference ??
+            (explicitRegistry is null && image.Registry is { Length: > 0 } ? localImage : null) ??
             (allowUnqualifiedPullReference
                 ? localImage
                 : throw new InvalidOperationException(

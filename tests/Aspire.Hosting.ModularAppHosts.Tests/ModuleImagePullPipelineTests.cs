@@ -118,6 +118,36 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
+    public async Task Module_registry_publisher_pulls_its_declared_tag_into_the_stable_local_alias()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var module = builder.ExportModule("database", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddContainer("database", "registry.example.test/owner/database", "candidate")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "owner/database",
+                    "docker",
+                    "build")
+                {
+                    ImageRegistry = "registry.example.test",
+                    ImageTag = "candidate"
+                });
+        });
+
+        builder.AddModule(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var references = await ModuleImagePullPipeline.ResolveImageReferencesAsync(
+            container,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("registry.example.test/owner/database:candidate", references.RemoteImage);
+        Assert.Equal("registry.example.test/owner/database:aspire-run", references.LocalImage);
+    }
+
+    [Fact]
     public async Task Explicit_pull_mapping_resolves_a_remote_image_from_a_different_registry()
     {
         var builder = DistributedApplication.CreateBuilder();
