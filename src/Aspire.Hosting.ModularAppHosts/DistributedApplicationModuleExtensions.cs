@@ -1296,12 +1296,15 @@ public static partial class DistributedApplicationModuleExtensions
                 options,
                 effectiveRepository,
                 $"{module.Name}-{resourceName}-build");
-        var synchronizationKey = await RepositoryInspector.TryFindRepositoryRootAsync(
+        var discoveredRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
                 repositoryPath,
                 gitExecutablePath,
                 options.RepositoryCommandTimeout,
                 cancellationToken).ConfigureAwait(false) ??
             Path.GetFullPath(repositoryPath);
+        var synchronizationKey = PathSafety.AreEqual(discoveredRepositoryRoot, repositoryPath)
+            ? discoveredRepositoryRoot
+            : Path.GetFullPath(repositoryPath);
         var updateRepository = (configured?.UpdateBuildRepository ??
                 (useDirectLocalRepository
                     ? false

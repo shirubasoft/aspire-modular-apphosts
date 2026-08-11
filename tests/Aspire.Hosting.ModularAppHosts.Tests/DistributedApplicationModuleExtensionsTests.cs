@@ -1390,6 +1390,60 @@ public sealed class DistributedApplicationModuleExtensionsTests
     }
 
     [Fact]
+    public async Task Missing_pinned_build_checkouts_nested_under_the_definition_repository_use_distinct_synchronization_keys()
+    {
+        using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var firstBuildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        using var secondBuildRepository = await TestRepository.CreateAsync(initializeGit: true);
+        var firstRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            firstBuildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var secondRevision = Assert.IsType<string>(await RepositoryInspector.TryResolveCommitAsync(
+            secondBuildRepository.Path,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var builder = CreateBuilder(definitionRepository.Path);
+        builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] =
+            Path.Combine(definitionRepository.Path, ".aspire", "module-repositories");
+        var module = await builder.ExportModuleAsync("orders", definition =>
+        {
+            definition.WithRepository(definitionRepository.Path);
+            definition.AddContainer("orders-api", "orders-api", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "orders-api",
+                    "dotnet",
+                    "publish")
+                {
+                    BuildRepository = firstBuildRepository.Path,
+                    BuildRepositoryRevision = firstRevision
+                });
+            definition.AddContainer("orders-worker", "orders-worker", "dev")
+                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    "orders-worker",
+                    "dotnet",
+                    "publish")
+                {
+                    BuildRepository = secondBuildRepository.Path,
+                    BuildRepositoryRevision = secondRevision
+                });
+        });
+
+        await builder.AddAsync(module);
+
+        var installers = builder.Resources
+            .OfType<ModuleRepositoryInstallerResource>()
+            .OrderBy(resource => resource.Name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, installers.Length);
+        Assert.NotEqual(installers[0].RepositoryPath, installers[1].RepositoryPath);
+        Assert.Equal(firstRevision, await RepositoryInspector.TryResolveCommitAsync(
+            installers.Single(resource => resource.Repository == firstBuildRepository.Path).RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(secondRevision, await RepositoryInspector.TryResolveCommitAsync(
+            installers.Single(resource => resource.Repository == secondBuildRepository.Path).RepositoryPath,
+            cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Resource_update_policy_fast_forwards_an_existing_build_checkout()
     {
         using var definitionRepository = await TestRepository.CreateAsync(initializeGit: true);
