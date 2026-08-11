@@ -203,7 +203,7 @@ public static partial class DistributedApplicationModuleExtensions
                 registry,
                 options,
                 moduleOptions,
-                project.GetRepositoryRelativeProjectPath());
+                GetProjectWorkingDirectory(project));
         var container = builder
             .AddContainer(
                 resourceName,
@@ -436,6 +436,12 @@ public static partial class DistributedApplicationModuleExtensions
             options.RepositoryCommandTimeout,
             GetDetachedAppHostBranchAlias(builder, buildRepository));
         return new ModuleImagePublisherAnnotation(resourceKind, recipe);
+    }
+
+    private static string GetProjectWorkingDirectory(DistributedApplicationModuleProject project)
+    {
+        var directory = Path.GetDirectoryName(project.GetRepositoryRelativeProjectPath());
+        return string.IsNullOrWhiteSpace(directory) ? "." : directory;
     }
 
     private static string? GetDetachedAppHostBranchAlias(

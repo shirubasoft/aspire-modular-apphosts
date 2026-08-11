@@ -122,6 +122,34 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.NotNull(installer.Publisher);
     }
 
+    [Fact]
+    public void Project_image_publisher_uses_the_project_directory_for_preflight_and_builds()
+    {
+        using var appHost = CreateGitAppHost();
+        var projectDirectory = Path.Combine(appHost.Path, "Api");
+        Directory.CreateDirectory(projectDirectory);
+        var projectPath = Path.Combine(projectDirectory, "Api.csproj");
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options => options.ProjectMode = ModuleProjectMode.Container);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddProject("orders-api", projectPath)
+                .ExportAsContainer(new ModuleContainerExportOptions(
+                    "orders-api",
+                    "dotnet",
+                    "publish"));
+        });
+
+        builder.AddModule(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+        Assert.Equal(projectDirectory, publisher.WorkingDirectory);
+        GetRegistry(builder).ValidateRepositoryPreflight();
+    }
+
     private static TemporaryDirectory CreateGitAppHost()
     {
         var appHost = TemporaryDirectory.Create();
