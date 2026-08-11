@@ -1,4 +1,4 @@
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using System.Text.Json;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;

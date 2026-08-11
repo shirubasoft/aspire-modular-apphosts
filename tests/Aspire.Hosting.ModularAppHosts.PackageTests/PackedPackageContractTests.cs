@@ -251,7 +251,6 @@ public sealed class PackedPackageContractTests
         const string source = """
             using Aspire.Hosting;
             using Aspire.Hosting.ApplicationModel;
-            using Aspire.Hosting.ModularAppHosts;
 
             namespace PackedCoreConsumer;
 
@@ -317,7 +316,7 @@ public sealed class PackedPackageContractTests
             $"The .NET SDK {MinimumSupportedSdkVersion} feature band is not installed.");
         var packages = await GetPackagesAsync(TestContext.Current.CancellationToken);
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             namespace MinimumSdkConsumer;
 
@@ -349,7 +348,6 @@ public sealed class PackedPackageContractTests
         const string source = """
             using Aspire.Hosting.ApplicationModel;
             using Aspire.Hosting.Docker;
-            using Aspire.Hosting.ModularAppHosts;
             using Aspire.Hosting.Testing;
 
             namespace PackedTestingConsumer;

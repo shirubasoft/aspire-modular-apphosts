@@ -7,7 +7,7 @@ using CliWrap;
 using Microsoft.Extensions.Logging;
 using CliCommand = global::CliWrap.Cli;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal static class ModuleImageBuildPipeline
 {

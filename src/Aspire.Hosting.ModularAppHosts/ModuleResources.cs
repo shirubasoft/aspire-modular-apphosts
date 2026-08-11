@@ -1,6 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>A one-shot Git repository installer displayed as a child of an imported service.</summary>
 public sealed class ModuleRepositoryInstallerResource(

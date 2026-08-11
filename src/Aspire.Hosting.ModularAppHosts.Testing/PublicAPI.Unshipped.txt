@@ -1,1 +1,89 @@
 #nullable enable
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.DockerComposeDeploymentOptions() -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.AspireCliPath.get -> string!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.AspireCliPath.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.CleanupTimeout.get -> System.TimeSpan
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.CleanupTimeout.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.DeploymentTimeout.get -> System.TimeSpan
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.DeploymentTimeout.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.EnvironmentName.get -> string!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.EnvironmentName.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.OutputPath.get -> string?
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.OutputPath.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.PortConflictRetryCount.get -> int
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions.PortConflictRetryCount.set -> void
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AddResource<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AppHostAssembly.get -> System.Reflection.Assembly?
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.AppHostDirectory.get -> string!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Build() -> Aspire.Hosting.DistributedApplication!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.BuildAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.DistributedApplication!>!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Configuration.get -> Microsoft.Extensions.Configuration.ConfigurationManager!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.CreateResourceBuilder<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DisposeAsync() -> System.Threading.Tasks.ValueTask
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Environment.get -> Microsoft.Extensions.Hosting.IHostEnvironment!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Eventing.get -> Aspire.Hosting.Eventing.IDistributedApplicationEventing!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.ExecutionContext.get -> Aspire.Hosting.DistributedApplicationExecutionContext!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.FileSystemService.get -> Aspire.Hosting.IFileSystemService!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Pipeline.get -> Aspire.Hosting.Pipelines.IDistributedApplicationPipeline!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Resources.get -> Aspire.Hosting.ApplicationModel.IResourceCollection!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.UserSecretsManager.get -> Aspire.Hosting.IUserSecretsManager!
+*REMOVED*Aspire.Hosting.ModularAppHosts.DockerComposeTestConfigurationExtensions
+*REMOVED*const Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DefaultDeploymentEnvironmentName = "Tests" -> string!
+*REMOVED*const Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DeploymentEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_ENVIRONMENT" -> string!
+*REMOVED*const Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DeploymentOutputPathEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH" -> string!
+*REMOVED*const Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.FilePathEnvironmentVariableName = "ASPIRE_TEST_CONFIGURATION_FILE" -> string!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(string! filePath) -> Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.CreateFromEnvironment<TEntryPoint>() -> Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(string! environmentName, string? outputPath = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder!>!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder!>!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.ModularAppHosts.DockerComposeDeploymentTestingBuilder!>!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeTestConfigurationExtensions.WithTestConnectionString<T>(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! connectionName, Aspire.Hosting.ApplicationModel.IResourceBuilder<T>! resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeTestConfigurationExtensions.WithTestEndpoint(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! resourceName, Aspire.Hosting.ApplicationModel.EndpointReference! endpoint, string! host = "localhost", string? healthCheckPath = null) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!
+*REMOVED*static Aspire.Hosting.ModularAppHosts.DockerComposeTestConfigurationExtensions.WithTestValue(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! configurationKey, Aspire.Hosting.ApplicationModel.IValueProvider! value) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.DockerComposeDeploymentOptions() -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.AspireCliPath.get -> string!
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.AspireCliPath.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.CleanupTimeout.get -> System.TimeSpan
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.CleanupTimeout.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.DeploymentTimeout.get -> System.TimeSpan
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.DeploymentTimeout.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.EnvironmentName.get -> string!
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.EnvironmentName.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.OutputPath.get -> string?
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.OutputPath.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.PortConflictRetryCount.get -> int
+Aspire.Hosting.Testing.DockerComposeDeploymentOptions.PortConflictRetryCount.set -> void
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.AddResource<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.AppHostAssembly.get -> System.Reflection.Assembly?
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.AppHostDirectory.get -> string!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Build() -> Aspire.Hosting.DistributedApplication!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.BuildAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.DistributedApplication!>!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Configuration.get -> Microsoft.Extensions.Configuration.ConfigurationManager!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.CreateResourceBuilder<T>(T resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<T>!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DisposeAsync() -> System.Threading.Tasks.ValueTask
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Environment.get -> Microsoft.Extensions.Hosting.IHostEnvironment!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Eventing.get -> Aspire.Hosting.Eventing.IDistributedApplicationEventing!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.ExecutionContext.get -> Aspire.Hosting.DistributedApplicationExecutionContext!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.FileSystemService.get -> Aspire.Hosting.IFileSystemService!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Pipeline.get -> Aspire.Hosting.Pipelines.IDistributedApplicationPipeline!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Resources.get -> Aspire.Hosting.ApplicationModel.IResourceCollection!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.UserSecretsManager.get -> Aspire.Hosting.IUserSecretsManager!
+Aspire.Hosting.Testing.DockerComposeTestConfigurationExtensions
+const Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DefaultDeploymentEnvironmentName = "Tests" -> string!
+const Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DeploymentEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_ENVIRONMENT" -> string!
+const Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DeploymentOutputPathEnvironmentVariableName = "ASPIRE_TEST_DEPLOYMENT_OUTPUT_PATH" -> string!
+const Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.FilePathEnvironmentVariableName = "ASPIRE_TEST_CONFIGURATION_FILE" -> string!
+static Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(string! filePath) -> Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder!
+static Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.CreateFromEnvironment<TEntryPoint>() -> Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder!
+static Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(string! environmentName, string? outputPath = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder!>!
+static Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(Aspire.Hosting.Testing.DockerComposeDeploymentOptions! options, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder!>!
+static Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder.DeployAsync<TEntryPoint>(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Aspire.Hosting.Testing.DockerComposeDeploymentTestingBuilder!>!
+static Aspire.Hosting.Testing.DockerComposeTestConfigurationExtensions.WithTestConnectionString<T>(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! connectionName, Aspire.Hosting.ApplicationModel.IResourceBuilder<T>! resource) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!
+static Aspire.Hosting.Testing.DockerComposeTestConfigurationExtensions.WithTestEndpoint(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! resourceName, Aspire.Hosting.ApplicationModel.EndpointReference! endpoint, string! host = "localhost", string? healthCheckPath = null) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!
+static Aspire.Hosting.Testing.DockerComposeTestConfigurationExtensions.WithTestValue(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>! environment, string! configurationKey, Aspire.Hosting.ApplicationModel.IValueProvider! value) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.Docker.DockerComposeEnvironmentResource!>!

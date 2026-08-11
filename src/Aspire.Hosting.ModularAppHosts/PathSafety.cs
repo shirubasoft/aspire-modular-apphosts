@@ -1,4 +1,4 @@
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 internal static class PathSafety
 {

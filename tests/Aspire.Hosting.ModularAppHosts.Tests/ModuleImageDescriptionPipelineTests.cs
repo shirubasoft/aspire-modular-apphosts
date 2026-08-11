@@ -4,7 +4,7 @@
 #pragma warning disable ASPIREUSERSECRETS001
 
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Eventing;
 using Microsoft.Extensions.Configuration;

@@ -1,6 +1,6 @@
 using ActionsToolkit.Core.Services;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Shirubasoft.Aspire.ModularAppHosts.Tool;

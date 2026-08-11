@@ -1,5 +1,5 @@
 using ActionsToolkit.Core.Services;
-using Aspire.Hosting.ModularAppHosts;
+using Aspire.Hosting;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
 

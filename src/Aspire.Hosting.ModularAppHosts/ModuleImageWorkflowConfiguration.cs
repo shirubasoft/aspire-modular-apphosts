@@ -1,7 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting;
 
 /// <summary>Projects a workflow image manifest into standard modular AppHost configuration.</summary>
 public static class ModuleImageWorkflowConfiguration

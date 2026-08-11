@@ -1,5 +1,4 @@
 using Aspire.Hosting;
-using Aspire.Hosting.ModularAppHosts;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;

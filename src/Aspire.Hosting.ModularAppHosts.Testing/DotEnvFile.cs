@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Aspire.Hosting.ModularAppHosts;
+namespace Aspire.Hosting.Testing;
 
 internal static class DotEnvFile
 {

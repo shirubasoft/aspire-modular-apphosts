@@ -23,7 +23,7 @@ The optional testing package carries `Aspire.Hosting.Testing` and Docker hosting
 dotnet add package Shirubasoft.Aspire.ModularAppHosts.Testing
 ```
 
-The runtime packages target .NET 10, the source generator supports .NET SDK 10.0.100 or later, and the Aspire-facing packages require Aspire 13.4.6 or later. Their APIs use the `Aspire.Hosting.ModularAppHosts` namespace.
+The runtime packages target .NET 10, the source generator supports .NET SDK 10.0.100 or later, and the Aspire-facing packages require Aspire 13.4.6 or later. The core APIs extend Aspire's existing `Aspire.Hosting` namespace, while deployment-testing APIs use `Aspire.Hosting.Testing`.
 They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/LICENSE).
 
 ## Quick start
@@ -40,7 +40,6 @@ Replace the generated `CatalogModule.cs` content with this runnable contract. Th
 
 ```csharp
 using Aspire.Hosting;
-using Aspire.Hosting.ModularAppHosts;
 
 namespace Catalog.Modules;
 

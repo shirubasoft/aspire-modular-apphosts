@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using Aspire.Hosting.ModularAppHosts.Generators;
+using Aspire.Hosting;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -13,7 +13,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     {
         const string source = """
             using Aspire.Hosting.ApplicationModel;
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             namespace GeneratedSample;
 
@@ -55,7 +55,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("return await AddOrdersModuleAsync(builder, module, cancellationToken)", generated);
         Assert.Contains("Task<Module> ImportOrdersModuleAsync(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
-        Assert.Contains("Module : global::Aspire.Hosting.ModularAppHosts.DistributedApplicationModuleReference", generated);
+        Assert.Contains("Module : global::Aspire.Hosting.DistributedApplicationModuleReference", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.IResourceWithEndpoints> OrdersApi", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Cache", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
@@ -71,7 +71,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_creates_a_strongly_typed_reference_for_use_in_other_module_definitions()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             namespace GeneratedSample;
 
@@ -109,7 +109,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_requires_a_static_partial_top_level_class()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             public static class InvalidModule
@@ -128,7 +128,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_non_static_and_generic_module_classes(string declaration)
     {
         var source = $$"""
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             {{declaration}}
@@ -146,7 +146,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_nested_module_classes()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             public static class Outer
             {
@@ -167,7 +167,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_an_empty_module_name()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("   ")]
             public static partial class InvalidModule
@@ -185,7 +185,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_an_empty_module_version()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid", Version = "  ")]
             public static partial class InvalidModule
@@ -207,7 +207,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_flows_the_contract_package_identity_into_module_definitions()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("orders", PackageId = "Sample.Orders.Contract")]
             public static partial class OrdersModule
@@ -240,7 +240,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_an_invalid_contract_package_id(string packageId)
     {
         var source = $$"""
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid", PackageId = "{{packageId}}")]
             public static partial class InvalidModule
@@ -262,7 +262,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_keeps_the_advanced_overload_when_no_conventional_define_method_exists()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("advanced")]
             public static partial class AdvancedModule
@@ -292,7 +292,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     {
         const string source = """
             using System;
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("focused")]
             public static partial class FocusedModule
@@ -326,7 +326,6 @@ public sealed class DistributedApplicationModuleGeneratorTests
     {
         const string source = """
             using Aspire.Hosting;
-            using Aspire.Hosting.ModularAppHosts;
 
             [GenerateDistributedApplicationModule("advanced")]
             public static partial class AdvancedModule
@@ -349,7 +348,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_resource_names_that_are_not_compile_time_constants()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             public static partial class InvalidModule
@@ -371,7 +370,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     {
         const string source = """
             using Aspire.Hosting.ApplicationModel;
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             internal sealed class HiddenResource(string name) : Resource(name);
 
@@ -398,7 +397,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_colliding_resource_property_names()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             public static partial class InvalidModule
@@ -423,7 +422,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_rejects_resource_properties_that_collide_with_the_module_contract()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             public static partial class InvalidModule
@@ -452,7 +451,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         string reservedName)
     {
         var source = $$"""
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("invalid")]
             public static partial class InvalidModule
@@ -478,7 +477,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_warns_but_still_generates_a_module_without_resources()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("empty")]
             public static partial class EmptyModule
@@ -500,7 +499,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_escapes_identifiers_and_preserves_resource_name_constants()
     {
         const string source = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [GenerateDistributedApplicationModule("orders\"north\\region\n")]
             internal static partial class @class
@@ -535,7 +534,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     public void Generator_orders_resources_across_partial_declarations_by_file_then_position()
     {
         const string secondFile = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             namespace MultiFile;
 
@@ -549,7 +548,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
             }
             """;
         const string firstFile = """
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             namespace MultiFile;
 
@@ -583,7 +582,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
         const string source = """
             using System.Diagnostics.CodeAnalysis;
             using Aspire.Hosting.ApplicationModel;
-            using Aspire.Hosting.ModularAppHosts;
+            using Aspire.Hosting;
 
             [Experimental("SAMPLE001")]
             public sealed class ExperimentalResource(string name) : Resource(name);
