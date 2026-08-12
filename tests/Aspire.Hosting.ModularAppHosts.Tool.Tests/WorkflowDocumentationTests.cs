@@ -7,30 +7,30 @@ namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
 public sealed class WorkflowDocumentationTests
 {
     [Fact]
-    public async Task Checked_in_manifest_example_matches_the_current_contract()
+    public async Task Checked_in_workflow_document_example_matches_the_current_contract()
     {
         var repositoryRoot = FindRepositoryRoot();
         var examplePath = Path.Combine(
             repositoryRoot,
             "docs",
             "examples",
-            ModuleImageManifestDocument.DefaultFileName);
+            ModuleImageWorkflowDocument.DefaultFileName);
 
-        var manifest = await ModuleImageManifestDocument.LoadAsync(
+        var document = await ModuleImageWorkflowDocument.LoadAsync(
             examplePath,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ModuleImageManifestDocument.CurrentSchemaVersion, manifest.SchemaVersion);
-        Assert.Equal(2, manifest.Images.Count);
+        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, document.SchemaVersion);
+        Assert.Equal(2, document.Images.Count);
     }
 
     [Fact]
-    public async Task Checked_in_schema_tracks_the_current_manifest_version()
+    public async Task Checked_in_schema_tracks_the_current_workflow_document_version()
     {
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
             "docs",
-            "module-image-manifest.schema.json");
+            "module-image-workflow.schema.json");
         await using var stream = File.OpenRead(schemaPath);
         using var schema = await JsonDocument.ParseAsync(
             stream,
@@ -41,7 +41,7 @@ public sealed class WorkflowDocumentationTests
             .GetProperty("schemaVersion")
             .GetProperty("const")
             .GetInt32();
-        Assert.Equal(ModuleImageManifestDocument.CurrentSchemaVersion, schemaVersion);
+        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, schemaVersion);
     }
 
     [Theory]
@@ -67,7 +67,7 @@ public sealed class WorkflowDocumentationTests
     }
 
     [Fact]
-    public async Task Repo_A_workflow_runs_the_E2E_command_through_manifest_apply()
+    public async Task Repo_A_workflow_runs_the_E2E_command_through_workflow_apply()
     {
         var workflowPath = Path.Combine(
             FindRepositoryRoot(),
@@ -79,7 +79,7 @@ public sealed class WorkflowDocumentationTests
             TestContext.Current.CancellationToken);
         workflow = workflow.ReplaceLineEndings("\n");
 
-        var applyIndex = workflow.IndexOf("manifest apply", StringComparison.Ordinal);
+        var applyIndex = workflow.IndexOf("images apply", StringComparison.Ordinal);
         var commandBoundaryIndex = workflow.IndexOf("\n          --\n", StringComparison.Ordinal);
         var testIndex = workflow.IndexOf("dotnet test", StringComparison.Ordinal);
         Assert.True(applyIndex >= 0);
@@ -99,11 +99,92 @@ public sealed class WorkflowDocumentationTests
             readmePath,
             TestContext.Current.CancellationToken);
 
-        Assert.Contains("manifest apply", readme, StringComparison.Ordinal);
-        Assert.Contains("--file artifacts/manual-workflow-image-manifest.json", readme, StringComparison.Ordinal);
+        Assert.Contains("images apply", readme, StringComparison.Ordinal);
+        Assert.Contains("--file artifacts/manual-module-image-workflow.json", readme, StringComparison.Ordinal);
         Assert.Contains("dotnet test", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("GITHUB_ENV", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("export Aspire__", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Current_documentation_rejects_removed_contracts_commands_and_lifecycle_claims()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var documentationPaths = new List<string>
+        {
+            Path.Combine(repositoryRoot, "README.md"),
+            Path.Combine(repositoryRoot, "CONTRIBUTING.md"),
+            Path.Combine(repositoryRoot, "docs", "modules.md"),
+            Path.Combine(repositoryRoot, "docs", "module-images.md"),
+            Path.Combine(repositoryRoot, "docs", "e2e-testing.md"),
+            Path.Combine(repositoryRoot, "docs", "external-e2e-workflows.md"),
+            Path.Combine(repositoryRoot, "src", "Aspire.Hosting.ModularAppHosts", "ModuleContracts.cs"),
+            Path.Combine(repositoryRoot, "src", "Aspire.Hosting.ModularAppHosts", "ModularAppHostsOptions.cs")
+        };
+        documentationPaths.AddRange(Directory.EnumerateFiles(
+            Path.Combine(repositoryRoot, "samples"),
+            "README.md",
+            SearchOption.AllDirectories));
+        documentationPaths.AddRange(Directory.EnumerateFiles(
+            Path.Combine(repositoryRoot, "src"),
+            "README.md",
+            SearchOption.AllDirectories));
+        string[] removedContracts =
+        [
+            "using Aspire.Hosting.ModularAppHosts;",
+            "ModuleImageManifestDocument",
+            "ModuleImageManifestEntry",
+            "modular-apphosts manifest",
+            "AutoCloneRepositories",
+            "RepositoryBasePath",
+            "`ProjectName`"
+        ];
+        string[] removedLifecycleClaims =
+        [
+            "startup-time checkout",
+            "checkout during startup",
+            "clones repositories on startup",
+            "automatically clones repositories",
+            "image installer",
+            "service installer",
+            "legacy publish command"
+        ];
+
+        foreach (var path in documentationPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var documentation = await File.ReadAllTextAsync(
+                path,
+                TestContext.Current.CancellationToken);
+            foreach (var removed in removedContracts.Concat(removedLifecycleClaims))
+            {
+                Assert.DoesNotContain(removed, documentation, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Current_documentation_does_not_publish_a_migration_guide()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        Assert.False(File.Exists(Path.Combine(repositoryRoot, "docs", "upgrade-guide.md")));
+
+        string[] primaryGuides =
+        [
+            Path.Combine(repositoryRoot, "README.md"),
+            Path.Combine(repositoryRoot, "CONTRIBUTING.md"),
+            Path.Combine(repositoryRoot, "docs", "modules.md"),
+            Path.Combine(repositoryRoot, "docs", "module-images.md")
+        ];
+
+        foreach (var path in primaryGuides)
+        {
+            var documentation = await File.ReadAllTextAsync(
+                path,
+                TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("upgrade guide", documentation, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("migration guide", documentation, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("upgrade-guide.md", documentation, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static string FindRepositoryRoot()

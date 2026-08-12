@@ -11,7 +11,8 @@ catalog module ──> catalog-api <── orders-api <── scenario tests
 
 `EShop.E2E.AppHost` adds both modules, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. `OrdersModule.Define` obtains a strongly typed `CatalogModule` reference and owns the orders-to-catalog endpoint and startup relationships. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
 
-The AppHost also enables module auto-cloning while deliberately configuring a nonexistent GitHub CLI executable. Both modules live in the current Git worktree, so the AppHost and Compose CI modes prove that same-repository discovery bypasses cloning.
+Both module repositories are configured as explicit local paths in the current Git worktree. The
+AppHost and Compose CI modes therefore require no initialization or GitHub CLI access.
 
 The E2E AppHost and test project reference `Shirubasoft.Aspire.ModularAppHosts.Testing`, which contains the Compose export extensions and deployment builder. The ordinary modular AppHosts package remains free of `Aspire.Hosting.Testing` and Docker hosting dependencies.
 

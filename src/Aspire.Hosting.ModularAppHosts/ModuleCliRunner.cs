@@ -60,7 +60,10 @@ internal static class ModuleCliRunner
                     PipeTarget.ToDelegate(ReportProgress)))
                 .ExecuteAsync(linkedSource.Token);
 
-            return new ModuleCliResult(result.ExitCode, standardOutput.ToString(), standardError.ToString());
+            return new ModuleCliResult(
+                result.ExitCode,
+                standardOutput.ToString(),
+                standardError.ToString());
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {

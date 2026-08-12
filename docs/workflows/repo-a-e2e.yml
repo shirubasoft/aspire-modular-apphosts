@@ -3,8 +3,8 @@ name: External E2E
 on:
   workflow_dispatch:
     inputs:
-      image-manifest:
-        description: Compact modular AppHost image manifest
+      image-workflow:
+        description: Compact modular AppHost image workflow document
         required: true
         type: string
       image-tag:
@@ -23,8 +23,8 @@ on:
         type: string
   workflow_call:
     inputs:
-      image-manifest:
-        description: Compact modular AppHost image manifest
+      image-workflow:
+        description: Compact modular AppHost image workflow document
         required: true
         type: string
       image-tag:
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      IMAGE_MANIFEST: ${{ inputs.image-manifest }}
+      IMAGE_WORKFLOW: ${{ inputs.image-workflow }}
       IMAGE_TAG: ${{ inputs.image-tag }}
       RESOURCE_TAGS: ${{ inputs.resource-tags }}
       REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
@@ -89,8 +89,8 @@ jobs:
 
       - name: Run Repo A E2E tests with producer images
         run: >-
-          dotnet tool run modular-apphosts -- manifest apply
-          --json "$IMAGE_MANIFEST"
+          dotnet tool run modular-apphosts -- images apply
+          --json "$IMAGE_WORKFLOW"
           --tag "$IMAGE_TAG"
           --resource-tags "$RESOURCE_TAGS"
           --

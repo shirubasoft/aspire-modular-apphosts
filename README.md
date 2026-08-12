@@ -9,7 +9,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
-| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying image manifests and dispatching cross-repository E2E workflows. |
+| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying module image workflow documents and dispatching cross-repository E2E workflows. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -28,7 +28,7 @@ They are licensed under the [MIT License](https://github.com/Shirubasoft/aspire-
 
 ## Quick start
 
-Prerequisites are .NET SDK 10.0.100 or later, Aspire CLI 13.4 or later, and a running Docker 28+ or Podman 5+ container runtime. In an existing AppHost or shared contract project, install the core package, install the item template, and scaffold a contract:
+Prerequisites are .NET SDK 10.0.100 or later, Aspire CLI 13.4.6 or later, and a running Docker 28+ or Podman 5+ container runtime. In an existing AppHost or shared contract project, install the core package, install the item template, and scaffold a contract:
 
 ```bash
 dotnet add package Shirubasoft.Aspire.ModularAppHosts
@@ -61,9 +61,12 @@ public static partial class CatalogModule
 Add the module and use its generated resources like ordinary Aspire resource builders:
 
 ```csharp
+using Aspire.Hosting;
+using Catalog.Modules;
+
 var builder = DistributedApplication.CreateBuilder(args);
 
-var catalog = await builder.AddCatalogModuleAsync();
+var catalog = builder.AddCatalogModule();
 
 builder.AddContainer("storefront", "nginx", "alpine")
     .WithReference(catalog.Api.GetEndpoint("http"))
@@ -74,15 +77,30 @@ await builder.Build().RunAsync();
 
 From the AppHost directory, run `aspire run`, open the dashboard URL printed by Aspire, and use the `catalog-api` endpoint to verify the module is running.
 
-For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `await builder.ImportCatalogModuleAsync()`. Packaged contracts can declare specialized projects with `ModuleProjectPathBase.Repository`, preserving local project debugging without coupling the contract to the consumer's source-tree layout. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
+For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `builder.ImportCatalogModule()`. Packaged contracts can declare specialized projects with `ModuleProjectPathBase.Repository`, preserving local project debugging without coupling the contract to the consumer's source-tree layout. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
 
 Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
 
-By default, local modules run as projects, imported modules run as containers, and clean imported repositories with a configured upstream are fast-forwarded before startup. Local branches keep their current commit when they lack an upstream or contain changes. Image build commands are opt-in. Set `UpdateImportedRepositories` or a module's `UpdateRepository` to `false` to keep a checkout fixed, and use `UseLocalModuleProjects()`, `UseModuleContainers()`, or `BuildModuleImages()` for AppHost-wide intent.
+By default, local modules run as projects and imported modules run as containers. Module declaration is synchronous and performs no Git or image operations. Remote and pinned repositories are acquired from the AppHost directory with `aspire do initialize --apphost . --non-interactive`; normal run fails fast with the exact AppHost-aware recovery command when a sibling checkout, initialization state record, project, or build directory is missing. Use `UseLocalModuleProjects()` or `UseModuleContainers()` for AppHost-wide project-mode intent.
 
-Module image build commands can follow Aspire's Docker or Podman selection by awaiting `ContainerRuntimeResolver.ResolveAsync()`. It reads `ASPIRE_CONTAINER_RUNTIME`, accepts `DOTNET_ASPIRE_CONTAINER_RUNTIME`, and otherwise probes both runtimes in parallel to prefer one that is running. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build, so CI can delegate module-owned build commands to Aspire. A clean push publishes the canonical image plus a sanitized source-branch alias, allowing default-branch consumers to use a stable tag while workflow manifests retain the exact canonical tag. Pass declared or effective resource names after any aggregate step to operate on that subset, for example `aspire do pull catalog-api catalog-worker`. `aspire do describe-images --output-path artifacts` writes the same effective run, pull, push, and build identities to `artifacts/module-images.json` for CI tooling. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry while retaining its push behavior.
+Projects use Aspire's native container publisher through `ExportAsContainer(imageName)` by default,
+and module-owned `AddDockerfile` resources retain Aspire's Dockerfile build and push operations.
+Advanced image commands can follow Aspire's Docker or Podman selection by using
+`ModuleImageCommandOptions.ContainerRuntimePlaceholder` with `ExportAsContainerWithCommand(...)` or
+`WithImagePublishCommand(...)`. Registry-backed images participate in `aspire do build`, `push`, and
+`pull`; dirty source may build and run locally but cannot be pushed. A clean advanced publisher also
+pushes a sanitized source-branch alias, while module image workflow documents retain the exact
+canonical tag. Named Aspire steps operate on one resource; repeatable `images publish --module` and
+`--resource` options select a validated graph. `aspire do describe-images --output-path artifacts`
+writes effective identities without preparing images.
 
-For a sibling-repository workflow, opt into `AutoCloneRepositories`. Same-worktree modules are discovered in place; a missing direct sibling is cloned with GitHub CLI. Published module images default to a branch-and-commit tag and add `-dirty` when their source worktree has changes. Registries can be modeled separately from image names, factory-created `ContainerResource` integrations can publish custom images while retaining their typed APIs, missing clean images can be pulled before building, and custom build outputs can be retagged directly. Each exported project or container publisher can select a separate `BuildRepository` and revision, so a resource may be defined in an application contract while its Dockerfile and build script remain in an owning repository. Imported modules pinned to a branch, tag, or commit use isolated managed checkouts that protect sibling and AppHost developer worktrees. The module guide documents the layout, configuration, and validation behavior.
+Initialization places remote checkouts in collision-resistant directories beside the AppHost Git
+root; pinned revisions receive distinct siblings that protect developer worktrees. Advanced command
+publishers inspect branch, commit, and dirty state immediately before their container starts, reuse
+or optionally pull a clean canonical image, build when needed, and retag the result to a deterministic
+`aspire-run` alias. Explicit-start resources remain lazy. Each advanced publisher can select a
+separate `BuildRepository` and revision, and an explicit refresh may fast-forward only a clean,
+unpinned build checkout.
 
 Set an exported project's run mode to `Project` for local debugging while keeping its portable container representation for publishing:
 
@@ -107,19 +125,19 @@ Set an exported project's run mode to `Project` for local debugging while keepin
 ## Cross-repository E2E in three commands
 
 Pin the tool in both repos with a committed .NET tool manifest. Repo B publishes its selected
-module images and writes a strict manifest:
+module images and writes a strict module image workflow document:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest publish \
-  --apphost src/RepoB.AppHost --selector orders --tag "$GITHUB_SHA"
+dotnet tool run modular-apphosts -- images publish \
+  --apphost src/RepoB.AppHost --module orders --tag "$GITHUB_SHA"
 ```
 
-Repo A runs its ordinary E2E command with that manifest, using the same invocation locally and in
+Repo A runs its ordinary E2E command with that workflow document, using the same invocation locally and in
 GitHub Actions:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest apply \
-  --json "$IMAGE_MANIFEST" \
+dotnet tool run modular-apphosts -- images apply \
+  --json "$IMAGE_WORKFLOW" \
   -- \
   dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
@@ -130,7 +148,7 @@ returns its status:
 ```bash
 dotnet tool run modular-apphosts -- workflow dispatch \
   --repository your-org/repo-a --workflow external-e2e.yml \
-  --manifest module-image-manifest.json
+  --workflow-document module-image-workflow.json
 ```
 
 See the [tool reference](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/src/Aspire.Hosting.ModularAppHosts.Tool/README.md)
@@ -139,12 +157,13 @@ for pinned setup, tag precedence, complete workflow files, permissions, and trou
 
 ## Guides and samples
 
-- [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
+- [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, initialization, and configuration.
+- [Module image workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-images.md): native and advanced image publishers, lifecycle, pipeline steps, and workflow documents.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
-- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): manifest publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
+- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): module image workflow document publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.
-- [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer plus a two-AppHost local-registry image-manifest handoff.
+- [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer plus a two-AppHost local-registry workflow image handoff.
 
 For repository setup, validation commands, and the release workflow, see [Contributing](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/CONTRIBUTING.md).

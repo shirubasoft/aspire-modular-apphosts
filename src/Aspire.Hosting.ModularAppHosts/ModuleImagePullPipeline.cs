@@ -1,12 +1,15 @@
 #pragma warning disable ASPIRECOMPUTE003
+#pragma warning disable ASPIRECONTAINERRUNTIME001
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
 using CliWrap;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
@@ -21,12 +24,6 @@ internal static class ModuleImagePullPipeline
         LoggerMessage.Define<string, string>(
             LogLevel.Information,
             new EventId(3, nameof(LogContainerRuntimeOutput)),
-            "{ContainerRuntime}: {Output}");
-
-    private static readonly Action<ILogger, string, string, Exception?> LogContainerRuntimeError =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Warning,
-            new EventId(4, nameof(LogContainerRuntimeError)),
             "{ContainerRuntime}: {Output}");
 
     private static readonly Action<ILogger, string, string, Exception?> LogImagePullStarted =
@@ -65,17 +62,6 @@ internal static class ModuleImagePullPipeline
             Action = _ => Task.CompletedTask
         });
 
-        var selection = GetSelection(Environment.GetCommandLineArgs());
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        builder.Pipeline.AddPipelineConfiguration(context =>
-        {
-            ApplySelection(context.Steps, selection);
-            return Task.CompletedTask;
-        });
     }
 
     public static void AddPullStep(IResourceBuilder<ContainerResource> container)
@@ -110,37 +96,6 @@ internal static class ModuleImagePullPipeline
         });
     }
 
-    internal static ModuleImageSelection GetSelection(IReadOnlyList<string> arguments) =>
-        ModuleImagePipelineSelectionParser.GetSelection(arguments, PullStepName);
-
-    internal static void ApplySelection(
-        IReadOnlyList<PipelineStep> steps,
-        ModuleImageSelection selection)
-    {
-        ArgumentNullException.ThrowIfNull(steps);
-        ArgumentNullException.ThrowIfNull(selection);
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        var pullSteps = steps
-            .Where(step =>
-                step.Resource is not null &&
-                step.Tags.Contains(PullContainerImageTag) &&
-                step.RequiredBySteps.Contains(PullStepName))
-            .ToArray();
-        var selectedResources = selection.ResolveResources(
-            pullSteps.Select(step => step.Resource!),
-            "image pull steps");
-
-        foreach (var step in pullSteps.Where(step => !selectedResources.Contains(step.Resource!)))
-        {
-            step.RequiredBySteps.RemoveAll(requiredBy =>
-                string.Equals(requiredBy, PullStepName, StringComparison.Ordinal));
-        }
-    }
-
     internal static async Task<(string RemoteImage, string LocalImage)> ResolveImageReferencesAsync(
         IResource resource,
         CancellationToken cancellationToken)
@@ -150,65 +105,107 @@ internal static class ModuleImagePullPipeline
         return (resolved.PullReference, resolved.Reference);
     }
 
-    private static Task PullAsync(IResource resource, PipelineStepContext context) =>
-        PullAsync(
-            resource,
-            context,
-            ContainerRuntimeResolver.ResolveAsync,
-            ExecuteRuntimeAsync);
+    private static async Task PullAsync(IResource resource, PipelineStepContext context)
+    {
+        var timeout = context.Services
+            .GetRequiredService<IOptions<ModularAppHostsOptions>>()
+            .Value.ImageTransferTimeout;
+        var runtime = await context.Services
+            .GetRequiredService<IContainerRuntimeResolver>()
+            .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
+        await ModuleOperationTimeout.RunAsync(
+            token => PullAsync(
+                resource,
+                context,
+                _ => Task.FromResult(
+                    ModuleImageRecipeOperations.GetContainerRuntimeExecutableName(runtime.Name)),
+                ExecuteRuntimeAsync,
+                (source, target, cancellationToken) =>
+                    runtime.TagImageAsync(source, target, cancellationToken),
+                token),
+            timeout,
+            $"Image pull for resource '{resource.Name}'",
+            context.CancellationToken).ConfigureAwait(false);
+    }
 
     internal static async Task PullAsync(
         IResource resource,
         PipelineStepContext context,
         Func<CancellationToken, Task<string>> resolveRuntimeAsync,
-        Func<string, IReadOnlyList<string>, PipelineStepContext, Task> executeRuntimeAsync)
+        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, CancellationToken, Task> executeRuntimeAsync,
+        Func<string, string, CancellationToken, Task> tagImageAsync,
+        CancellationToken operationCancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(resolveRuntimeAsync);
         ArgumentNullException.ThrowIfNull(executeRuntimeAsync);
+        ArgumentNullException.ThrowIfNull(tagImageAsync);
 
+        var cancellationToken = operationCancellationToken.CanBeCanceled
+            ? operationCancellationToken
+            : context.CancellationToken;
         var (remoteImage, localImage) = await ResolveImageReferencesAsync(
             resource,
-            context.CancellationToken).ConfigureAwait(false);
-        var runtime = await resolveRuntimeAsync(context.CancellationToken)
+            cancellationToken).ConfigureAwait(false);
+        var runtime = await resolveRuntimeAsync(cancellationToken)
             .ConfigureAwait(false);
         var resourceLogger = context.Services
             .GetRequiredService<ResourceLoggerService>()
             .GetLogger(resource);
 
         LogImagePullStarted(context.Logger, remoteImage, resource.Name, null);
-        LogImagePullStarted(resourceLogger, remoteImage, resource.Name, null);
 
         await executeRuntimeAsync(
             runtime,
             ["pull", remoteImage],
-            context).ConfigureAwait(false);
+            context,
+            resourceLogger,
+            cancellationToken).ConfigureAwait(false);
         if (!string.Equals(remoteImage, localImage, StringComparison.Ordinal))
         {
             LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
-            LogImageRetagStarted(resourceLogger, remoteImage, localImage, resource.Name, null);
-            await executeRuntimeAsync(
-                runtime,
-                ["tag", remoteImage, localImage],
-                context).ConfigureAwait(false);
+            await tagImageAsync(
+                remoteImage,
+                localImage,
+                cancellationToken).ConfigureAwait(false);
             LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
-            LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }
     }
 
-    private static async Task ExecuteRuntimeAsync(
+    internal static async Task ExecuteRuntimeAsync(
         string runtime,
         IReadOnlyList<string> arguments,
-        PipelineStepContext context)
+        PipelineStepContext context,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
     {
-        await CliCommand.Wrap(runtime)
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(resourceLogger);
+
+        var result = await CliCommand.Wrap(runtime)
             .WithArguments(arguments)
+            .WithValidation(CommandResultValidation.None)
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    runtime,
+                    line,
+                    null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeError(context.Logger, runtime, line, null)))
-            .ExecuteAsync(context.CancellationToken)
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    runtime,
+                    line,
+                    null)))
+            .ExecuteAsync(cancellationToken)
             .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Container runtime '{runtime}' failed with exit code {result.ExitCode}.");
+        }
     }
 }

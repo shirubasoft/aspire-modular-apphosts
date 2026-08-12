@@ -16,6 +16,9 @@
     <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Producer.AppHost/Spire.Producer.AppHost.csproj" />
   </Folder>
+  <Folder Name="/samples/RemoteInitialization/">
+    <Project Path="samples/RemoteInitialization/RemoteInitialization.AppHost.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj" />
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />
@@ -27,11 +30,14 @@
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tool.Tests/Aspire.Hosting.ModularAppHosts.Tool.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
+    <Project Path="tests/Spire.MultiRepo.E2E.Support/Spire.MultiRepo.E2E.Support.csproj" />
+    <Project Path="tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj" />
   </Folder>
   <Folder Name="/templates/">
     <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/ModularSamples.Tests/ModularSamples.Tests.csproj" />
     <Project Path="samples/ModuleContract/ModularSample.ModuleContract.csproj" />
     <Project Path="samples/AppHostA/Api/ModularSample.Api.csproj" />
     <Project Path="samples/AppHostA/ModularSample.AppHostA.csproj" />

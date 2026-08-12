@@ -2,7 +2,6 @@ using Aspire.Hosting;
 using Spire.ModuleContract;
 
 var builder = DistributedApplication.CreateBuilder(args);
-builder.BuildModuleImages();
 
-await builder.ImportSpireModuleAsync();
+builder.ImportSpireModule();
 await builder.Build().RunAsync();

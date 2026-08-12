@@ -55,7 +55,7 @@ internal sealed class DistributedApplicationModuleBuilder(
     public IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
-        ModuleContainerExportOptions imagePublishOptions)
+        ModuleImageCommandOptions imagePublishOptions)
         where TResource : ContainerResource
     {
         ArgumentNullException.ThrowIfNull(imagePublishOptions);
@@ -68,7 +68,7 @@ internal sealed class DistributedApplicationModuleBuilder(
     private DistributedApplicationModuleBuilder AddResourceCore<TResource>(
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
-        ModuleContainerExportOptions? imagePublishOptions)
+        ModuleImageCommandOptions? imagePublishOptions)
         where TResource : IResource
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -185,31 +185,29 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
 
     public IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         string imageName,
-        string publishCommand,
-        IReadOnlyList<string> publishArguments,
         Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null)
     {
-        ArgumentNullException.ThrowIfNull(publishArguments);
-        return ExportAsContainer(
-            new ModuleContainerExportOptions(imageName, publishCommand, publishArguments.ToArray()),
-            configureContainer);
-    }
-
-    public IDistributedApplicationModuleProjectBuilder ExportAsContainer(
-        ModuleContainerExportOptions options,
-        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null)
-    {
-        project.SetExport(new ModuleContainerExport(CopyOptions(options), configureContainer));
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageName);
+        project.SetExport(new ModuleContainerExport(imageName.Trim(), CommandOptions: null, configureContainer));
         return this;
     }
 
-    internal static ModuleContainerExportOptions CopyOptions(ModuleContainerExportOptions options)
+    public IDistributedApplicationModuleProjectBuilder ExportAsContainerWithCommand(
+        ModuleImageCommandOptions options,
+        Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null)
+    {
+        var copiedOptions = CopyOptions(options);
+        project.SetExport(new ModuleContainerExport(copiedOptions.ImageName, copiedOptions, configureContainer));
+        return this;
+    }
+
+    internal static ModuleImageCommandOptions CopyOptions(ModuleImageCommandOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.PublishCommand);
 
-        return new ModuleContainerExportOptions(
+        return new ModuleImageCommandOptions(
             options.ImageName,
             options.PublishCommand,
             options.PublishArguments.ToArray())
@@ -239,11 +237,13 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
     }
 
     public IDistributedApplicationModuleContainerBuilder WithImagePublishCommand(
-        ModuleContainerExportOptions options)
+        ModuleImageCommandOptions options)
     {
         var copiedOptions = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
         var imageRepository = ModuleImageReference.GetRepository(copiedOptions);
-        if (!string.Equals(container.Image, imageRepository, StringComparison.Ordinal) ||
+        var imageMatches = string.Equals(container.Image, copiedOptions.ImageName, StringComparison.Ordinal) ||
+            string.Equals(container.Image, imageRepository, StringComparison.Ordinal);
+        if (!imageMatches ||
             (!string.IsNullOrWhiteSpace(copiedOptions.ImageTag) &&
                 !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal)))
         {

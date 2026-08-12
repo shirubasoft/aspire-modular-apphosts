@@ -1,0 +1,179 @@
+#pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES003
+#pragma warning disable ASPIREPIPELINES004
+
+using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace Aspire.Hosting;
+
+internal static class ModuleImageWorkflowPipeline
+{
+    internal const string StepName = "workflow-images";
+
+    private static readonly Action<ILogger, string, string, Exception?> LogImage =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Information,
+            new EventId(1, nameof(LogImage)),
+            "Workflow image {Resource}: {Reference}.");
+
+    private static readonly Action<ILogger, string, Exception?> LogOutput =
+        LoggerMessage.Define<string>(
+            LogLevel.Information,
+            new EventId(2, nameof(LogOutput)),
+            "Wrote the module image workflow document to {Path}.");
+
+    public static void Configure(IDistributedApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
+        var workflowStep = new PipelineStep
+        {
+            Name = StepName,
+            Description = "Pushes selected module images and writes their resolved remote identities.",
+            Action = context => WriteAsync(context, workflow.Selection)
+        };
+        builder.Pipeline.AddStep(workflowStep);
+        builder.Pipeline.AddPipelineConfiguration(context =>
+        {
+            ConfigureSelectedDependencies(context.Steps, workflow, workflowStep);
+            return Task.CompletedTask;
+        });
+    }
+
+    internal static void ConfigureSelectedDependencies(
+        IReadOnlyList<PipelineStep> steps,
+        ModuleImageWorkflowOptions workflow,
+        PipelineStep workflowStep)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        ArgumentNullException.ThrowIfNull(workflow);
+        ArgumentNullException.ThrowIfNull(workflowStep);
+        var pushSteps = steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Resource.Annotations
+                    .OfType<DistributedApplicationModuleResourceAnnotation>()
+                    .Any() &&
+                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+            .ToArray();
+        AttachNativeValidationDependencies(steps, pushSteps);
+        var selectedResources = workflow.Selection.ResolveResources(
+            pushSteps.Select(step => step.Resource!),
+            "workflow image push steps");
+        workflow.ValidateSelectedResources(selectedResources);
+        foreach (var step in pushSteps.Where(step => selectedResources.Contains(step.Resource!)))
+        {
+            workflowStep.DependsOnSteps.Add(step.Name);
+        }
+    }
+
+    internal static void AttachNativeValidationDependencies(
+        IReadOnlyList<PipelineStep> steps,
+        IReadOnlyList<PipelineStep>? pushSteps = null)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        var imagePushSteps = pushSteps ?? steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+            .ToArray();
+        var nativeValidationSteps = steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Tags.Contains(ModuleNativeImageValidationPipeline.StepTag))
+            .ToDictionary(step => step.Resource!);
+        foreach (var pushStep in imagePushSteps.Where(step =>
+                     step.Resource!.Annotations
+                         .OfType<ModuleNativeImagePublisherAnnotation>()
+                         .Any()))
+        {
+            var validationStep = nativeValidationSteps[pushStep.Resource!];
+            if (!pushStep.DependsOnSteps.Contains(validationStep.Name, StringComparer.Ordinal))
+            {
+                pushStep.DependsOnSteps.Add(validationStep.Name);
+            }
+        }
+    }
+
+    internal static async Task<ModuleImageWorkflowDocument> CreateDocumentAsync(
+        IEnumerable<IResource> resources,
+        ModuleImageSelection selection,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resources);
+        ArgumentNullException.ThrowIfNull(selection);
+        var images = resources
+            .Select(resource => (
+                Resource: resource,
+                Module: resource.Annotations
+                    .OfType<DistributedApplicationModuleResourceAnnotation>()
+                    .LastOrDefault(),
+                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault(),
+                NativePublisher: resource.Annotations.OfType<ModuleNativeImagePublisherAnnotation>().LastOrDefault()))
+            .Where(item =>
+                item.Module is not null &&
+                (item.Publisher is not null || item.NativePublisher is not null) &&
+                ModuleEffectiveImageResolver.HasPushTarget(item.Resource))
+            .OrderBy(item => item.Module!.ModuleName, StringComparer.Ordinal)
+            .ThenBy(item => item.Module!.ResourceName, StringComparer.Ordinal)
+            .ToArray();
+        var selectedResources = selection.ResolveResources(
+            images.Select(item => item.Resource),
+            "workflow image publishers");
+
+        var document = new ModuleImageWorkflowDocument();
+        foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var usePreparedPublisherImage = item.Publisher?.TryGetPreparedImage(out _) == true;
+            var effective = await ModuleEffectiveImageResolver.ResolveAsync(
+                item.Resource,
+                cancellationToken,
+                usePreparedPublisherImage: usePreparedPublisherImage).ConfigureAwait(false);
+            var remote = effective.PushImage ?? throw new InvalidOperationException(
+                $"Resource '{item.Resource.Name}' does not resolve to a complete remote image identity.");
+            document.Images.Add(new ModuleImageWorkflowEntry
+            {
+                Module = item.Module!.ModuleName,
+                Resource = item.Module.ResourceName,
+                ResourceKind = item.Publisher?.ResourceKind ?? item.NativePublisher!.ResourceKind,
+                Registry = remote.Registry,
+                Repository = remote.Repository,
+                Tag = remote.Tag
+            });
+        }
+
+        document.Validate();
+        return document;
+    }
+
+    private static async Task WriteAsync(
+        PipelineStepContext context,
+        ModuleImageSelection selection)
+    {
+        var document = await CreateDocumentAsync(
+            context.Model.Resources,
+            selection,
+            context.CancellationToken).ConfigureAwait(false);
+        if (document.Images.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The AppHost does not expose any publishable module images.");
+        }
+
+        var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
+        var path = Path.Combine(output, ModuleImageWorkflowDocument.DefaultFileName);
+        await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);
+        foreach (var image in document.Images)
+        {
+            LogImage(context.Logger, $"{image.Module}/{image.Resource}", image.Reference, null);
+        }
+
+        LogOutput(context.Logger, path, null);
+    }
+}

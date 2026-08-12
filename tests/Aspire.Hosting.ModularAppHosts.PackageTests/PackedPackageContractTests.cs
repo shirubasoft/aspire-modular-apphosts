@@ -155,7 +155,7 @@ public sealed class PackedPackageContractTests
 
         var help = await RunCommandAsync(
             executable,
-            ["manifest", "--help"],
+            ["images", "--help"],
             toolPath,
             TestContext.Current.CancellationToken);
 
@@ -169,7 +169,7 @@ public sealed class PackedPackageContractTests
             TestContext.Current.CancellationToken);
         Assert.True(workflowHelp.IsSuccess, workflowHelp.StandardError);
         Assert.Contains("--repository", workflowHelp.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains("--manifest", workflowHelp.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("--workflow-document", workflowHelp.StandardOutput, StringComparison.Ordinal);
 
         var probeProject = Path.Combine(toolPath, "EnvironmentProbe.proj");
         await File.WriteAllTextAsync(
@@ -184,14 +184,14 @@ public sealed class PackedPackageContractTests
             </Project>
             """,
             TestContext.Current.CancellationToken);
-        const string manifest =
+        const string workflowDocument =
             "{\"schemaVersion\":1,\"images\":[{\"module\":\"orders\",\"resource\":\"api\"," +
             "\"resourceKind\":\"project\",\"registry\":\"registry.example.test\"," +
             "\"repository\":\"acme/orders\",\"tag\":\"candidate\",\"digest\":null}]}";
         var apply = await RunCommandAsync(
             executable,
             [
-                "manifest", "apply", "--json", manifest,
+                "images", "apply", "--json", workflowDocument,
                 "--", "dotnet", "msbuild", probeProject,
                 "-target:PrintManifestConfiguration", "-verbosity:minimal", "-nologo"
             ],
@@ -214,7 +214,7 @@ public sealed class PackedPackageContractTests
         Assert.Contains("## Repo B: publish images", readme, StringComparison.Ordinal);
         Assert.Contains("## Repo A: apply images", readme, StringComparison.Ordinal);
         Assert.Contains("workflow dispatch", readme, StringComparison.Ordinal);
-        Assert.Contains("## Manifest contract", readme, StringComparison.Ordinal);
+        Assert.Contains("## Module image workflow document contract", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("Define an Aspire resource graph once", readme, StringComparison.Ordinal);
     }
 
@@ -260,11 +260,12 @@ public sealed class PackedPackageContractTests
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
                     module.AddProject("orders-api", "Orders.Api.csproj", ModuleProjectPathBase.Repository)
-                        .ExportAsContainer("orders-api", "dotnet", ["publish"]);
+                        .ExportAsContainerWithCommand(
+                            new ModuleImageCommandOptions("orders-api", "dotnet", "publish"));
                     module.AddResource<ContainerResource>(
                         "orders-database",
                         context => context.ApplicationBuilder.AddContainer(context.ResourceName, "database"),
-                        new ModuleContainerExportOptions("orders-database", "dotnet", "publish")
+                        new ModuleImageCommandOptions("orders-database", "dotnet", "publish")
                         {
                             ProducedImageReference = "orders-database:legacy",
                             PullBeforeBuild = true
@@ -276,24 +277,23 @@ public sealed class PackedPackageContractTests
             {
                 public static System.Type GeneratedModuleType => typeof(OrdersModule.Module);
 
-                public static System.Threading.Tasks.Task<OrdersModule.Module> ImportAsync(
+                public static OrdersModule.Module Import(
                     Aspire.Hosting.IDistributedApplicationBuilder builder) =>
-                    builder.ImportOrdersModuleAsync();
+                    builder.ImportOrdersModule();
 
-                public static ModularAppHostsOptions AutoCloneOptions => new()
+                public static ModularAppHostsOptions InitializationOptions => new()
                 {
-                    AutoCloneRepositories = true,
+                    UpdateRepositoriesOnInitialize = true,
                     GitHubCliPath = "gh"
                 };
 
                 public static DistributedApplicationModuleOptions ModuleOptions => new()
                 {
-                    AutoCloneRepository = true
+                    UpdateRepositoryOnInitialize = true
                 };
 
-                public static System.Threading.Tasks.Task<string> ResolveContainerRuntimeAsync(
-                    System.Threading.CancellationToken cancellationToken = default) =>
-                    ContainerRuntimeResolver.ResolveAsync(cancellationToken);
+                public static string ContainerRuntimePlaceholder =>
+                    ModuleImageCommandOptions.ContainerRuntimePlaceholder;
 
                 public static IResourceBuilder<IResourceWithEndpoints> GetApi(OrdersModule.Module module) =>
                     module.OrdersApi;

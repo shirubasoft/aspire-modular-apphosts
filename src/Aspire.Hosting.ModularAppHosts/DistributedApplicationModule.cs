@@ -72,7 +72,7 @@ internal sealed class DistributedApplicationModule(
         if (_materializedApplicationBuilder is null)
         {
             throw new InvalidOperationException(
-                $"Module '{Name}' has not been materialized. Await AddAsync(module) or ImportModuleAsync('{Name}') first.");
+                $"Module '{Name}' has not been materialized. Call AddModule(module) or ImportModule('{Name}') first.");
         }
 
         if (!_materializedResources.TryGetValue(name, out var resource))
@@ -96,6 +96,43 @@ internal sealed class DistributedApplicationModule(
     {
         _materializedApplicationBuilder = builder;
         _materializedResources[declaredName] = resource;
+    }
+
+    internal void Validate()
+    {
+        ValidateResourceDefinitions();
+
+        var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
+        foreach (var project in _projects)
+        {
+            if (project.PathBase == ModuleProjectPathBase.Repository)
+            {
+                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
+                    Repository,
+                    appHostDirectory);
+                continue;
+            }
+
+            var repositoryRoot = RepositoryIdentity.FindRepositoryRoot(project.ProjectPath);
+            var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
+                Repository,
+                appHostDirectory,
+                project.ProjectPath);
+
+            if (configuredRepositoryRoot is not null)
+            {
+                repositoryRoot = configuredRepositoryRoot;
+            }
+            else if (RepositoryIdentity.TryFindRepositoryRoot(repositoryRoot) is null &&
+                PathSafety.IsContainedBy(appHostDirectory, project.ProjectPath))
+            {
+                repositoryRoot = appHostDirectory;
+            }
+
+            project.SourceRepositoryRoot = repositoryRoot;
+        }
+
+        ValidateRepositoryRoots();
     }
 
     internal IResourceBuilder<TResource> GetResourceForCallback<TResource>(
@@ -126,10 +163,7 @@ internal sealed class DistributedApplicationModule(
         return _materializedApplicationBuilder!.CreateResourceBuilder(typedResource);
     }
 
-    internal async Task ValidateAsync(
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        CancellationToken cancellationToken)
+    private void ValidateResourceDefinitions()
     {
         if (_resources.Count == 0)
         {
@@ -142,49 +176,10 @@ internal sealed class DistributedApplicationModule(
             throw new InvalidOperationException(
                 $"Project '{notExported.Name}' in module '{Name}' must call ExportAsContainer().");
         }
+    }
 
-        var appHostDirectory = Path.GetFullPath(DefinitionApplicationBuilder.AppHostDirectory);
-        foreach (var project in _projects)
-        {
-            if (project.PathBase == ModuleProjectPathBase.Repository)
-            {
-                project.SourceRepositoryRoot = GetDefinitionRepositoryRoot(
-                    Repository,
-                    appHostDirectory);
-                continue;
-            }
-
-            var repositoryRoot = await RepositoryInspector.FindRepositoryRootAsync(
-                project.ProjectPath,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-            var configuredRepositoryRoot = await TryGetConfiguredLocalRepositoryRootAsync(
-                Repository,
-                appHostDirectory,
-                project.ProjectPath,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-
-            if (configuredRepositoryRoot is not null)
-            {
-                repositoryRoot = configuredRepositoryRoot;
-            }
-            else if (!await RepositoryInspector.IsGitRepositoryAsync(
-                    repositoryRoot,
-                    gitExecutablePath,
-                    repositoryCommandTimeout,
-                    requireSuccessfulInspection: true,
-                    cancellationToken).ConfigureAwait(false) &&
-                PathSafety.IsContainedBy(appHostDirectory, project.ProjectPath))
-            {
-                repositoryRoot = appHostDirectory;
-            }
-
-            project.SourceRepositoryRoot = repositoryRoot;
-        }
-
+    private string[] ValidateRepositoryRoots()
+    {
         var repositoryRoots = _projects
             .Select(project => project.SourceRepositoryRoot)
             .Where(repositoryRoot => repositoryRoot is not null)
@@ -198,14 +193,7 @@ internal sealed class DistributedApplicationModule(
                 $"All projects in module '{Name}' must belong to the same Git repository or source tree.");
         }
 
-        if (repositoryRoots.Length == 1)
-        {
-            Repository ??= await RepositoryInspector.TryGetRemoteAsync(
-                repositoryRoots[0],
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-        }
+        return repositoryRoots;
     }
 
     private static string? GetDefinitionRepositoryRoot(
@@ -213,7 +201,7 @@ internal sealed class DistributedApplicationModule(
         string appHostDirectory)
     {
         if (!string.IsNullOrWhiteSpace(repository) &&
-            !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+            !RepositoryIdentity.IsRemoteRepository(repository, appHostDirectory))
         {
             return Path.GetFullPath(repository, appHostDirectory);
         }
@@ -221,46 +209,22 @@ internal sealed class DistributedApplicationModule(
         return null;
     }
 
-    private static async Task<string?> TryGetConfiguredLocalRepositoryRootAsync(
+    private static string? TryGetConfiguredLocalRepositoryRoot(
         string? repository,
         string appHostDirectory,
-        string projectPath,
-        string gitExecutablePath,
-        TimeSpan repositoryCommandTimeout,
-        CancellationToken cancellationToken)
+        string projectPath)
     {
         if (string.IsNullOrWhiteSpace(repository))
         {
             return null;
         }
 
-        string candidate;
-        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+        if (RepositoryIdentity.IsRemoteRepository(repository, appHostDirectory))
         {
-            var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
-                appHostDirectory,
-                gitExecutablePath,
-                repositoryCommandTimeout,
-                cancellationToken).ConfigureAwait(false);
-            if (appHostRepositoryRoot is null)
-            {
-                return null;
-            }
-
-            var repositoryParent = Path.GetDirectoryName(appHostRepositoryRoot);
-            if (repositoryParent is null)
-            {
-                return null;
-            }
-
-            candidate = Path.Combine(
-                repositoryParent,
-                GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
+            return null;
         }
-        else
-        {
-            candidate = Path.GetFullPath(repository, appHostDirectory);
-        }
+
+        var candidate = Path.GetFullPath(repository, appHostDirectory);
 
         return PathSafety.IsContainedBy(candidate, projectPath)
             ? candidate
@@ -315,7 +279,8 @@ internal sealed class DistributedApplicationModuleProject(
 }
 
 internal sealed record ModuleContainerExport(
-    ModuleContainerExportOptions Options,
+    string ImageName,
+    ModuleImageCommandOptions? CommandOptions,
     Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer);
 
 internal sealed class DistributedApplicationModuleContainer(
@@ -333,9 +298,9 @@ internal sealed class DistributedApplicationModuleContainer(
 
     internal Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
 
-    internal ModuleContainerExportOptions? ImagePublishOptions { get; private set; }
+    internal ModuleImageCommandOptions? ImagePublishOptions { get; private set; }
 
-    internal void SetImagePublishOptions(ModuleContainerExportOptions options)
+    internal void SetImagePublishOptions(ModuleImageCommandOptions options)
     {
         if (ImagePublishOptions is not null)
         {
@@ -349,7 +314,7 @@ internal sealed class DistributedApplicationModuleContainer(
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
 {
-    ModuleContainerExportOptions? ImagePublishOptions { get; }
+    ModuleImageCommandOptions? ImagePublishOptions { get; }
 
     IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
@@ -359,7 +324,7 @@ internal interface IDistributedApplicationModuleFactoryResource : IDistributedAp
 internal sealed class DistributedApplicationModuleResource<TResource>(
     string name,
     Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
-    ModuleContainerExportOptions? imagePublishOptions)
+    ModuleImageCommandOptions? imagePublishOptions)
     : IDistributedApplicationModuleFactoryResource
     where TResource : IResource
 {
@@ -367,7 +332,7 @@ internal sealed class DistributedApplicationModuleResource<TResource>(
 
     public Type ResourceType => typeof(TResource);
 
-    public ModuleContainerExportOptions? ImagePublishOptions { get; } = imagePublishOptions;
+    public ModuleImageCommandOptions? ImagePublishOptions { get; } = imagePublishOptions;
 
     public IResource Materialize(
         IDistributedApplicationModuleResourceContext context,

@@ -12,35 +12,21 @@ public static partial class SpireModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        var options = module.GetOptions<SpireModuleOptions>().Value;
-        if (string.IsNullOrWhiteSpace(options.BuildRepository))
-        {
-            throw new InvalidOperationException(
-                $"Configure '{module.ConfigurationSection.Path}:BuildRepository'.");
-        }
-        if (string.IsNullOrWhiteSpace(options.DefinitionRepository))
-        {
-            throw new InvalidOperationException(
-                $"Configure '{module.ConfigurationSection.Path}:DefinitionRepository'.");
-        }
-
-        var image = string.IsNullOrWhiteSpace(options.ImageRegistry)
-            ? ImageName
-            : $"{options.ImageRegistry}/{ImageName}";
-        module.WithRepository(options.DefinitionRepository);
-        module.AddContainer(ApiResourceName, image)
-            .WithImagePublishCommand(new ModuleContainerExportOptions(
+        module.RequiresRepository();
+        module.AddContainer(ApiResourceName, ImageName)
+            .WithImagePublishCommand(new ModuleImageCommandOptions(
                 imageName: ImageName,
-                publishCommand: "bash",
+                publishCommand: ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 publishArguments:
                 [
-                    "build-image.sh",
-                    ModuleContainerExportOptions.ImageReferencePlaceholder
+                    "build",
+                    "--file",
+                    "Dockerfile",
+                    "--tag",
+                    ModuleImageCommandOptions.ImageReferencePlaceholder,
+                    "."
                 ])
             {
-                ImageRegistry = options.ImageRegistry,
-                BuildRepository = options.BuildRepository,
-                BuildRepositoryRevision = options.BuildRepositoryRevision,
                 WorkingDirectory = "."
             })
             .Configure((_, container) => container
@@ -48,15 +34,4 @@ public static partial class SpireModule
                 .WithExternalHttpEndpoints()
                 .WithHttpHealthCheck("/health.txt"));
     }
-}
-
-public sealed class SpireModuleOptions
-{
-    public string DefinitionRepository { get; set; } = string.Empty;
-
-    public string BuildRepository { get; set; } = string.Empty;
-
-    public string? BuildRepositoryRevision { get; set; }
-
-    public string? ImageRegistry { get; set; }
 }

@@ -5,6 +5,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -16,18 +17,18 @@ public sealed class ModuleImagePushPipelineTests
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var step = Assert.Single(await CreatePushStepsAsync(container));
@@ -40,19 +41,37 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Contains(WellKnownPipelineTags.PushContainerImage, step.Tags);
     }
 
+    [Theory]
+    [InlineData("Podman", "localhost:5000/acme/api:test", true)]
+    [InlineData("podman", "127.0.0.1:5000/acme/api:test", true)]
+    [InlineData("podman", "[::1]:5000/acme/api:test", true)]
+    [InlineData("podman", "registry.example.test/acme/api:test", false)]
+    [InlineData("docker", "localhost:5000/acme/api:test", false)]
+    public void Podman_disables_tls_verification_only_for_loopback_registry_pushes(
+        string runtime,
+        string reference,
+        bool disablesTls)
+    {
+        var arguments = ModuleImagePushPipeline.CreatePushArguments(runtime, reference);
+
+        Assert.Equal("push", arguments[0]);
+        Assert.Equal(reference, arguments[^1]);
+        Assert.Equal(disablesTls, arguments.Contains("--tls-verify=false"));
+    }
+
     [Fact]
     public async Task Declared_and_factory_created_image_publishers_contribute_push_steps()
     {
         using var repository = CreateProject();
         var builder = CreatePublishBuilder(repository.Path);
-        var module = await builder.ExportModuleAsync("assets", definition =>
+        var module = builder.ExportModule("assets", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer(
                     "declared-static",
                     "registry.example.test/assets/declared-static",
                     "candidate")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "assets/declared-static",
                     "docker",
                     "build")
@@ -63,14 +82,14 @@ public sealed class ModuleImagePushPipelineTests
             definition.AddResource<ContainerResource>(
                 "factory-static",
                 context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                new ModuleContainerExportOptions("assets/factory-static", "docker", "build")
+                new ModuleImageCommandOptions("assets/factory-static", "docker", "build")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
                 });
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var containers = builder.Resources.OfType<ContainerResource>().ToArray();
         Assert.Equal(2, containers.Length);
@@ -90,12 +109,12 @@ public sealed class ModuleImagePushPipelineTests
             "registry",
             "registry.example.test",
             "acme");
-        var module = await builder.ExportModuleAsync("orders", definition =>
+        var module = builder.ExportModule("orders", definition =>
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(
-                    new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                     {
                         ImageTag = "local"
                     },
@@ -105,7 +124,7 @@ public sealed class ModuleImagePushPipelineTests
                         .WithRemoteImageTag("candidate"));
         });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
 
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var registryAnnotation = Assert.Single(
@@ -130,6 +149,46 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public async Task Publisher_supplies_remote_defaults_to_aspires_push_options()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "acme");
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddProject("orders-api", GetProjectPath(repository.Path))
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("services/orders", "dotnet", "publish")
+                    {
+                        ImageTag = "candidate"
+                    },
+                    (_, container) => container.WithContainerRegistry(registry));
+        });
+
+        builder.AddModule(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var pushOptions = new ContainerImagePushOptions();
+        var context = new ContainerImagePushOptionsCallbackContext
+        {
+            Resource = container,
+            Options = pushOptions,
+            CancellationToken = TestContext.Current.CancellationToken
+        };
+        foreach (var annotation in container.Annotations.OfType<ContainerImagePushOptionsCallbackAnnotation>())
+        {
+            await annotation.Callback(context);
+        }
+
+        Assert.Equal("services/orders", pushOptions.RemoteImageName);
+        Assert.Equal("candidate", pushOptions.RemoteImageTag);
+    }
+
+    [Fact]
     public async Task Clean_publisher_resolves_a_branch_alias_in_the_remote_repository()
     {
         var resource = await CreateBranchAliasResourceAsync("feature-orders", repositoryDirty: false);
@@ -151,6 +210,33 @@ public sealed class ModuleImagePushPipelineTests
         var alias = ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved);
 
         Assert.Equal("registry.example.test/acme/orders-api:feature-orders", alias);
+    }
+
+    [Fact]
+    public async Task Detached_clean_AppHost_source_uses_its_configured_CI_branch_alias()
+    {
+        var resource = await CreateBranchAliasResourceAsync(
+            branchImageTag: null,
+            repositoryDirty: false,
+            detachedBranchAlias: "pull-request/orders");
+        var resolved = new ModuleEffectiveImage(
+            "orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            "registry.example.test/acme/orders-api:candidate",
+            ModuleImagePushTargetKind.ContainerRuntime,
+            null,
+            "orders-api",
+            "candidate",
+            null,
+            new ModuleRemoteImage(
+                "registry.example.test",
+                "acme/orders-api",
+                "candidate",
+                "registry.example.test/acme/orders-api:candidate"));
+
+        var alias = ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved);
+
+        Assert.Equal("registry.example.test/acme/orders-api:pull-request-orders", alias);
     }
 
     [Theory]
@@ -182,217 +268,6 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Null(ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved));
     }
 
-    [Fact]
-    public void Push_arguments_scope_the_pipeline_to_named_resources()
-    {
-        var selection = ModuleImagePushPipeline.GetSelection(
-        [
-            "--operation",
-            "publish",
-            "--step",
-            "push",
-            "--log-level",
-            "debug",
-            "orders-api",
-            "orders-worker"
-        ]);
-
-        Assert.True(selection.IsScoped);
-        Assert.True(selection.Includes("orders-api"));
-        Assert.True(selection.Includes("ORDERS-WORKER"));
-        Assert.False(selection.Includes("catalog-api"));
-    }
-
-    [Fact]
-    public void Push_arguments_accept_explicit_module_and_resource_selectors()
-    {
-        var selection = ModuleImagePushPipeline.GetSelection(
-        [
-            "--operation",
-            "publish",
-            "--step",
-            "push",
-            "module:orders",
-            "resource:catalog-api"
-        ]);
-
-        Assert.Collection(
-            selection.Selectors.OrderBy(selector => selector.Kind),
-            selector =>
-            {
-                Assert.Equal(ModuleImageSelectorKind.Resource, selector.Kind);
-                Assert.Equal("catalog-api", selector.Name);
-            },
-            selector =>
-            {
-                Assert.Equal(ModuleImageSelectorKind.Module, selector.Kind);
-                Assert.Equal("orders", selector.Name);
-            });
-    }
-
-    [Fact]
-    public void Push_without_resource_arguments_keeps_all_push_steps()
-    {
-        var selection = ModuleImagePushPipeline.GetSelection(
-        [
-            "--operation",
-            "publish",
-            "--step=push",
-            "--output-path",
-            "artifacts",
-            "--include-exception-details",
-            "true"
-        ]);
-
-        Assert.False(selection.IsScoped);
-        Assert.True(selection.Includes("orders-api"));
-    }
-
-    [Fact]
-    public void Resource_arguments_for_another_step_do_not_scope_push_steps()
-    {
-        var selection = ModuleImagePushPipeline.GetSelection(
-            ["--operation", "publish", "--step", "deploy", "orders-api"]);
-
-        Assert.False(selection.IsScoped);
-    }
-
-    [Fact]
-    public void Scoped_push_detaches_unselected_resource_steps_from_the_push_aggregate()
-    {
-        var apiStep = CreatePushStep("orders-api");
-        var workerStep = CreatePushStep("orders-worker");
-
-        ModuleImagePushPipeline.ApplySelection(
-            [apiStep, workerStep],
-            new ModuleImageSelection(["orders-api"]));
-
-        Assert.Contains(WellKnownPipelineSteps.Push, apiStep.RequiredBySteps);
-        Assert.DoesNotContain(WellKnownPipelineSteps.Push, workerStep.RequiredBySteps);
-        Assert.True(workerStep.Resource!.IsExcludedFromPublish());
-    }
-
-    [Fact]
-    public void Scoped_push_only_reaches_the_matching_module_build_dependency()
-    {
-        var apiStep = CreatePushStep("orders-api");
-        var workerStep = CreatePushStep("orders-worker");
-
-        ModuleImagePushPipeline.ApplySelection(
-            [apiStep, workerStep],
-            new ModuleImageSelection(["orders-api"]));
-
-        var reachableBuildSteps = new[] { apiStep, workerStep }
-            .Where(step => step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
-            .SelectMany(step => step.DependsOnSteps)
-            .Where(step => step.StartsWith("build-", StringComparison.Ordinal))
-            .ToArray();
-        Assert.Equal(["build-orders-api"], reachableBuildSteps);
-    }
-
-    [Fact]
-    public void Module_selector_includes_every_owned_publisher_and_deduplicates_mixed_selection()
-    {
-        var apiStep = CreatePushStep("orders-api", "orders", "api");
-        var workerStep = CreatePushStep("orders-worker", "orders", "worker");
-        var catalogStep = CreatePushStep("catalog-api", "catalog", "api");
-
-        ModuleImagePushPipeline.ApplySelection(
-            [apiStep, workerStep, catalogStep],
-            new ModuleImageSelection(["module:orders", "orders-api"]));
-
-        Assert.Contains(WellKnownPipelineSteps.Push, apiStep.RequiredBySteps);
-        Assert.Contains(WellKnownPipelineSteps.Push, workerStep.RequiredBySteps);
-        Assert.DoesNotContain(WellKnownPipelineSteps.Push, catalogStep.RequiredBySteps);
-    }
-
-    [Fact]
-    public void Plain_selectors_resolve_unambiguous_names_and_require_prefixes_for_collisions()
-    {
-        var collidingResource = CreatePushStep("orders", "catalog", "orders");
-        var moduleResource = CreatePushStep("orders-worker", "orders", "worker");
-
-        var ambiguous = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImagePushPipeline.ApplySelection(
-                [collidingResource, moduleResource],
-                new ModuleImageSelection(["orders"])));
-        Assert.Contains("ambiguous", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
-
-        ModuleImagePushPipeline.ApplySelection(
-            [collidingResource, moduleResource],
-            new ModuleImageSelection(["resource:orders"]));
-
-        Assert.Contains(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
-        Assert.DoesNotContain(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
-
-        collidingResource = CreatePushStep("orders", "catalog", "orders");
-        moduleResource = CreatePushStep("orders-worker", "orders", "worker");
-        ModuleImagePushPipeline.ApplySelection(
-            [collidingResource, moduleResource],
-            new ModuleImageSelection(["module:orders"]));
-
-        Assert.DoesNotContain(WellKnownPipelineSteps.Push, collidingResource.RequiredBySteps);
-        Assert.Contains(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
-
-        moduleResource = CreatePushStep("orders-worker", "orders", "worker");
-        ModuleImagePushPipeline.ApplySelection(
-            [moduleResource],
-            new ModuleImageSelection(["orders"]));
-        Assert.Contains(WellKnownPipelineSteps.Push, moduleResource.RequiredBySteps);
-    }
-
-    [Fact]
-    public void Scoped_push_rejects_resources_without_a_push_step()
-    {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImagePushPipeline.ApplySelection(
-                [CreatePushStep("orders-api")],
-                new ModuleImageSelection(["missing-api"])));
-
-        Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Available modules", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Unknown_module_selector_lists_available_resources_and_modules()
-    {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImagePushPipeline.ApplySelection(
-                [CreatePushStep("orders-api", "orders", "api")],
-                new ModuleImageSelection(["module:catalog"])));
-
-        Assert.Contains("module:catalog", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("orders", exception.Message, StringComparison.Ordinal);
-    }
-
-    private static PipelineStep CreatePushStep(
-        string resourceName,
-        string? moduleName = null,
-        string? declaredResourceName = null)
-    {
-        var resource = new ContainerResource(resourceName);
-        if (moduleName is not null)
-        {
-            resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
-                moduleName,
-                declaredResourceName ?? resourceName,
-                "/work",
-                imported: true));
-        }
-
-        return new PipelineStep
-        {
-            Name = $"push-{resourceName}",
-            Action = _ => Task.CompletedTask,
-            DependsOnSteps = [$"build-{resourceName}"],
-            RequiredBySteps = [WellKnownPipelineSteps.Push],
-            Tags = [WellKnownPipelineTags.PushContainerImage],
-            Resource = resource
-        };
-    }
-
     private static async Task<IReadOnlyList<PipelineStep>> CreatePushStepsAsync(IResource resource)
     {
         var steps = new List<PipelineStep>();
@@ -412,28 +287,50 @@ public sealed class ModuleImagePushPipelineTests
 
     private static async Task<ContainerResource> CreateBranchAliasResourceAsync(
         string? branchImageTag,
-        bool repositoryDirty)
+        bool repositoryDirty,
+        string? detachedBranchAlias = null)
     {
         var resource = new ContainerResource("orders-api");
-        var options = new ModuleContainerExportOptions("orders-api", "docker", "build")
+        var options = new ModuleImageCommandOptions("orders-api", "docker", "build")
         {
             ImageTag = "candidate"
         };
-        var plan = await ModuleImagePublishPlan.CreateAsync(
-            options,
+        var recipe = new ModuleImageBuildRecipe(
+            new ModuleImageRecipeIdentity("orders", "api"),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                "https://example.test/orders.git",
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2),
+                detachedBranchAlias),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
+        var sourceState = new ModuleImageSourceState(
+            branchImageTag,
+            "abcdef012345",
             repositoryDirty,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
-        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
-            "orders",
-            "api",
+            repositoryDirty ? "DIRTY" : "CLEAN");
+        var plan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        var prepared = new ModulePreparedImage(
+            plan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            sourceState,
+            ModuleImagePreparationDisposition.Built);
+        var publisher = new ModuleImagePublisherAnnotation(
             ModuleResourceKind.Container,
-            options,
-            plan,
-            "/work",
-            "https://example.test/orders.git",
-            null,
-            branchImageTag));
+            recipe,
+            (_, _, _, _) => Task.FromResult(prepared));
+        resource.Annotations.Add(publisher);
+        await publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
         return resource;
     }
 

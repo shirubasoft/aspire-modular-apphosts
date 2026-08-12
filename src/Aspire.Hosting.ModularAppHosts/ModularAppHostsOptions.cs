@@ -6,7 +6,7 @@ namespace Aspire.Hosting;
 /// <summary>Controls how exported modules are materialized by a receiving AppHost.</summary>
 /// <remarks>
 /// Values are loaded from <c>Aspire:ModularAppHosts</c>. Configure these options before calling
-/// <c>AddAsync</c> or <c>ImportModuleAsync</c> because they shape the Aspire application model.
+/// <c>AddModule</c> or <c>ImportModule</c> because they shape the Aspire application model.
 /// </remarks>
 public sealed class ModularAppHostsOptions
 {
@@ -14,21 +14,8 @@ public sealed class ModularAppHostsOptions
     public const string ConfigurationSectionName = "Aspire:ModularAppHosts";
 
     /// <summary>
-    /// Gets or sets the parent directory for managed repository checkouts. When omitted,
-    /// <c>&lt;AppHost&gt;/.aspire/module-repositories</c> is used. Repository materialization creates
-    /// MSBuild boundary files in this directory while external-image-only modules leave it untouched.
-    /// </summary>
-    public string? RepositoryBasePath { get; set; }
-
-    /// <summary>
-    /// Gets or sets whether missing module repositories are cloned beside the current AppHost Git repository.
-    /// This opt-in convention uses the GitHub CLI and does not apply to modules in the AppHost repository.
-    /// </summary>
-    public bool AutoCloneRepositories { get; set; }
-
-    /// <summary>
-    /// Gets or sets the GitHub CLI executable used by GitHub repository clones and as the process-scoped credential
-    /// helper for authenticated Git operations.
+    /// Gets or sets the GitHub CLI executable used as the process-scoped credential provider for authenticated
+    /// GitHub HTTPS operations.
     /// </summary>
     public string GitHubCliPath { get; set; } = "gh";
 
@@ -38,14 +25,22 @@ public sealed class ModularAppHostsOptions
     /// <summary>Gets or sets the maximum duration of one repository CLI command.</summary>
     public TimeSpan RepositoryCommandTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
-    /// <summary>Gets or sets whether existing clean imported repositories are fast-forwarded before startup.</summary>
-    public bool UpdateImportedRepositories { get; set; } = true;
+    /// <summary>Gets or sets the maximum duration of one module image build command.</summary>
+    public TimeSpan ImageBuildTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Gets or sets the maximum duration of one image pull, push, or tag operation.</summary>
+    public TimeSpan ImageTransferTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Gets or sets whether clean unpinned repositories are fast-forwarded by <c>aspire do initialize</c>.</summary>
+    public bool UpdateRepositoriesOnInitialize { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether image preparation may fetch and fast-forward clean unpinned build repositories during run.
+    /// </summary>
+    public bool RefreshBuildRepositoriesOnRun { get; set; }
 
     /// <summary>Gets or sets how exported projects run in Aspire run mode.</summary>
     public ModuleProjectMode ProjectMode { get; set; } = ModuleProjectMode.Auto;
-
-    /// <summary>Gets or sets whether declared image publish commands may run in Aspire run mode.</summary>
-    public bool PublishImages { get; set; }
 
     /// <summary>Gets module-specific overrides keyed by module name.</summary>
     public IDictionary<string, DistributedApplicationModuleOptions> Modules { get; } =
@@ -62,6 +57,68 @@ public sealed class ModularAppHostsOptions
         Modules.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
 }
 
+internal sealed class ModularAppHostsOptionsModel
+{
+    private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
+    private bool _frozen;
+
+    public ModularAppHostsOptions ConfigureAndCreatePreview(
+        Action<ModularAppHostsOptions> configure,
+        IConfiguration configuration,
+        Action<ModularAppHostsOptions> validate)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(validate);
+        if (_frozen)
+        {
+            throw new InvalidOperationException(
+                "Configure modular AppHost options before defining or materializing modules.");
+        }
+
+        _configurations.Add(configure);
+        try
+        {
+            var preview = CreateSnapshot(configuration);
+            validate(preview);
+            return preview;
+        }
+        catch
+        {
+            _configurations.RemoveAt(_configurations.Count - 1);
+            throw;
+        }
+    }
+
+    public void Apply(ModularAppHostsOptions options)
+    {
+        foreach (var configure in _configurations)
+        {
+            configure(options);
+        }
+    }
+
+    public ModularAppHostsOptions CreateSnapshot(IConfiguration configuration)
+    {
+        var options = ModularAppHostsOptions.FromConfiguration(configuration);
+        Apply(options);
+        PostConfigure(options);
+        return options;
+    }
+
+    public void Freeze() => _frozen = true;
+
+    public static void PostConfigure(ModularAppHostsOptions options)
+    {
+        options.GitExecutablePath = string.IsNullOrWhiteSpace(options.GitExecutablePath)
+            ? "git"
+            : options.GitExecutablePath.Trim();
+        options.GitHubCliPath = string.IsNullOrWhiteSpace(options.GitHubCliPath)
+            ? "gh"
+            : options.GitHubCliPath.Trim();
+    }
+}
+
 /// <summary>Overrides materialization behavior for one distributed application module.</summary>
 public sealed class DistributedApplicationModuleOptions
 {
@@ -74,19 +131,11 @@ public sealed class DistributedApplicationModuleOptions
     /// <summary>Gets or sets the branch, tag, or commit checked out for this module.</summary>
     public string? RepositoryRevision { get; set; }
 
-    /// <summary>
-    /// Gets or sets whether a missing repository for this module is cloned beside the AppHost repository.
-    /// </summary>
-    public bool? AutoCloneRepository { get; set; }
-
-    /// <summary>Gets or sets whether an existing clean checkout is fast-forwarded before startup.</summary>
-    public bool? UpdateRepository { get; set; }
+    /// <summary>Gets or sets whether this repository is fast-forwarded by <c>aspire do initialize</c>.</summary>
+    public bool? UpdateRepositoryOnInitialize { get; set; }
 
     /// <summary>Gets or sets how this module's exported projects run in Aspire run mode.</summary>
     public ModuleProjectMode? ProjectMode { get; set; }
-
-    /// <summary>Gets or sets whether image publish commands declared by this module may run.</summary>
-    public bool? PublishImages { get; set; }
 
     /// <summary>Gets project-specific overrides keyed by resource name.</summary>
     public IDictionary<string, DistributedApplicationModuleProjectOptions> Projects { get; } =
@@ -112,7 +161,7 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the explicit container registry host.</summary>
     public string? ImageRegistry { get; set; }
 
-    /// <summary>Gets or sets the image reference produced by a legacy publish command before final retagging.</summary>
+    /// <summary>Gets or sets the image reference produced by an advanced publish command before final retagging.</summary>
     public string? ProducedImageReference { get; set; }
 
     /// <summary>Gets or sets whether a missing clean image is pulled before its publish command runs.</summary>
@@ -138,7 +187,7 @@ public abstract class DistributedApplicationModuleImageOptions
 
     /// <summary>
     /// Gets or sets the Git repository containing this resource's image build inputs. This overrides the repository
-    /// declared by <see cref="ModuleContainerExportOptions.BuildRepository"/>.
+    /// declared by <see cref="ModuleImageCommandOptions.BuildRepository"/>.
     /// </summary>
     public string? BuildRepository { get; set; }
 
@@ -146,13 +195,9 @@ public abstract class DistributedApplicationModuleImageOptions
     public string? BuildRepositoryRevision { get; set; }
 
     /// <summary>
-    /// Gets or sets whether a missing build repository is cloned beside the AppHost repository instead of under the
-    /// managed repository base path.
+    /// Gets or sets whether image preparation may fetch and fast-forward this clean unpinned build repository.
     /// </summary>
-    public bool? AutoCloneBuildRepository { get; set; }
-
-    /// <summary>Gets or sets whether an existing clean build repository is updated before publishing.</summary>
-    public bool? UpdateBuildRepository { get; set; }
+    public bool? RefreshBuildRepositoryOnRun { get; set; }
 
     /// <summary>Gets or sets the container runtime image pull policy.</summary>
     public ImagePullPolicy? ImagePullPolicy { get; set; }

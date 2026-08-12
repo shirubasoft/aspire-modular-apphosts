@@ -1,0 +1,35 @@
+# Multi-repository E2E tests
+
+This xUnit project owns the MultiRepo sample's lifecycle and isolation validation. Both the checked-in
+AppHosts and the dynamically built isolated consumer run through `Aspire.Hosting.Testing`, which
+supplies resource health notifications, endpoint discovery, HTTP clients, random host ports, and
+async cleanup.
+
+The adjacent `Spire.MultiRepo.E2E.Support` executable handles the contracts that still require the
+real Aspire CLI: explicit initialization, fail-fast remediation commands, process isolation, and
+container-runtime selection. Normal isolated runs use the non-generic testing builder against the
+built fixture assembly. The support components are separated by responsibility:
+
+- `MultiRepositoryScenario` coordinates the behavior under test.
+- `AspireTestingAppHost` owns isolated AppHost lifecycle, health waits, endpoint discovery, clients,
+  and environment restoration.
+- `TrackedRepositoryFixture` copies only paths returned by `git ls-files`; it never recursively copies
+  a developer worktree.
+- `GitProxy` records each invocation and rejects every command shape outside the exact read-only
+  allowlist during normal run.
+- `RuntimeProxy` proves the executable selected through Aspire's container runtime resolver.
+- `ProcessExecutor` uses CliWrap with bounded cancellation and process-tree termination.
+- `FailureBundle` and cleanup/assertion components retain complete diagnostics.
+
+Run the full Docker-backed suite from the repository root:
+
+```bash
+dotnet tool restore
+MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
+  dotnet test tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj \
+  --configuration Release
+```
+
+Use `ASPIRE_CONTAINER_RUNTIME=podman` for local Podman coverage. CI validates Docker end to end. On
+failure, the support executable writes a bundle under `artifacts/e2e/multi-repo-failure`;
+CI uploads that directory without retaining the temporary repositories.

@@ -184,11 +184,9 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Install the pinned Aspire CLI
-        id: install-aspire
-        run: |
-          aspire_version="$(jq --raw-output '.tools["aspire.cli"].version' .config/dotnet-tools.json)"
-          dotnet tool install --global Aspire.Cli --version "$aspire_version"
+      - name: Restore the pinned Aspire CLI
+        id: restore-aspire
+        run: dotnet tool restore
 
       - name: Restore
         run: dotnet restore samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj
@@ -203,9 +201,9 @@ jobs:
         run: dotnet test samples/E2ETesting/EShop.E2E.Tests/EShop.E2E.Tests.csproj --configuration Release --no-build --no-restore
 
       - name: Emergency Docker Compose teardown
-        if: ${{ always() && steps.install-aspire.outcome == 'success' && (steps.compose-tests.outcome == 'failure' || steps.compose-tests.outcome == 'cancelled') }}
+        if: ${{ always() && steps.restore-aspire.outcome == 'success' && (steps.compose-tests.outcome == 'failure' || steps.compose-tests.outcome == 'cancelled') }}
         run: >-
-          aspire destroy
+          dotnet tool run aspire -- destroy
           --apphost samples/E2ETesting/EShop.E2E.AppHost/EShop.E2E.AppHost.csproj
           --output-path samples/E2ETesting/EShop.E2E.AppHost/aspire-output
           --environment CI
@@ -217,6 +215,7 @@ jobs:
     timeout-minutes: 30
     env:
       ASPIRE_CONTAINER_RUNTIME: docker
+      MODULAR_SAMPLES_E2E: true
 
     steps:
       - name: Check out repository
@@ -227,14 +226,13 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Restore the pinned Aspire CLI and sample graph
-        run: |
-          dotnet tool restore
-          dotnet restore Aspire.ModularAppHosts.slnx
+      - name: Restore the modular sample graph
+        run: dotnet restore samples/ModularSamples.Tests/ModularSamples.Tests.csproj
 
       - name: Start and validate both modular AppHosts
-        shell: bash
-        run: bash samples/test-modular-apphosts.sh
+        run: >-
+          dotnet test samples/ModularSamples.Tests/ModularSamples.Tests.csproj
+          --configuration Release --no-restore
 
   e2e-image-registry-pipelines:
     runs-on: ubuntu-latest
@@ -285,8 +283,8 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Install the pinned Aspire CLI
-        run: dotnet tool install --global Aspire.Cli --version 13.4.6
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
 
       - name: Restore the producer and consumer sample
         run: dotnet restore samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
@@ -306,28 +304,26 @@ jobs:
           --version 0.0.0-workflow-e2e
           Shirubasoft.Aspire.ModularAppHosts.Tool
 
-      - name: Publish Repo B images and emit the manifest
+      - name: Publish Repo B images and emit the workflow document
         id: publish-images
         run: >-
-          artifacts/workflow-tool/modular-apphosts manifest publish
+          artifacts/workflow-tool/modular-apphosts images publish
           --apphost samples/MultiRepoE2E/Spire.Producer.AppHost
-          --all
+          --resource multi-repo-api
           --tag workflow-e2e
-          --output artifacts/workflow-image-manifest.json
+          --output artifacts/module-image-workflow.json
 
       - name: Run Repo A E2E tests against the overridden image
         run: >-
-          artifacts/workflow-tool/modular-apphosts manifest apply
-          --file artifacts/workflow-image-manifest.json
+          artifacts/workflow-tool/modular-apphosts images apply
+          --file artifacts/module-image-workflow.json
           --
           dotnet test samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
           --configuration Release
 
   e2e-multi-repo:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      ASPIRE_CONTAINER_RUNTIME: docker
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -341,103 +337,67 @@ jobs:
       - name: Restore the pinned Aspire CLI
         run: dotnet tool restore
 
-      - name: Create isolated consumer and resource repositories
-        shell: bash
-        run: |
-          set -euo pipefail
-          multi_repo_root="$(mktemp -d "$RUNNER_TEMP/multi-repo-e2e.XXXXXX")"
-          package_version="0.0.0-multi-repo-e2e"
-          package_feed="$multi_repo_root/packages"
-          consumer_repository="$multi_repo_root/consumer"
-          resource_repository="$multi_repo_root/resource-build-source"
-          mkdir -p "$package_feed"
+      - name: Validate initialization and runtime repository policies
+        env:
+          ASPIRE_CONTAINER_RUNTIME: docker
+          MULTI_REPO_E2E: true
+        run: >-
+          dotnet test
+          tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj
+          --configuration Release
 
-          dotnet pack src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj \
-            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
-          dotnet pack samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj \
-            --configuration Release --output "$package_feed" -p:PackageVersion="$package_version"
+      - name: Upload multi-repository failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: multi-repository-e2e-failure
+          path: artifacts/e2e/multi-repo-failure
+          if-no-files-found: ignore
 
-          git clone --no-local "$GITHUB_WORKSPACE" "$consumer_repository"
-          mv "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract" \
-            "$multi_repo_root/producer-contract-source"
-          mv "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository" \
-            "$resource_repository"
-          test ! -e "$consumer_repository/samples/MultiRepoE2E/Spire.ModuleContract"
-          test ! -e "$consumer_repository/samples/MultiRepoE2E/ResourceBuildRepository"
+  e2e-remote-initialization-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-          git -C "$resource_repository" init --initial-branch main
-          git -C "$resource_repository" config user.name "MultiRepo E2E"
-          git -C "$resource_repository" config user.email "multi-repo@example.invalid"
-          git -C "$resource_repository" add .
-          git -C "$resource_repository" commit -m "Add pinned resource build"
-          resource_revision="$(git -C "$resource_repository" rev-parse HEAD)"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
 
-          printf '%s\n' 'multi-repo-resource-unpinned-latest' \
-            > "$resource_repository/marker.txt"
-          git -C "$resource_repository" add marker.txt
-          git -C "$resource_repository" commit -m "Change marker after pinned revision"
-          resource_latest_revision="$(git -C "$resource_repository" rev-parse HEAD)"
-          test "$resource_revision" != "$resource_latest_revision"
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
 
-          {
-            echo "MULTI_REPO_ROOT=$multi_repo_root"
-            echo "MULTI_REPO_APPHOST=$consumer_repository/samples/MultiRepoE2E/Spire.Consumer.AppHost"
-            echo "MULTI_REPO_RESOURCE_BUILD_REPOSITORY=$resource_repository"
-            echo "MULTI_REPO_RESOURCE_BUILD_REVISION=$resource_revision"
-            echo "MULTI_REPO_RESOURCE_LATEST_REVISION=$resource_latest_revision"
-            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepository=$resource_repository"
-            echo "Aspire__ModularAppHosts__Modules__multi-repo-resource-build__BuildRepositoryRevision=$resource_revision"
-            echo "SpireContractPackageVersion=$package_version"
-            echo "RestoreAdditionalProjectSources=$package_feed"
-          } >> "$GITHUB_ENV"
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
 
-      - name: Restore the isolated package consumer
-        run: dotnet restore "$MULTI_REPO_APPHOST"
+      - name: Restore the remote initialization sample
+        run: dotnet restore samples/RemoteInitialization/RemoteInitialization.AppHost.csproj
 
-      - name: Validate a real multi-repository AppHost
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet tool run aspire -- start --apphost "$MULTI_REPO_APPHOST" --format Json --non-interactive
-          trap 'dotnet tool run aspire -- stop --apphost "$MULTI_REPO_APPHOST" --non-interactive' EXIT
+      - name: Initialize the remote module repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          dotnet tool run aspire -- "do" initialize
+          --apphost samples/RemoteInitialization
+          --non-interactive
 
-          dotnet tool run aspire -- wait multi-repo-api \
-            --apphost "$MULTI_REPO_APPHOST" \
-            --timeout 180 \
-            --non-interactive
+      - name: Start the initialized sample
+        run: >-
+          dotnet tool run aspire -- start
+          --apphost samples/RemoteInitialization
+          --isolated
+          --non-interactive
 
-          mapfile -t managed_git_directories < <(
-            find "$MULTI_REPO_APPHOST/.aspire/module-repositories" \
-              -type d \
-              -name .git \
-              -print
-          )
-          if (( ${#managed_git_directories[@]} != 1 )); then
-            echo "Expected exactly one managed build repository checkout." >&2
-            exit 1
-          fi
-          build_checkout="${managed_git_directories[0]%/.git}"
-          actual_revision="$(git -C "$build_checkout" rev-parse HEAD)"
-          test "$actual_revision" = "$MULTI_REPO_RESOURCE_BUILD_REVISION"
-          test "$(git -C "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY" rev-parse HEAD)" = \
-            "$MULTI_REPO_RESOURCE_LATEST_REVISION"
-          test -z "$(git -C "$build_checkout" branch --show-current)"
+      - name: Wait for the initialized service
+        run: >-
+          dotnet tool run aspire -- wait notification-service
+          --apphost samples/RemoteInitialization
+          --timeout 120
+          --non-interactive
 
-          origin="$(git -C "$build_checkout" remote get-url origin)"
-          test "$(realpath "$origin")" = "$(realpath "$MULTI_REPO_RESOURCE_BUILD_REPOSITORY")"
-          test -n "$(docker image ls \
-            --filter 'reference=multi-repo-e2e-resource:*' \
-            --format '{{.Repository}}:{{.Tag}}')"
-
-          resource_url="$(
-            dotnet tool run aspire -- describe multi-repo-api \
-              --apphost "$MULTI_REPO_APPHOST" \
-              --format Json \
-              --non-interactive |
-              jq --raw-output '[.resources[].urls[] | select(.name == "http") | .url][0] // empty'
-          )"
-          test -n "$resource_url"
-          test "$(curl --fail --show-error --silent "${resource_url%/}/health.txt")" = \
-            "healthy-from-separate-build-repository"
-          test "$(curl --fail --show-error --silent "${resource_url%/}/marker.txt")" = \
-            "multi-repo-resource-pinned-revision"
+      - name: Stop the sample
+        if: always()
+        run: >-
+          dotnet tool run aspire -- stop
+          --apphost samples/RemoteInitialization
+          --non-interactive

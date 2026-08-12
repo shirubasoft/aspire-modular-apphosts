@@ -10,7 +10,6 @@ const string ProjectResourceName = "image-push-project";
 var builder = DistributedApplication.CreateBuilder(args);
 builder.UseModuleContainers();
 builder.AddDockerComposeEnvironment("compose");
-var containerRuntime = await ContainerRuntimeResolver.ResolveAsync();
 
 var registryEndpoint = builder.Configuration["ImagePush:RegistryEndpoint"];
 if (string.IsNullOrWhiteSpace(registryEndpoint))
@@ -25,7 +24,7 @@ var registry = builder.AddContainerRegistry(
     "image-push-registry",
     registryEndpoint,
     "image-push");
-var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush.Contract", definition =>
+var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract", definition =>
 {
     definition.WithRepository(builder.AppHostDirectory);
 
@@ -33,12 +32,12 @@ var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush
             "image-push-declared",
             $"{registryEndpoint}/image-push/declared",
             ImageTag)
-        .WithImagePublishCommand(new ModuleContainerExportOptions(
+        .WithImagePublishCommand(new ModuleImageCommandOptions(
             "image-push/declared",
-            containerRuntime,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,
@@ -57,13 +56,13 @@ var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush
     definition.AddProject(
             ProjectResourceName,
             Path.Combine(builder.AppHostDirectory, "ExportedProject", "ImagePush.ExportedProject.csproj"))
-        .ExportAsContainer(
-            new ModuleContainerExportOptions(
+        .ExportAsContainerWithCommand(
+            new ModuleImageCommandOptions(
                 ProjectResourceName,
-                containerRuntime,
+                ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 "build",
                 "--tag",
-                ModuleContainerExportOptions.ImageReferencePlaceholder,
+                ModuleImageCommandOptions.ImageReferencePlaceholder,
                 ".")
             {
                 ImageTag = ImageTag,
@@ -80,35 +79,46 @@ var module = await builder.ExportModuleAsync("image-push-e2e", "Sample.ImagePush
         context => context.ApplicationBuilder
             .AddContainer(context.ResourceName, "placeholder")
             .WithExplicitStart(),
-        new ModuleContainerExportOptions(
+        new ModuleImageCommandOptions(
             "image-push/factory",
-            containerRuntime,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,
             ImageTag = ImageTag,
             WorkingDirectory = "ImageFixture"
         });
+
+    definition.AddResource<ContainerResource>(
+        "image-push-dockerfile",
+        context => context.ApplicationBuilder
+            .AddDockerfile(
+                context.ResourceName,
+                Path.Combine(builder.AppHostDirectory, "ImageFixture"))
+            .WithContainerRegistry(registry)
+            .WithRemoteImageName("dockerfile")
+            .WithRemoteImageTag(ImageTag)
+            .WithExplicitStart());
 });
 
-await builder.AddAsync(module);
+builder.AddModule(module);
 
-var extraModule = await builder.ExportModuleAsync("image-push-extra", definition =>
+var extraModule = builder.ExportModule("image-push-extra", definition =>
 {
     definition.WithRepository(builder.AppHostDirectory);
     definition.AddContainer(
             "image-push-extra",
             $"{registryEndpoint}/image-push/extra",
             ImageTag)
-        .WithImagePublishCommand(new ModuleContainerExportOptions(
+        .WithImagePublishCommand(new ModuleImageCommandOptions(
             "image-push/extra",
-            containerRuntime,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,
@@ -118,9 +128,9 @@ var extraModule = await builder.ExportModuleAsync("image-push-extra", definition
         .Configure((_, container) => container.WithExplicitStart());
 });
 
-await builder.AddAsync(extraModule);
+builder.AddModule(extraModule);
 
-var contractOnlyModule = await builder.ExportModuleAsync(
+var contractOnlyModule = builder.ExportModule(
     "contract-only",
     "Sample.ContractOnly",
     definition => definition.AddResource<ParameterResource>(
@@ -130,5 +140,5 @@ var contractOnlyModule = await builder.ExportModuleAsync(
             "contract metadata without an image publisher",
             publishValueAsDefault: true)));
 
-await builder.AddAsync(contractOnlyModule);
+builder.AddModule(contractOnlyModule);
 await builder.Build().RunAsync();

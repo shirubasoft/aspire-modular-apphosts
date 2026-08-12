@@ -4,7 +4,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
-internal sealed class ManifestCommandService(
+internal sealed class ImageCommandService(
     IProcessRunner processRunner,
     IConfiguration configuration,
     ICoreService githubActions,
@@ -32,11 +32,11 @@ internal sealed class ManifestCommandService(
         }
 
         var document = file is not null
-            ? await ModuleImageManifestDocument.LoadAsync(
+            ? await ModuleImageWorkflowDocument.LoadAsync(
                 Path.GetFullPath(file, workingDirectory),
                 cancellationToken).ConfigureAwait(false)
-            : ModuleImageManifestDocument.Parse(json!);
-        new ManifestTagOverrides(tag, resourceTags).Apply(document);
+            : ModuleImageWorkflowDocument.Parse(json!);
+        new ImageTagOverrides(tag, resourceTags).Apply(document);
         var environment = ModuleImageWorkflowConfiguration.Create(document)
             .ToDictionary(
                 pair => pair.Key.Replace(":", "__", StringComparison.Ordinal),
@@ -55,7 +55,8 @@ internal sealed class ManifestCommandService(
 
     public async Task<int> PublishAsync(
         string appHost,
-        string[] selectors,
+        string[] modules,
+        string[] resources,
         bool all,
         string? tag,
         string resourceTags,
@@ -66,7 +67,7 @@ internal sealed class ManifestCommandService(
         string? temporaryPath = null;
         try
         {
-            ValidatePublishArguments(appHost, selectors, all, aspirePath);
+            ValidatePublishArguments(appHost, modules, resources, all, aspirePath);
             var appHostPath = Path.GetFullPath(appHost, workingDirectory);
             if (!File.Exists(appHostPath) && !Directory.Exists(appHostPath))
             {
@@ -74,44 +75,44 @@ internal sealed class ManifestCommandService(
             }
 
             temporaryPath = Path.Combine(Path.GetTempPath(), $"modular-apphosts-{Guid.NewGuid():N}");
-            var descriptionPath = Path.Combine(temporaryPath, "description");
-            var manifestPath = Path.Combine(temporaryPath, "manifest");
-            Directory.CreateDirectory(descriptionPath);
-
-            var describe = await RunAspireAsync(
-                aspirePath,
-                appHostPath,
-                "describe-images",
-                descriptionPath,
-                [],
-                null,
-                cancellationToken).ConfigureAwait(false);
-            if (!describe.IsSuccess)
+            var workflowPath = Path.Combine(temporaryPath, "workflow");
+            var overrides = new ImageTagOverrides(tag, resourceTags);
+            var producerEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var moduleSelectionPrefix = ModuleImageWorkflowConfiguration
+                .ModuleSelectionConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            for (var index = 0; index < modules.Length; index++)
             {
-                return await WriteAspireFailureAsync(describe, "Aspire image discovery").ConfigureAwait(false);
+                producerEnvironment[$"{moduleSelectionPrefix}__{index}"] = modules[index];
             }
 
-            var descriptions = await ModuleImageDescriptionDocument.LoadAsync(
-                Path.Combine(descriptionPath, "module-images.json"),
-                cancellationToken).ConfigureAwait(false);
-            var publishable = descriptions.Images
-                .Where(image => image.Build is not null && image.Push is not null)
-                .ToArray();
-            var selected = SelectImages(publishable, selectors, all);
-            var overrides = new ManifestTagOverrides(tag, resourceTags);
-            var producerEnvironment = overrides.CreateProducerEnvironment(selected);
-            var effectiveSelectors = selected
-                .Select(image => image.EffectiveResource)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var resourceSelectionPrefix = ModuleImageWorkflowConfiguration
+                .ResourceSelectionConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            for (var index = 0; index < resources.Length; index++)
+            {
+                producerEnvironment[$"{resourceSelectionPrefix}__{index}"] = resources[index];
+            }
+
+            var workflowPrefix = ModuleImageWorkflowConfiguration.ConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            if (overrides.GlobalTag is not null)
+            {
+                producerEnvironment[$"{workflowPrefix}__{ModuleImageWorkflowConfiguration.TagConfigurationName}"] =
+                    overrides.GlobalTag;
+            }
+
+            if (overrides.HasResourceOverrides)
+            {
+                producerEnvironment[$"{workflowPrefix}__{ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName}"] =
+                    resourceTags;
+            }
 
             var publish = await RunAspireAsync(
                 aspirePath,
                 appHostPath,
                 "workflow-images",
-                manifestPath,
-                effectiveSelectors,
+                workflowPath,
                 producerEnvironment,
                 cancellationToken).ConfigureAwait(false);
             if (!publish.IsSuccess)
@@ -120,17 +121,17 @@ internal sealed class ManifestCommandService(
                     .ConfigureAwait(false);
             }
 
-            var document = await ModuleImageManifestDocument.LoadAsync(
-                Path.Combine(manifestPath, ModuleImageManifestDocument.DefaultFileName),
+            var document = await ModuleImageWorkflowDocument.LoadAsync(
+                Path.Combine(workflowPath, ModuleImageWorkflowDocument.DefaultFileName),
                 cancellationToken).ConfigureAwait(false);
             var destination = Path.GetFullPath(
-                outputPath ?? "module-image-manifest.json",
+                outputPath ?? "module-image-workflow.json",
                 workingDirectory);
             await document.SaveAsync(destination, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(configuration["GITHUB_OUTPUT"]))
             {
-                await githubActions.SetOutputAsync("manifest", document.ToJson()).ConfigureAwait(false);
-                await githubActions.SetOutputAsync("manifest-path", destination).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("workflow-document", document.ToJson()).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("workflow-document-path", destination).ConfigureAwait(false);
             }
 
             await output.WriteLineAsync(destination).ConfigureAwait(false);
@@ -159,11 +160,16 @@ internal sealed class ManifestCommandService(
         string appHost,
         string step,
         string? outputPath,
-        string[] selectors,
         IReadOnlyDictionary<string, string?>? environmentVariables,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string>
+        var invocation = AspireCliInvocationResolver.Resolve(
+            aspirePath,
+            appHost);
+        var appHostWorkingDirectory = Directory.Exists(appHost)
+            ? appHost
+            : Path.GetDirectoryName(appHost)!;
+        var arguments = new List<string>(invocation.PrefixArguments)
         {
             "do",
             step,
@@ -177,41 +183,14 @@ internal sealed class ManifestCommandService(
         }
 
         arguments.Add("--non-interactive");
-        if (selectors.Length > 0)
-        {
-            arguments.Add("--");
-            arguments.AddRange(selectors);
-        }
-
         return await processRunner.RunAsync(
             new ProcessInvocation(
-                aspirePath,
+                invocation.Executable,
                 arguments,
-                workingDirectory,
+                appHostWorkingDirectory,
                 environmentVariables,
                 ProcessOutputMode.Stream),
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private static ModuleImageDescription[] SelectImages(
-        ModuleImageDescription[] publishable,
-        string[] selectors,
-        bool all)
-    {
-        try
-        {
-            if (all && publishable.Length == 0)
-            {
-                throw new ToolUsageException("The AppHost does not expose any publishable module images.");
-            }
-
-            var selection = all ? ModuleImageSelection.All : new ModuleImageSelection(selectors);
-            return selection.ResolveDescriptions(publishable, "publishable module images").ToArray();
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-        {
-            throw new ToolUsageException(exception.Message, exception);
-        }
     }
 
     private async Task<int> WriteAspireFailureAsync(
@@ -225,7 +204,8 @@ internal sealed class ManifestCommandService(
 
     private static void ValidatePublishArguments(
         string appHost,
-        string[] selectors,
+        string[] modules,
+        string[] resources,
         bool all,
         string aspirePath)
     {
@@ -239,9 +219,10 @@ internal sealed class ManifestCommandService(
             throw new ToolUsageException("--aspire-path cannot be empty.");
         }
 
-        if (all == (selectors.Length > 0))
+        if (all == (modules.Length > 0 || resources.Length > 0))
         {
-            throw new ToolUsageException("Specify one or more --selector values or --all, but not both.");
+            throw new ToolUsageException(
+                "Specify one or more --module/--resource values or --all, but not both.");
         }
     }
 }

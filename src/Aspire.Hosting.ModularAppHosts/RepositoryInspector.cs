@@ -1,8 +1,8 @@
+#pragma warning disable ASPIREPIPELINES001
+
 using CliWrap;
 using CliWrap.Buffered;
-using System.Globalization;
-using System.Security.Cryptography;
-using System.Text;
+using Aspire.Hosting.Pipelines;
 using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
@@ -284,573 +284,16 @@ internal static class RepositoryInspector
     }
 }
 
-internal sealed record RepositoryCloneCommand(
+internal sealed record RepositorySyncCommand(
     string Executable,
     IReadOnlyList<string> Arguments,
-    string WorkingDirectory);
+    string Operation);
 
-internal static class ModuleRepositoryIdentity
-{
-    private const int MaximumCanonicalNameLength = 46;
-
-    public static string GetCanonicalName(string? repository, string moduleName, string baseDirectory)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
-
-        var repositorySlug = string.IsNullOrWhiteSpace(repository)
-            ? "repository"
-            : GetRepositorySlug(repository, baseDirectory);
-        var moduleSlug = CreateSlug(moduleName, disambiguateChanges: true);
-        var canonicalName = $"{repositorySlug}-{moduleSlug}";
-        if (canonicalName.Length <= MaximumCanonicalNameLength)
-        {
-            return canonicalName;
-        }
-
-        var suffix = GetStableSuffix($"{repository}\n{moduleName}");
-        return $"{canonicalName[..(MaximumCanonicalNameLength - suffix.Length - 1)].TrimEnd('-')}-{suffix}";
-    }
-
-    private static string GetRepositorySlug(string repository, string baseDirectory)
-    {
-        var value = repository.Trim().TrimEnd('/', '\\');
-        if (!GitHubRepositoryCloner.IsRemoteRepository(value, baseDirectory))
-        {
-            var fullPath = Path.GetFullPath(value, baseDirectory);
-            return CreateSlug(Path.GetFileName(fullPath), disambiguateChanges: true);
-        }
-
-        string repositoryPath;
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            repositoryPath = uri.AbsolutePath;
-        }
-        else if (value.IndexOf(':', StringComparison.Ordinal) is var colon && colon >= 0)
-        {
-            repositoryPath = value[(colon + 1)..];
-        }
-        else
-        {
-            repositoryPath = value;
-        }
-
-        var components = repositoryPath
-            .Replace('\\', '/')
-            .Trim('/')
-            .Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (components.Length == 0)
-        {
-            return "repository";
-        }
-
-        var repositoryName = components[^1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
-            ? components[^1][..^4]
-            : components[^1];
-        var owner = components.Length > 1 ? components[^2] : null;
-        return owner is null
-            ? CreateSlug(repositoryName, disambiguateChanges: true)
-            : $"{CreateSlug(owner, disambiguateChanges: true)}-{CreateSlug(repositoryName, disambiguateChanges: true)}";
-    }
-
-    private static string CreateSlug(string value, bool disambiguateChanges)
-    {
-        var normalized = value.Trim();
-        var changed = false;
-        var builder = new StringBuilder(normalized.Length);
-        foreach (var originalCharacter in normalized)
-        {
-            var character = originalCharacter is >= 'A' and <= 'Z'
-                ? (char)(originalCharacter + ('a' - 'A'))
-                : originalCharacter;
-            var safeCharacter = character is >= 'a' and <= 'z' or >= '0' and <= '9';
-            if (safeCharacter)
-            {
-                builder.Append(character);
-            }
-            else if (character == '-')
-            {
-                builder.Append(character);
-            }
-            else
-            {
-                builder.Append('-');
-                changed = true;
-            }
-        }
-
-        var slug = builder.ToString();
-        while (slug.Contains("--", StringComparison.Ordinal))
-        {
-            slug = slug.Replace("--", "-", StringComparison.Ordinal);
-            changed = true;
-        }
-
-        slug = slug.Trim('-');
-        if (slug.Length == 0)
-        {
-            slug = "module";
-            changed = true;
-        }
-
-        if (disambiguateChanges && changed)
-        {
-            slug = $"{slug}-{GetStableSuffix(value)}";
-        }
-
-        const int maximumComponentLength = 22;
-        if (slug.Length > maximumComponentLength)
-        {
-            var suffix = GetStableSuffix(value);
-            slug = $"{slug[..(maximumComponentLength - suffix.Length - 1)].TrimEnd('-')}-{suffix}";
-        }
-
-        return slug;
-    }
-
-    private static string GetStableSuffix(string value)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return string.Concat(hash.Take(3).Select(value => value.ToString("x2", CultureInfo.InvariantCulture)));
-    }
-}
-
-internal static class GitHubRepositoryCloner
-{
-    public static bool RefersToSameRepository(string first, string second, string baseDirectory)
-    {
-        var firstIdentity = GetRemoteIdentity(first, baseDirectory);
-        var secondIdentity = GetRemoteIdentity(second, baseDirectory);
-        return firstIdentity is not null && secondIdentity is not null &&
-            string.Equals(firstIdentity.Host, secondIdentity.Host, StringComparison.OrdinalIgnoreCase) &&
-            firstIdentity.Port == secondIdentity.Port &&
-            string.Equals(
-                firstIdentity.Path,
-                secondIdentity.Path,
-                IsCaseInsensitiveRepositoryHost(firstIdentity.Host)
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal);
-    }
-
-    public static bool IsRemoteRepository(string repository, string baseDirectory)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
-
-        if (Uri.TryCreate(repository, UriKind.Absolute, out var uri))
-        {
-            return !uri.IsFile;
-        }
-
-        if (Path.IsPathRooted(repository) || repository.StartsWith('.') ||
-            Directory.Exists(Path.GetFullPath(repository, baseDirectory)))
-        {
-            return false;
-        }
-
-        return repository.Contains('/', StringComparison.Ordinal) ||
-            repository.Contains(':', StringComparison.Ordinal);
-    }
-
-    public static RepositoryCloneCommand CreateCommand(
-        string executable,
-        string repository,
-        string repositoryPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-
-        var workingDirectory = Path.GetDirectoryName(repositoryPath)
-            ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'.");
-        return new RepositoryCloneCommand(
-            executable,
-            ["repo", "clone", repository, repositoryPath, "--", "--recurse-submodules"],
-            workingDirectory);
-    }
-
-    public static async Task CloneAsync(
-        string executable,
-        string repository,
-        string repositoryPath,
-        TimeSpan? commandTimeout = null,
-        string gitExecutablePath = "git",
-        CancellationToken cancellationToken = default)
-    {
-        var command = CreateCommand(executable, repository, repositoryPath);
-        Directory.CreateDirectory(command.WorkingDirectory);
-
-        ModuleCliResult result;
-        try
-        {
-            result = await ModuleCliRunner.RunAsync(
-                command.Executable,
-                command.Arguments,
-                command.WorkingDirectory,
-                commandTimeout ?? TimeSpan.FromMinutes(2),
-                $"clone {repository}",
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (TimeoutException exception)
-        {
-            throw new InvalidOperationException(
-                $"Automatic module cloning of '{repository}' timed out while using '{executable}'.",
-                exception);
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-                or System.ComponentModel.Win32Exception
-                or IOException)
-        {
-            throw new InvalidOperationException(
-                $"Automatic module cloning requires the GitHub CLI executable '{executable}'. " +
-                $"Install GitHub CLI or disable {nameof(ModularAppHostsOptions.AutoCloneRepositories)}.",
-                exception);
-        }
-
-        if (!result.IsSuccess)
-        {
-            var error = string.IsNullOrWhiteSpace(result.StandardError)
-                ? result.StandardOutput
-                : result.StandardError;
-            throw new InvalidOperationException(
-                $"GitHub CLI failed to clone module repository '{repository}' to '{repositoryPath}' " +
-                $"with exit code {result.ExitCode}: {error.Trim()}");
-        }
-
-        if (!await RepositoryInspector.IsGitRepositoryAsync(
-                repositoryPath,
-                gitExecutablePath,
-                commandTimeout,
-                requireSuccessfulInspection: true,
-                cancellationToken).ConfigureAwait(false))
-        {
-            throw new InvalidOperationException(
-                $"GitHub CLI reported success, but '{repositoryPath}' is not a Git repository.");
-        }
-    }
-
-    public static string GetRepositoryDirectoryName(string repository)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        var value = repository.Trim().TrimEnd('/');
-        var separator = value.LastIndexOfAny(['/', ':']);
-        var name = separator >= 0 ? value[(separator + 1)..] : value;
-        if (name.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-        {
-            name = name[..^4];
-        }
-
-        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
-            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-            name.Contains(Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-            name.Contains(Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Unable to infer a sibling directory name from module repository '{repository}'.");
-        }
-
-        return name;
-    }
-
-    private static RepositoryRemoteIdentity? GetRemoteIdentity(string repository, string baseDirectory)
-    {
-        if (!IsRemoteRepository(repository, baseDirectory))
-        {
-            return null;
-        }
-
-        var value = repository.Trim().TrimEnd('/');
-        string host;
-        int? port = null;
-        string path;
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            host = uri.IdnHost;
-            port = IsDefaultRepositoryPort(uri.Scheme, uri.Port) ? null : uri.Port;
-            path = uri.GetComponents(UriComponents.Path, UriFormat.Unescaped).Trim('/');
-        }
-        else if (value.IndexOf(':', StringComparison.Ordinal) is var colon && colon >= 0)
-        {
-            var hostStart = value.LastIndexOf('@', colon);
-            host = value[(hostStart >= 0 ? hostStart + 1 : 0)..colon];
-            path = value[(colon + 1)..].Trim('/');
-        }
-        else
-        {
-            host = "github.com";
-            path = value.Trim('/');
-        }
-
-        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-        {
-            path = path[..^4];
-        }
-
-        return new RepositoryRemoteIdentity(host, port, path);
-    }
-
-    private static bool IsCaseInsensitiveRepositoryHost(string host) =>
-        string.Equals(host, "github.com", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsDefaultRepositoryPort(string scheme, int port) =>
-        port < 0 ||
-        (string.Equals(scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) && port == 80) ||
-        (string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) && port == 443) ||
-        (string.Equals(scheme, "ssh", StringComparison.OrdinalIgnoreCase) && port == 22) ||
-        (string.Equals(scheme, "git", StringComparison.OrdinalIgnoreCase) && port == 9418);
-
-    private sealed record RepositoryRemoteIdentity(string Host, int? Port, string Path);
-}
-
-internal sealed record ModuleRepositoryResolution(
-    string RepositoryPath,
-    bool UsesSiblingLayout);
-
-internal static class ModuleRepositoryDiscovery
-{
-    public static async Task<ModuleRepositoryResolution> ResolveAsync(
-        string appHostDirectory,
-        DistributedApplicationModule module,
-        string? repository,
-        string githubCliPath,
-        TimeSpan? commandTimeout = null,
-        string gitExecutablePath = "git",
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
-        ArgumentNullException.ThrowIfNull(module);
-
-        var projectRepositoryRoot = module.ProjectDefinitions
-            .Select(project => project.SourceRepositoryRoot)
-            .FirstOrDefault(repositoryRoot => repositoryRoot is not null);
-        return await ResolveAsync(
-            appHostDirectory,
-            module.Name,
-            projectRepositoryRoot,
-            repository,
-            githubCliPath,
-            commandTimeout,
-            gitExecutablePath,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public static async Task<ModuleRepositoryResolution> ResolveAsync(
-        string appHostDirectory,
-        string subjectName,
-        string? sourceRepositoryRoot,
-        string? repository,
-        string githubCliPath,
-        TimeSpan? commandTimeout = null,
-        string gitExecutablePath = "git",
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(subjectName);
-
-        var appHostRepositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
-            appHostDirectory,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        if (appHostRepositoryRoot is null)
-        {
-            throw new InvalidOperationException(
-                $"Automatic module discovery requires AppHost directory '{appHostDirectory}' to be inside a Git repository.");
-        }
-
-        if (PathSafety.AreEqual(sourceRepositoryRoot, appHostRepositoryRoot))
-        {
-            return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
-        }
-
-        var sameRepositoryPath = await TryGetSameRepositoryLocalPathAsync(
-            repository,
-            appHostDirectory,
-            appHostRepositoryRoot,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        if (sameRepositoryPath is not null)
-        {
-            return new ModuleRepositoryResolution(sameRepositoryPath, UsesSiblingLayout: false);
-        }
-
-        var appHostRemote = await RepositoryInspector.TryGetRemoteAsync(
-            appHostRepositoryRoot,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(repository) && !string.IsNullOrWhiteSpace(appHostRemote) &&
-            GitHubRepositoryCloner.RefersToSameRepository(repository, appHostRemote, appHostDirectory))
-        {
-            return new ModuleRepositoryResolution(appHostRepositoryRoot, UsesSiblingLayout: false);
-        }
-
-        var siblingParent = Path.GetDirectoryName(appHostRepositoryRoot)
-            ?? throw new InvalidOperationException(
-                $"Unable to determine the parent of AppHost repository '{appHostRepositoryRoot}'.");
-        var siblingPath = GetSiblingPath(
-            appHostDirectory,
-            siblingParent,
-            sourceRepositoryRoot,
-            repository);
-
-        EnsureSiblingPath(appHostRepositoryRoot, siblingParent, siblingPath, subjectName);
-
-        if (Directory.Exists(siblingPath))
-        {
-            if (!await RepositoryInspector.IsGitRepositoryAsync(
-                    siblingPath,
-                    gitExecutablePath,
-                    commandTimeout,
-                    requireSuccessfulInspection: true,
-                    cancellationToken).ConfigureAwait(false))
-            {
-                throw new InvalidOperationException(
-                    $"Discovered repository for '{subjectName}' at '{siblingPath}', but that directory is not a Git repository.");
-            }
-
-            await EnsureExpectedOriginAsync(
-                siblingPath,
-                repository,
-                appHostDirectory,
-                subjectName,
-                gitExecutablePath,
-                commandTimeout,
-                cancellationToken).ConfigureAwait(false);
-
-            return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
-        }
-
-        if (string.IsNullOrWhiteSpace(repository) || IsLocalRepository(repository, appHostDirectory))
-        {
-            throw new InvalidOperationException(
-                $"Repository for '{subjectName}' was not found at sibling path '{siblingPath}'. " +
-                $"Automatic cloning requires a GitHub repository configured through " +
-                "the module definition or AppHost configuration.");
-        }
-
-        await GitHubRepositoryCloner.CloneAsync(
-            githubCliPath,
-            repository,
-            siblingPath,
-            commandTimeout,
-            gitExecutablePath,
-            cancellationToken).ConfigureAwait(false);
-        await EnsureExpectedOriginAsync(
-            siblingPath,
-            repository,
-            appHostDirectory,
-            subjectName,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        return new ModuleRepositoryResolution(siblingPath, UsesSiblingLayout: true);
-    }
-
-    private static string GetSiblingPath(
-        string appHostDirectory,
-        string siblingParent,
-        string? projectRepositoryRoot,
-        string? repository)
-    {
-        if (!string.IsNullOrWhiteSpace(projectRepositoryRoot) &&
-            PathSafety.AreEqual(Path.GetDirectoryName(projectRepositoryRoot), siblingParent))
-        {
-            return Path.GetFullPath(projectRepositoryRoot);
-        }
-
-        if (!string.IsNullOrWhiteSpace(repository) && IsLocalRepository(repository, appHostDirectory))
-        {
-            return Path.GetFullPath(repository, appHostDirectory);
-        }
-
-        if (string.IsNullOrWhiteSpace(repository))
-        {
-            return projectRepositoryRoot is null
-                ? Path.Combine(siblingParent, "module")
-                : Path.GetFullPath(projectRepositoryRoot);
-        }
-
-        return Path.Combine(siblingParent, GitHubRepositoryCloner.GetRepositoryDirectoryName(repository));
-    }
-
-    private static void EnsureSiblingPath(
-        string appHostRepositoryRoot,
-        string siblingParent,
-        string siblingPath,
-        string moduleName)
-    {
-        var actualParent = Path.GetDirectoryName(Path.GetFullPath(siblingPath));
-        if (PathSafety.AreEqual(siblingPath, appHostRepositoryRoot) || !PathSafety.AreEqual(actualParent, siblingParent))
-        {
-            throw new InvalidOperationException(
-                $"Module '{moduleName}' resolved to '{siblingPath}'. Automatic discovery only accepts the AppHost " +
-                $"Git repository '{appHostRepositoryRoot}' or one direct sibling under '{siblingParent}'.");
-        }
-    }
-
-    private static async Task<string?> TryGetSameRepositoryLocalPathAsync(
-        string? repository,
-        string appHostDirectory,
-        string expectedRepositoryRoot,
-        string gitExecutablePath,
-        TimeSpan? commandTimeout,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(repository) || !IsLocalRepository(repository, appHostDirectory))
-        {
-            return null;
-        }
-
-        var localPath = Path.GetFullPath(repository, appHostDirectory);
-        var repositoryRoot = await RepositoryInspector.TryFindRepositoryRootAsync(
-            localPath,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        return repositoryRoot is not null && PathSafety.AreEqual(repositoryRoot, expectedRepositoryRoot)
-            ? localPath
-            : null;
-    }
-
-    private static bool IsLocalRepository(string repository, string appHostDirectory)
-    {
-        return !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory);
-    }
-
-    private static async Task EnsureExpectedOriginAsync(
-        string repositoryPath,
-        string? expectedRepository,
-        string baseDirectory,
-        string moduleName,
-        string gitExecutablePath,
-        TimeSpan? commandTimeout,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(expectedRepository) ||
-            !GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory))
-        {
-            return;
-        }
-
-        var actualRepository = await RepositoryInspector.TryGetRemoteAsync(
-            repositoryPath,
-            gitExecutablePath,
-            commandTimeout,
-            cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(actualRepository) ||
-            !GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory))
-        {
-            throw new InvalidOperationException(
-                $"Module '{moduleName}' resolved to '{repositoryPath}', but its origin '{actualRepository ?? "(missing)"}' " +
-                $"does not match configured repository '{expectedRepository}'.");
-        }
-    }
-}
-
-internal sealed record RepositorySyncCommand(string Executable, IReadOnlyList<string> Arguments);
+internal sealed record RepositorySyncLifecycleEvent(
+    string Operation,
+    string State,
+    string? Reason = null,
+    double ElapsedMilliseconds = 0);
 
 internal static class RepositorySynchronizer
 {
@@ -872,7 +315,7 @@ internal static class RepositorySynchronizer
             gitExecutablePath,
             githubCliPath,
             commandTimeout,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         return commands.Count == 0 ? null : commands[0];
     }
 
@@ -884,6 +327,7 @@ internal static class RepositorySynchronizer
         string gitExecutablePath = "git",
         string githubCliPath = "gh",
         TimeSpan? commandTimeout = null,
+        Action<RepositorySyncLifecycleEvent>? lifecycle = null,
         CancellationToken cancellationToken = default)
     {
         if (!await RepositoryInspector.IsGitRepositoryAsync(
@@ -897,13 +341,15 @@ internal static class RepositorySynchronizer
             {
                 var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
                 if (!string.IsNullOrWhiteSpace(repository) &&
-                    GitHubRepositoryCloner.IsRemoteRepository(repository, baseDirectory))
+                    RepositoryIdentity.IsRemoteRepository(repository, baseDirectory))
                 {
                     throw new InvalidOperationException(
                         $"Repository path '{repositoryPath}' already exists, but it is not a Git checkout of " +
-                        $"configured repository '{repository}'. Move that directory or correct the module configuration.");
+                        $"configured repository '{repository}'. " +
+                        "Move that directory or correct the module configuration.");
                 }
 
+                lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "not-git"));
                 return [];
             }
 
@@ -916,15 +362,15 @@ internal static class RepositorySynchronizer
             Directory.CreateDirectory(Path.GetDirectoryName(repositoryPath)
                 ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."));
 
-            var clone = GitHubGitAuthentication.IsGitHubRepository(repository)
-                ? GitHubRepositoryCloner.CreateCommand(githubCliPath, repository, repositoryPath)
-                : new RepositoryCloneCommand(
-                    gitExecutablePath,
-                    ["clone", "--recurse-submodules", "--", repository, repositoryPath],
-                    Path.GetDirectoryName(repositoryPath)!);
             var commands = new List<RepositorySyncCommand>
             {
-                new(clone.Executable, clone.Arguments)
+                new(
+                    gitExecutablePath,
+                    GitHubGitAuthentication.ConfigureCredentialHelper(
+                        ["clone", "--recurse-submodules", "--", repository, repositoryPath],
+                        repository,
+                        githubCliPath),
+                    "clone")
             };
             AddRevisionCommands(
                 commands,
@@ -956,6 +402,7 @@ internal static class RepositorySynchronizer
                 gitExecutablePath,
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false);
+            lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "dirty"));
             return [];
         }
 
@@ -972,22 +419,45 @@ internal static class RepositorySynchronizer
             return commands;
         }
 
-        if (!updateRepository ||
-            !await RepositoryInspector.HasUpstreamAsync(
+        if (!updateRepository)
+        {
+            lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "disabled"));
+            return [CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)];
+        }
+
+        if (!await RepositoryInspector.HasUpstreamAsync(
                 repositoryPath,
                 gitExecutablePath,
                 commandTimeout,
                 cancellationToken).ConfigureAwait(false))
         {
-            return [];
+            lifecycle?.Invoke(new RepositorySyncLifecycleEvent("update", "skipped", "no-upstream"));
+            return [CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)];
         }
 
-        return [new RepositorySyncCommand(
-            gitExecutablePath,
-            GitHubGitAuthentication.ConfigureCredentialHelper(
-                ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"],
-                actualRepository ?? repository,
-                githubCliPath))];
+        return
+        [
+            new RepositorySyncCommand(
+                gitExecutablePath,
+                GitHubGitAuthentication.ConfigureCredentialHelper(
+                    ["-C", repositoryPath, "pull", "--ff-only", "--recurse-submodules"],
+                    actualRepository ?? repository,
+                    githubCliPath),
+                "fast-forward"),
+            CreateSubmoduleUpdateCommand(
+                repositoryPath,
+                gitExecutablePath,
+                githubCliPath,
+                actualRepository ?? repository)
+        ];
     }
 
     public static async Task SynchronizeAsync(
@@ -999,7 +469,9 @@ internal static class RepositorySynchronizer
         string gitExecutablePath = "git",
         string githubCliPath = "gh",
         TimeSpan? commandTimeout = null,
-        Action<string>? progress = null)
+        Action<string>? progress = null,
+        Action<RepositorySyncLifecycleEvent>? lifecycle = null,
+        IReportingStep? reportingStep = null)
     {
         var commands = await CreateCommandsAsync(
             repositoryPath,
@@ -1009,32 +481,87 @@ internal static class RepositorySynchronizer
             gitExecutablePath,
             githubCliPath,
             commandTimeout,
+            lifecycle,
             cancellationToken).ConfigureAwait(false);
         progress?.Invoke($"Synchronizing repository '{repositoryPath}'.");
         foreach (var command in commands)
         {
-            var result = await ModuleCliRunner.RunAsync(
-                command.Executable,
-                command.Arguments,
-                Path.GetDirectoryName(repositoryPath)
-                    ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."),
-                commandTimeout ?? TimeSpan.FromMinutes(2),
-                $"prepare {Path.GetFileName(repositoryPath)}",
-                cancellationToken,
-                progress).ConfigureAwait(false);
-
-            if (!result.IsSuccess)
+            lifecycle?.Invoke(new RepositorySyncLifecycleEvent(command.Operation, "started"));
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            IReportingTask? reportingTask = null;
+            try
             {
-                var error = string.IsNullOrWhiteSpace(result.StandardError)
-                    ? result.StandardOutput
-                    : result.StandardError;
-                throw new InvalidOperationException(
-                    $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
+                if (reportingStep is not null)
+                {
+                    reportingTask = await reportingStep.CreateTaskAsync(
+                        $"{GetOperationTitle(command.Operation)} {Path.GetFileName(repositoryPath)}",
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                var result = await ModuleCliRunner.RunAsync(
+                    command.Executable,
+                    command.Arguments,
+                    Path.GetDirectoryName(repositoryPath)
+                        ?? throw new InvalidOperationException($"Unable to determine the parent of '{repositoryPath}'."),
+                    commandTimeout ?? TimeSpan.FromMinutes(2),
+                    $"prepare {Path.GetFileName(repositoryPath)}",
+                    cancellationToken,
+                    progress).ConfigureAwait(false);
+
+                if (!result.IsSuccess)
+                {
+                    var error = string.IsNullOrWhiteSpace(result.StandardError)
+                        ? result.StandardOutput
+                        : result.StandardError;
+                    throw new InvalidOperationException(
+                        $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
+                }
+
+                if (reportingTask is not null)
+                {
+                    await reportingTask.SucceedAsync(
+                        $"{GetOperationTitle(command.Operation)} completed",
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
+            catch (Exception exception)
+            {
+                if (reportingTask is not null)
+                {
+                    await reportingTask.FailAsync(
+                        exception.Message,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
+                throw;
+            }
+            finally
+            {
+                if (reportingTask is not null)
+                {
+                    await reportingTask.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+
+            stopwatch.Stop();
+            lifecycle?.Invoke(new RepositorySyncLifecycleEvent(
+                command.Operation,
+                "completed",
+                ElapsedMilliseconds: stopwatch.Elapsed.TotalMilliseconds));
         }
 
         progress?.Invoke($"Repository '{repositoryPath}' is synchronized.");
     }
+
+    private static string GetOperationTitle(string operation) => operation switch
+    {
+        "clone" => "Clone",
+        "fetch" => "Fetch",
+        "checkout" => "Checkout",
+        "fast-forward" => "Fast-forward",
+        "submodule-update" => "Update submodules",
+        _ => operation
+    };
 
     private static void AddRevisionCommands(
         List<RepositorySyncCommand> commands,
@@ -1054,17 +581,31 @@ internal static class RepositorySynchronizer
             GitHubGitAuthentication.ConfigureCredentialHelper(
                 ["-C", repositoryPath, "fetch", "--tags", "origin", revision],
                 repository,
-                githubCliPath)));
+                githubCliPath),
+            "fetch"));
         commands.Add(new RepositorySyncCommand(
             gitExecutablePath,
-            ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"]));
-        commands.Add(new RepositorySyncCommand(
+            ["-C", repositoryPath, "checkout", "--detach", "FETCH_HEAD"],
+            "checkout"));
+        commands.Add(CreateSubmoduleUpdateCommand(
+            repositoryPath,
+            gitExecutablePath,
+            githubCliPath,
+            repository));
+    }
+
+    private static RepositorySyncCommand CreateSubmoduleUpdateCommand(
+        string repositoryPath,
+        string gitExecutablePath,
+        string githubCliPath,
+        string? repository) =>
+        new(
             gitExecutablePath,
             GitHubGitAuthentication.ConfigureCredentialHelper(
                 ["-C", repositoryPath, "submodule", "update", "--init", "--recursive"],
                 repository,
-                githubCliPath)));
-    }
+                githubCliPath),
+            "submodule-update");
 
     private static async Task<string?> EnsureExpectedOriginAsync(
         string repositoryPath,
@@ -1084,7 +625,7 @@ internal static class RepositorySynchronizer
         }
 
         var baseDirectory = Path.GetDirectoryName(repositoryPath) ?? repositoryPath;
-        if (!GitHubRepositoryCloner.IsRemoteRepository(expectedRepository, baseDirectory) &&
+        if (!RepositoryIdentity.IsRemoteRepository(expectedRepository, baseDirectory) &&
             await LocalRepositoryRootsMatchAsync(
                 expectedRepository,
                 repositoryPath,
@@ -1097,13 +638,15 @@ internal static class RepositorySynchronizer
         }
 
         var matches = !string.IsNullOrWhiteSpace(actualRepository) &&
-            (GitHubRepositoryCloner.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
+            (RepositoryIdentity.RefersToSameRepository(expectedRepository, actualRepository, baseDirectory) ||
              LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
         if (!matches)
         {
             throw new InvalidOperationException(
-                $"Repository '{repositoryPath}' has origin '{actualRepository ?? "(missing)"}', which does not match " +
-                $"configured repository '{expectedRepository}'. Move the checkout or correct the module configuration.");
+                $"Repository '{repositoryPath}' has origin " +
+                $"'{actualRepository ?? "(missing)"}', which does not match " +
+                $"configured repository '{expectedRepository}'. " +
+                "Move the checkout or correct the module configuration.");
         }
 
         return actualRepository;
@@ -1111,8 +654,8 @@ internal static class RepositorySynchronizer
 
     private static bool LocalRepositoriesMatch(string first, string second, string baseDirectory)
     {
-        if (GitHubRepositoryCloner.IsRemoteRepository(first, baseDirectory) ||
-            GitHubRepositoryCloner.IsRemoteRepository(second, baseDirectory))
+        if (RepositoryIdentity.IsRemoteRepository(first, baseDirectory) ||
+            RepositoryIdentity.IsRemoteRepository(second, baseDirectory))
         {
             return false;
         }

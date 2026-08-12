@@ -1,4 +1,5 @@
 #pragma warning disable ASPIRECOMPUTE003
+#pragma warning disable ASPIRECONTAINERRUNTIME001
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
@@ -8,6 +9,9 @@ using Aspire.Hosting.Publishing;
 using CliWrap;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using System.Net;
 using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
@@ -20,34 +24,11 @@ internal static class ModuleImagePushPipeline
             new EventId(1, nameof(LogContainerRuntimeOutput)),
             "{ContainerRuntime}: {Output}");
 
-    private static readonly Action<ILogger, string, string, Exception?> LogContainerRuntimeError =
-        LoggerMessage.Define<string, string>(
-            LogLevel.Warning,
-            new EventId(2, nameof(LogContainerRuntimeError)),
-            "{ContainerRuntime}: {Output}");
-
     private static readonly Action<ILogger, string, string, Exception?> LogBranchAlias =
         LoggerMessage.Define<string, string>(
             LogLevel.Information,
             new EventId(3, nameof(LogBranchAlias)),
             "Publishing branch image alias {Alias} for resource {Resource}.");
-
-    public static void ConfigureResourceSelection(IDistributedApplicationBuilder builder)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        var selection = GetSelection(Environment.GetCommandLineArgs());
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        builder.Pipeline.AddPipelineConfiguration(context =>
-        {
-            ApplySelection(context.Steps, selection);
-            return Task.CompletedTask;
-        });
-    }
 
     public static void AddPushStep(IResourceBuilder<ContainerResource> container)
     {
@@ -84,67 +65,89 @@ internal static class ModuleImagePushPipeline
         });
     }
 
-    internal static ModuleImageSelection GetSelection(IReadOnlyList<string> arguments) =>
-        ModuleImagePipelineSelectionParser.GetSelection(arguments, WellKnownPipelineSteps.Push);
-
-    internal static void ApplySelection(
-        IReadOnlyList<PipelineStep> steps,
-        ModuleImageSelection selection)
+    private static async Task PushAsync(IResource resource, PipelineStepContext context)
     {
-        ArgumentNullException.ThrowIfNull(steps);
-        ArgumentNullException.ThrowIfNull(selection);
-        if (!selection.IsScoped)
+        var resourceLogger = context.Services
+            .GetRequiredService<ResourceLoggerService>()
+            .GetLogger(resource);
+        var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()
+            ?? throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a module image publisher.");
+        var task = await context.ReportingStep.CreateTaskAsync(
+            $"Push image for {resource.Name}",
+            context.CancellationToken).ConfigureAwait(false);
+        await using var configuredTask = task.ConfigureAwait(false);
+        try
         {
-            return;
+            await PushCoreAsync(resource, context, resourceLogger, publisher).ConfigureAwait(false);
+            await task.SucceedAsync(
+                $"Pushed image for {resource.Name}",
+                context.CancellationToken).ConfigureAwait(false);
         }
-
-        var pushSteps = steps
-            .Where(step =>
-                step.Resource is not null &&
-                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage) &&
-                step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
-            .ToArray();
-        var selectedResources = selection.ResolveResources(
-            pushSteps.Select(step => step.Resource!),
-            "image push steps");
-
-        foreach (var step in pushSteps.Where(step => !selectedResources.Contains(step.Resource!)))
+        catch (Exception exception)
         {
-            step.RequiredBySteps.RemoveAll(requiredBy =>
-                string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));
-
-            var resource = step.Resource!;
-            if (!resource.IsExcludedFromPublish())
-            {
-                resource.Annotations.Add(ManifestPublishingCallbackAnnotation.Ignore);
-            }
+            await task.FailAsync(
+                exception.Message,
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
     }
 
-    private static async Task PushAsync(IResource resource, PipelineStepContext context)
+    private static async Task PushCoreAsync(
+        IResource resource,
+        PipelineStepContext context,
+        ILogger resourceLogger,
+        ModuleImagePublisherAnnotation publisher)
     {
+        var preparedImage = await publisher.PrepareAsync(
+            context.Services,
+            NullLogger.Instance,
+            resourceLogger,
+            context.CancellationToken).ConfigureAwait(false);
+        if (preparedImage.SourceState.IsDirty)
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' cannot push an image built from a dirty repository. " +
+                "Commit or stash the source changes before publishing the image.");
+        }
+
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
-            context.CancellationToken).ConfigureAwait(false);
-        string? runtime = null;
-        if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
-        {
-            runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
-            await RunContainerRuntimeAsync(
-                runtime,
-                ["push", resolved.PushReference!],
-                context).ConfigureAwait(false);
-        }
-        else if (resolved.PushTargetKind == ModuleImagePushTargetKind.AspireRegistry)
-        {
-            var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();
-            await imageManager.PushImageAsync(resource, context.CancellationToken).ConfigureAwait(false);
-        }
-        else
+            context.CancellationToken,
+            usePreparedPublisherImage: true).ConfigureAwait(false);
+        if (resolved.PushTargetKind == ModuleImagePushTargetKind.None)
         {
             throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a remote image push target.");
         }
+
+        var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();
+        var transferTimeout = context.Services
+            .GetRequiredService<IOptions<ModularAppHostsOptions>>()
+            .Value.ImageTransferTimeout;
+        IContainerRuntime? runtime = null;
+        if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
+        {
+            runtime = await context.Services
+                .GetRequiredService<IContainerRuntimeResolver>()
+                .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
+        }
+
+        await PushImageAsync(
+            resolved.PushTargetKind,
+            resource,
+            resolved.PushReference!,
+            (reference, token) => RunContainerRuntimeAsync(
+                ModuleImageRecipeOperations.GetContainerRuntimeExecutableName(
+                    (runtime ?? throw new InvalidOperationException(
+                        "The container runtime was not resolved for an explicit registry push.")).Name),
+                CreatePushArguments(runtime.Name, reference),
+                context,
+                resourceLogger,
+                token),
+            imageManager.PushImageAsync,
+            transferTimeout,
+            context.CancellationToken).ConfigureAwait(false);
 
         var branchAlias = GetBranchAliasReference(resource, resolved);
         if (branchAlias is null)
@@ -152,16 +155,54 @@ internal static class ModuleImagePushPipeline
             return;
         }
 
-        runtime ??= await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
+        runtime ??= await context.Services
+            .GetRequiredService<IContainerRuntimeResolver>()
+            .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
         LogBranchAlias(context.Logger, branchAlias, resource.Name, null);
-        await RunContainerRuntimeAsync(
-            runtime,
-            ["tag", resolved.Reference, branchAlias],
-            context).ConfigureAwait(false);
-        await RunContainerRuntimeAsync(
-            runtime,
-            ["push", branchAlias],
-            context).ConfigureAwait(false);
+        await ModuleOperationTimeout.RunAsync(
+            token => runtime.TagImageAsync(resolved.Reference, branchAlias, token),
+            transferTimeout,
+            $"Branch image tag for resource '{resource.Name}'",
+            context.CancellationToken).ConfigureAwait(false);
+        await ModuleOperationTimeout.RunAsync(
+            token => RunContainerRuntimeAsync(
+                ModuleImageRecipeOperations.GetContainerRuntimeExecutableName(runtime.Name),
+                CreatePushArguments(runtime.Name, branchAlias),
+                context,
+                resourceLogger,
+                token),
+            transferTimeout,
+            $"Branch image push for resource '{resource.Name}'",
+            context.CancellationToken).ConfigureAwait(false);
+    }
+
+    internal static Task PushImageAsync(
+        ModuleImagePushTargetKind targetKind,
+        IResource resource,
+        string pushReference,
+        Func<string, CancellationToken, Task> pushWithRuntimeAsync,
+        Func<IResource, CancellationToken, Task> pushWithImageManagerAsync,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pushReference);
+        ArgumentNullException.ThrowIfNull(pushWithRuntimeAsync);
+        ArgumentNullException.ThrowIfNull(pushWithImageManagerAsync);
+        Func<CancellationToken, Task> pushAsync = targetKind switch
+        {
+            ModuleImagePushTargetKind.ContainerRuntime =>
+                token => pushWithRuntimeAsync(pushReference, token),
+            ModuleImagePushTargetKind.AspireRegistry =>
+                token => pushWithImageManagerAsync(resource, token),
+            _ => throw new InvalidOperationException(
+                $"Resource '{resource.Name}' does not have a remote image push target.")
+        };
+        return ModuleOperationTimeout.RunAsync(
+            pushAsync,
+            timeout,
+            $"Image push for resource '{resource.Name}'",
+            cancellationToken);
     }
 
     internal static string? GetBranchAliasReference(IResource resource, ModuleEffectiveImage resolved)
@@ -170,31 +211,76 @@ internal static class ModuleImagePushPipeline
         ArgumentNullException.ThrowIfNull(resolved);
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
         if (publisher is null ||
-            publisher.Plan.RepositoryDirty ||
-            string.IsNullOrWhiteSpace(publisher.BranchImageTag) ||
+            !publisher.TryGetPreparedImage(out var preparedImage) ||
+            preparedImage.SourceState.IsDirty ||
             resolved.PushImage is null)
         {
             return null;
         }
 
-        var alias = $"{resolved.PushImage.Registry}/{resolved.PushImage.Repository}:{publisher.BranchImageTag}";
+        var branch = preparedImage.SourceState.Branch ?? publisher.Recipe.DetachedBranchAlias;
+        if (string.IsNullOrWhiteSpace(branch))
+        {
+            return null;
+        }
+
+        var branchImageTag = ModuleImageTag.FromBranch(branch);
+        var alias = $"{resolved.PushImage.Registry}/{resolved.PushImage.Repository}:{branchImageTag}";
         return string.Equals(alias, resolved.PushReference, StringComparison.OrdinalIgnoreCase)
             ? null
             : alias;
     }
 
+    internal static IReadOnlyList<string> CreatePushArguments(
+        string runtimeName,
+        string imageReference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
+        var (registry, _) = ModuleImageReference.ParseRepository(imageReference);
+        if (string.Equals(runtimeName, "Podman", StringComparison.OrdinalIgnoreCase) &&
+            registry is not null &&
+            IsLoopbackRegistry(registry))
+        {
+            return ["push", "--tls-verify=false", imageReference];
+        }
+
+        return ["push", imageReference];
+    }
+
+    private static bool IsLoopbackRegistry(string registry)
+    {
+        if (!Uri.TryCreate($"http://{registry}", UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            IPAddress.TryParse(uri.Host, out var address) && IPAddress.IsLoopback(address);
+    }
+
     private static async Task RunContainerRuntimeAsync(
         string runtime,
         IReadOnlyList<string> arguments,
-        PipelineStepContext context)
+        PipelineStepContext context,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
     {
         await CliCommand.Wrap(runtime)
             .WithArguments(arguments)
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeOutput(context.Logger, runtime, line, null)))
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    runtime,
+                    line,
+                    null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                LogContainerRuntimeError(context.Logger, runtime, line, null)))
-            .ExecuteAsync(context.CancellationToken)
+                LogContainerRuntimeOutput(
+                    resourceLogger,
+                    runtime,
+                    line,
+                    null)))
+            .ExecuteAsync(cancellationToken)
             .ConfigureAwait(false);
     }
 }

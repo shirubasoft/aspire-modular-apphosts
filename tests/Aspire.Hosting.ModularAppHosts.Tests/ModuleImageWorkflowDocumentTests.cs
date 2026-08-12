@@ -4,21 +4,21 @@ using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
-public sealed class ModuleImageManifestDocumentTests
+public sealed class ModuleImageWorkflowDocumentTests
 {
     [Fact]
     public async Task Save_load_and_compact_round_trip_are_canonical()
     {
         using var directory = TestDirectory.Create();
         var path = Path.Combine(directory.Path, "workflow-images.json");
-        var document = new ModuleImageManifestDocument();
+        var document = new ModuleImageWorkflowDocument();
         document.Images.Add(CreateEntry("orders", "worker"));
         document.Images.Add(CreateEntry("catalog", "api"));
 
         await document.SaveAsync(path, TestContext.Current.CancellationToken);
-        var loaded = await ModuleImageManifestDocument.LoadAsync(path, TestContext.Current.CancellationToken);
+        var loaded = await ModuleImageWorkflowDocument.LoadAsync(path, TestContext.Current.CancellationToken);
         var compact = loaded.ToJson();
-        var reparsed = ModuleImageManifestDocument.Parse(compact);
+        var reparsed = ModuleImageWorkflowDocument.Parse(compact);
 
         Assert.Equal(["catalog/api", "orders/worker"], reparsed.Images.Select(GetIdentity));
         Assert.DoesNotContain(Environment.NewLine, compact, StringComparison.Ordinal);
@@ -33,17 +33,17 @@ public sealed class ModuleImageManifestDocumentTests
             """
             {"schemaVersion":1,"images":[],"unexpected":true}
             """;
-        Assert.Throws<JsonException>(() => ModuleImageManifestDocument.Parse(unknownProperty));
+        Assert.Throws<JsonException>(() => ModuleImageWorkflowDocument.Parse(unknownProperty));
 
-        var oversized = "{" + new string(' ', ModuleImageManifestDocument.MaximumJsonLength) + "}";
-        var exception = Assert.Throws<InvalidDataException>(() => ModuleImageManifestDocument.Parse(oversized));
+        var oversized = "{" + new string(' ', ModuleImageWorkflowDocument.MaximumJsonLength) + "}";
+        var exception = Assert.Throws<InvalidDataException>(() => ModuleImageWorkflowDocument.Parse(oversized));
         Assert.Contains("workflow input limit", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Validate_rejects_case_insensitive_duplicates_and_incomplete_or_conflicting_identities()
     {
-        var duplicate = new ModuleImageManifestDocument();
+        var duplicate = new ModuleImageWorkflowDocument();
         duplicate.Images.Add(CreateEntry("orders", "api"));
         duplicate.Images.Add(CreateEntry("ORDERS", "API"));
         Assert.Contains("duplicate", Assert.Throws<InvalidDataException>(duplicate.Validate).Message);
@@ -65,7 +65,7 @@ public sealed class ModuleImageManifestDocumentTests
         image.Tag = null;
         image.Digest = $"sha256:{new string('b', 64)}";
 
-        var parsed = ModuleImageManifestDocument.Parse(document.ToJson());
+        var parsed = ModuleImageWorkflowDocument.Parse(document.ToJson());
 
         var parsedImage = Assert.Single(parsed.Images);
         Assert.Null(parsedImage.Tag);
@@ -73,14 +73,14 @@ public sealed class ModuleImageManifestDocumentTests
         Assert.EndsWith($"@{image.Digest}", parsedImage.Reference, StringComparison.Ordinal);
     }
 
-    private static ModuleImageManifestDocument CreateDocument()
+    private static ModuleImageWorkflowDocument CreateDocument()
     {
-        var document = new ModuleImageManifestDocument();
+        var document = new ModuleImageWorkflowDocument();
         document.Images.Add(CreateEntry("catalog", "api"));
         return document;
     }
 
-    private static ModuleImageManifestEntry CreateEntry(string module, string resource) => new()
+    private static ModuleImageWorkflowEntry CreateEntry(string module, string resource) => new()
     {
         Module = module,
         Resource = resource,
@@ -90,7 +90,7 @@ public sealed class ModuleImageManifestDocumentTests
         Tag = "candidate"
     };
 
-    private static string GetIdentity(ModuleImageManifestEntry entry) => $"{entry.Module}/{entry.Resource}";
+    private static string GetIdentity(ModuleImageWorkflowEntry entry) => $"{entry.Module}/{entry.Resource}";
 
     private sealed class TestDirectory : IDisposable
     {
@@ -105,7 +105,7 @@ public sealed class ModuleImageManifestDocumentTests
         {
             var path = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(),
-                $"modular-apphosts-manifest-tests-{Guid.NewGuid():N}");
+                $"modular-apphosts-workflow-tests-{Guid.NewGuid():N}");
             Directory.CreateDirectory(path);
             return new TestDirectory(path);
         }

@@ -8,7 +8,7 @@
 
 ## Validate the repository
 
-From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all three public packages:
+From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all four public packages:
 
 ```bash
 ./build.sh
@@ -32,18 +32,32 @@ Include the real Docker Compose deployment lifecycle when Docker or Podman is ru
 ./build.ps1 -Containers
 ```
 
-The package contract suite packs the library, testing, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
+The package contract suite packs the core library, testing library, workflow tool, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
 
 ## Repository layout
 
 - `src/Aspire.Hosting.ModularAppHosts`: core module APIs.
 - `src/Aspire.Hosting.ModularAppHosts.Generators`: source generator packaged with the core library.
 - `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
-- `src/Aspire.Hosting.ModularAppHosts.Tool`: reserved empty project.
+- `src/Aspire.Hosting.ModularAppHosts.Tool`: module image workflow document publication/application and cross-repository dispatch CLI.
 - `tests`: unit, lifecycle, generator, and package contract tests.
-- `samples`: runnable modular AppHost and E2E examples.
+- `tests/Spire.MultiRepo.E2E.Tests`: xUnit lifecycle tests and the isolated multi-repository scenario.
+- `tests/Spire.MultiRepo.E2E.Support`: tracked-fixture, process, Git, runtime, cleanup, and diagnostic support.
+- `samples`: runnable modular AppHosts and focused usage examples.
 - `templates`: the packaged `dotnet new` item template for the first module contract.
 - `docs`: user guides that are too detailed for the package README.
+
+Run the Docker-backed multi-repository suite with the same command as CI:
+
+```bash
+dotnet tool restore
+MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
+  dotnet test tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj \
+  --configuration Release
+```
+
+Podman is supported through Aspire's selected runtime and can be exercised by changing the runtime
+value to `podman`; the hosted CI suite currently validates Docker end to end.
 
 ## Commits and pull requests
 
@@ -59,9 +73,10 @@ When squash-merging, ensure the resulting commit message still follows this conv
 ## Documentation
 
 Describe the current supported workflow and lead with the task a reader can perform. Keep prerequisites,
-security boundaries, and option constraints beside the command or API they govern. Release notes and
-upgrade guides own migration history, leaving reference guides focused on the current contract. Avoid
-comparisons with unrelated or unsupported concepts in reference guides.
+security boundaries, and option constraints beside the command or API they govern. Breaking-change
+history belongs in Conventional Commit messages and generated release notes, leaving reference guides
+focused on the current contract. Avoid comparisons with unrelated or unsupported concepts in reference
+guides.
 
 ## Releases
 

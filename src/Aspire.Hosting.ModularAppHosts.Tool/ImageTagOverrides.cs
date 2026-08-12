@@ -8,12 +8,12 @@ internal sealed record ResourceTagOverride(string Module, string Resource, strin
     public string Identity => $"{Module}/{Resource}";
 }
 
-internal sealed class ManifestTagOverrides
+internal sealed class ImageTagOverrides
 {
     private readonly Dictionary<string, ResourceTagOverride> _resources =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public ManifestTagOverrides(string? globalTag, string resourceTags)
+    public ImageTagOverrides(string? globalTag, string resourceTags)
     {
         ArgumentNullException.ThrowIfNull(resourceTags);
         GlobalTag = string.IsNullOrWhiteSpace(globalTag) ? null : globalTag;
@@ -39,47 +39,9 @@ internal sealed class ManifestTagOverrides
 
     public bool HasOverrides => GlobalTag is not null || _resources.Count > 0;
 
-    public IReadOnlyDictionary<string, string?>? CreateProducerEnvironment(
-        IReadOnlyList<ModuleImageDescription> images)
-    {
-        ArgumentNullException.ThrowIfNull(images);
-        if (!HasOverrides)
-        {
-            return null;
-        }
+    public bool HasResourceOverrides => _resources.Count > 0;
 
-        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var image in images
-                     .OrderBy(image => image.Module, StringComparer.Ordinal)
-                     .ThenBy(image => image.Resource, StringComparer.Ordinal))
-        {
-            var tag = GlobalTag;
-            var identity = GetIdentity(image.Module, image.Resource);
-            if (_resources.TryGetValue(identity, out var resourceTag))
-            {
-                tag = resourceTag.Tag;
-                matched.Add(identity);
-            }
-
-            if (tag is null)
-            {
-                continue;
-            }
-
-            var prefix = ModuleImageWorkflowConfiguration.GetResourceKey(
-                image.Module,
-                image.Resource,
-                image.ResourceKind).Replace(":", "__", StringComparison.Ordinal);
-            values[$"{prefix}__ImageTag"] = tag;
-            values[$"{prefix}__ImageSHA256"] = string.Empty;
-        }
-
-        ThrowForUnmatched(matched);
-        return values;
-    }
-
-    public void Apply(ModuleImageManifestDocument document)
+    public void Apply(ModuleImageWorkflowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Validate();

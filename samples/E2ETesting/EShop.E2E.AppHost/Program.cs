@@ -4,7 +4,6 @@ using EShop.Modules;
 
 var builder = DistributedApplication.CreateBuilder(args);
 var sampleRoot = Path.GetFullPath("..", builder.AppHostDirectory);
-builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:AutoCloneRepositories"] = "true";
 builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:GitHubCliPath"] =
     "gh-is-not-needed-for-same-repository-modules";
 builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(CatalogModule.Name)] =
@@ -16,9 +15,9 @@ var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);
 var ordersApiKey = builder.AddParameter("orders-api-key", secret: true);
 
-var catalog = await builder.AddCatalogModuleAsync();
+var catalog = builder.AddCatalogModule();
 
-var orders = await builder.AddOrdersModuleAsync();
+var orders = builder.AddOrdersModule();
 
 orders.Api
     .WithEnvironment("Orders__ApiKey", ordersApiKey);

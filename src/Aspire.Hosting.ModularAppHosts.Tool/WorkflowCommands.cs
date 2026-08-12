@@ -20,26 +20,26 @@ internal sealed class WorkflowCommandService(
         string repository,
         string workflow,
         string? reference,
-        string manifestPath,
-        string manifestInput,
+        string workflowDocumentPath,
+        string workflowDocumentInput,
         IReadOnlyList<string> rawInputs,
         string githubCliPath,
         CancellationToken cancellationToken)
     {
         ValidateRequiredValue(repository, "--repository");
         ValidateRequiredValue(workflow, "--workflow");
-        ValidateRequiredValue(manifestPath, "--manifest");
-        ValidateRequiredValue(manifestInput, "--manifest-input");
+        ValidateRequiredValue(workflowDocumentPath, "--workflow-document");
+        ValidateRequiredValue(workflowDocumentInput, "--workflow-document-input");
         ValidateRequiredValue(githubCliPath, "--gh-path");
 
-        var document = await ModuleImageManifestDocument.LoadAsync(
-            Path.GetFullPath(manifestPath, workingDirectory),
+        var document = await ModuleImageWorkflowDocument.LoadAsync(
+            Path.GetFullPath(workflowDocumentPath, workingDirectory),
             cancellationToken).ConfigureAwait(false);
         var inputs = ParseInputs(rawInputs);
-        if (!inputs.TryAdd(manifestInput, document.ToJson()))
+        if (!inputs.TryAdd(workflowDocumentInput, document.ToJson()))
         {
             throw new ToolUsageException(
-                $"Workflow input '{manifestInput}' is reserved for the image manifest.");
+                $"Workflow input '{workflowDocumentInput}' is reserved for the module image workflow document.");
         }
 
         if (inputs.Count > 10)
@@ -48,10 +48,10 @@ internal sealed class WorkflowCommandService(
         }
 
         var payload = JsonSerializer.Serialize(inputs);
-        if (payload.Length > ModuleImageManifestDocument.MaximumJsonLength)
+        if (payload.Length > ModuleImageWorkflowDocument.MaximumJsonLength)
         {
             throw new ToolUsageException(
-                $"The complete workflow input payload exceeds {ModuleImageManifestDocument.MaximumJsonLength} characters.");
+                $"The complete workflow input payload exceeds {ModuleImageWorkflowDocument.MaximumJsonLength} characters.");
         }
 
         var dispatchArguments = new List<string>

@@ -45,6 +45,7 @@ cleanup() {
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$module_image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/declared:$branch_image_tag}" \
+        "${registry_endpoint:+$registry_endpoint/image-push/dockerfile:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$module_image_tag}" \
         "${registry_endpoint:+$registry_endpoint/image-push/factory:$branch_image_tag}" \
@@ -114,17 +115,22 @@ export ImagePush__RegistryEndpoint="$registry_endpoint"
 export ASPIRE_CONTAINER_RUNTIME="$container_runtime"
 
 cd "$repository_root"
-dotnet tool run aspire -- do push image-push-project \
+dotnet tool run aspire -- do push-image-push-project \
     --apphost "$apphost_project" \
     --non-interactive
 
 assert_repository_has_tag "image-push/project"
 assert_repository_has_tag "image-push/project" "$branch_image_tag"
 assert_repository_absent "image-push/declared"
+assert_repository_absent "image-push/dockerfile"
 assert_repository_absent "image-push/factory"
 assert_repository_absent "image-push/extra"
 
-dotnet tool run aspire -- do push module:image-push-e2e \
+dotnet tool run aspire -- do push-image-push-declared \
+    --apphost "$apphost_project" \
+    --non-interactive
+
+dotnet tool run aspire -- do push-image-push-factory \
     --apphost "$apphost_project" \
     --non-interactive
 
@@ -134,6 +140,7 @@ assert_repository_has_tag "image-push/declared" "$module_image_tag"
 assert_repository_has_tag "image-push/declared" "$branch_image_tag"
 assert_repository_has_tag "image-push/factory" "$module_image_tag"
 assert_repository_has_tag "image-push/factory" "$branch_image_tag"
+assert_repository_absent "image-push/dockerfile"
 assert_repository_absent "image-push/extra"
 if "$container_runtime" image exists "$registry_endpoint/image-push/extra:$image_tag" ||
     "$container_runtime" image exists "$registry_endpoint/image-push/extra:$module_image_tag"; then
@@ -141,11 +148,18 @@ if "$container_runtime" image exists "$registry_endpoint/image-push/extra:$image
     exit 1
 fi
 
-dotnet tool run aspire -- do push module:image-push-e2e module:image-push-extra \
+dotnet tool run aspire -- do push-image-push-dockerfile \
+    --apphost "$apphost_project" \
+    --non-interactive
+
+assert_repository_has_tag "image-push/dockerfile"
+assert_repository_absent "image-push/extra"
+
+dotnet tool run aspire -- do push-image-push-extra \
     --apphost "$apphost_project" \
     --non-interactive
 
 assert_repository_has_tag "image-push/extra" "$image_tag"
 assert_repository_has_tag "image-push/extra" "$branch_image_tag"
 
-echo "Verified scoped Aspire image pushes and branch alias '$branch_image_tag' against $registry_endpoint."
+echo "Verified custom and Aspire-native named-resource image pushes against $registry_endpoint."

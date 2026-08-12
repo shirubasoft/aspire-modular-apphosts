@@ -4,13 +4,13 @@ using System.Text.Json.Serialization;
 namespace Aspire.Hosting;
 
 /// <summary>Describes the remotely pullable module images shared between repository workflows.</summary>
-public sealed class ModuleImageManifestDocument
+public sealed class ModuleImageWorkflowDocument
 {
-    /// <summary>The largest manifest accepted as a GitHub workflow input.</summary>
+    /// <summary>The largest workflow document accepted as a GitHub workflow input.</summary>
     public const int MaximumJsonLength = 65_535;
 
     /// <summary>The default file name written by the workflow image pipeline.</summary>
-    public const string DefaultFileName = "module-image-manifest.json";
+    public const string DefaultFileName = "module-image-workflow.json";
 
     /// <summary>The schema version understood by this release.</summary>
     public const int CurrentSchemaVersion = 1;
@@ -21,10 +21,10 @@ public sealed class ModuleImageManifestDocument
 
     /// <summary>Gets the image overrides in deterministic module and resource order.</summary>
     [JsonPropertyOrder(1)]
-    public IList<ModuleImageManifestEntry> Images { get; } = [];
+    public IList<ModuleImageWorkflowEntry> Images { get; } = [];
 
-    /// <summary>Reads and validates an image manifest.</summary>
-    public static async Task<ModuleImageManifestDocument> LoadAsync(
+    /// <summary>Reads and validates an image workflow document.</summary>
+    public static async Task<ModuleImageWorkflowDocument> LoadAsync(
         string path,
         CancellationToken cancellationToken = default)
     {
@@ -33,18 +33,18 @@ public sealed class ModuleImageManifestDocument
         return Parse(json);
     }
 
-    /// <summary>Reads and validates an image manifest from JSON.</summary>
-    public static ModuleImageManifestDocument Parse(string json)
+    /// <summary>Reads and validates an image workflow document from JSON.</summary>
+    public static ModuleImageWorkflowDocument Parse(string json)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         if (json.Length > MaximumJsonLength)
         {
             throw new InvalidDataException(
-                $"The module image manifest exceeds the {MaximumJsonLength}-character workflow input limit.");
+                $"The module image workflow document exceeds the {MaximumJsonLength}-character workflow input limit.");
         }
 
-        var document = JsonSerializer.Deserialize<ModuleImageManifestDocument>(json, SerializerOptions)
-            ?? throw new InvalidDataException("The module image manifest is empty.");
+        var document = JsonSerializer.Deserialize<ModuleImageWorkflowDocument>(json, SerializerOptions)
+            ?? throw new InvalidDataException("The module image workflow document is empty.");
         document.Validate();
         return document;
     }
@@ -71,7 +71,7 @@ public sealed class ModuleImageManifestDocument
         }
     }
 
-    /// <summary>Serializes the manifest as compact JSON suitable for a workflow input.</summary>
+    /// <summary>Serializes the workflow document as compact JSON suitable for a workflow input.</summary>
     public string ToJson()
     {
         Validate();
@@ -79,7 +79,7 @@ public sealed class ModuleImageManifestDocument
         if (json.Length > MaximumJsonLength)
         {
             throw new InvalidDataException(
-                $"The module image manifest exceeds the {MaximumJsonLength}-character workflow input limit.");
+                $"The module image workflow document exceeds the {MaximumJsonLength}-character workflow input limit.");
         }
 
         return json;
@@ -91,13 +91,13 @@ public sealed class ModuleImageManifestDocument
         if (SchemaVersion != CurrentSchemaVersion)
         {
             throw new InvalidDataException(
-                $"Unsupported module image manifest schema version '{SchemaVersion}'. " +
+                $"Unsupported module image workflow document schema version '{SchemaVersion}'. " +
                 $"Expected '{CurrentSchemaVersion}'.");
         }
 
         if (Images.Count == 0)
         {
-            throw new InvalidDataException("The module image manifest must contain at least one image.");
+            throw new InvalidDataException("The module image workflow document must contain at least one image.");
         }
 
         var identities = new HashSet<(string Module, string Resource)>(ModuleResourceIdentityComparer.Instance);
@@ -108,7 +108,7 @@ public sealed class ModuleImageManifestDocument
             if (!identities.Add((image.Module, image.Resource)))
             {
                 throw new InvalidDataException(
-                    $"The module image manifest contains duplicate resource '{image.Module}/{image.Resource}'.");
+                    $"The module image workflow document contains duplicate resource '{image.Module}/{image.Resource}'.");
             }
         }
 
@@ -140,7 +140,7 @@ public sealed class ModuleImageManifestDocument
 }
 
 /// <summary>Maps one declared module resource to a complete remotely pullable image identity.</summary>
-public sealed class ModuleImageManifestEntry
+public sealed class ModuleImageWorkflowEntry
 {
     /// <summary>Gets or sets the module name.</summary>
     [JsonPropertyOrder(0)]

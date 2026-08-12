@@ -20,7 +20,7 @@ public interface IDistributedApplicationModule
 
     /// <summary>
     /// Gets every resource exported by the module in declaration order, including container resources created by
-    /// <see cref="IDistributedApplicationModuleBuilder.AddResource{TResource}(string, Func{IDistributedApplicationModuleResourceContext, IResourceBuilder{TResource}}, ModuleContainerExportOptions)"/>.
+    /// <see cref="IDistributedApplicationModuleBuilder.AddResource{TResource}(string, Func{IDistributedApplicationModuleResourceContext, IResourceBuilder{TResource}}, ModuleImageCommandOptions)"/>.
     /// </summary>
     IReadOnlyList<IDistributedApplicationModuleResource> Resources { get; }
 
@@ -74,13 +74,12 @@ public interface IDistributedApplicationModuleBuilder
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
         where TResource : IResource;
 
-    /// <summary>Adds a factory-created container resource with an explicit image publish command.</summary>
+    /// <summary>Adds a factory-created container resource with an advanced image publish command.</summary>
     IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
-        ModuleContainerExportOptions imagePublishOptions)
-        where TResource : ContainerResource =>
-        throw new NotSupportedException("This module builder does not support factory-created image publishers.");
+        ModuleImageCommandOptions imagePublishOptions)
+        where TResource : ContainerResource;
 
     /// <summary>Adds a generated Aspire project reference to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
@@ -93,13 +92,7 @@ public interface IDistributedApplicationModuleBuilder
     IDistributedApplicationModuleProjectBuilder AddProject(
         string name,
         string projectPath,
-        ModuleProjectPathBase pathBase) => pathBase switch
-        {
-            ModuleProjectPathBase.AppHost => AddProject(name, projectPath),
-            ModuleProjectPathBase.Repository => throw new NotSupportedException(
-                "This module builder does not support repository-relative project paths."),
-            _ => throw new ArgumentOutOfRangeException(nameof(pathBase))
-        };
+        ModuleProjectPathBase pathBase);
 
     /// <summary>Adds an existing container image to the module.</summary>
     IDistributedApplicationModuleContainerBuilder AddContainer(
@@ -108,7 +101,7 @@ public interface IDistributedApplicationModuleBuilder
         string tag = "latest");
 
     /// <summary>
-    /// Overrides the Git repository used by <c>ImportModuleAsync</c>. When omitted, the origin remote is inferred
+    /// Overrides the Git repository used by <c>ImportModule</c>. When omitted, the origin remote is inferred
     /// from the projects' common Git worktree.
     /// </summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository);
@@ -148,7 +141,7 @@ public interface IDistributedApplicationModuleResourceContext
     bool Imported { get; }
 
     /// <summary>Gets the resolved image for a container resource, when one is available.</summary>
-    ModuleResourceImage? Image => null;
+    ModuleResourceImage? Image { get; }
 
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)
@@ -178,9 +171,9 @@ public interface IDistributedApplicationModuleContainerBuilder
     IDistributedApplicationModuleContainerBuilder Configure(
         Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>> configureContainer);
 
-    /// <summary>Publishes the container image with an explicit command before the container starts.</summary>
+    /// <summary>Publishes the container image with an advanced command before the container starts.</summary>
     IDistributedApplicationModuleContainerBuilder WithImagePublishCommand(
-        ModuleContainerExportOptions options);
+        ModuleImageCommandOptions options);
 }
 
 /// <summary>A project contained in a distributed application module.</summary>
@@ -203,25 +196,28 @@ public interface IDistributedApplicationModuleProjectBuilder
     IDistributedApplicationModuleProjectBuilder ConfigureProject(
         Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ProjectResource>> configureProject);
 
-    /// <summary>Exports the project as a container built by the supplied publish command.</summary>
+    /// <summary>Exports the project through Aspire's native project container publisher.</summary>
     IDistributedApplicationModuleProjectBuilder ExportAsContainer(
         string imageName,
-        string publishCommand,
-        IReadOnlyList<string> publishArguments,
         Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null);
 
-    /// <summary>Exports the project as a container with explicit publish settings.</summary>
-    IDistributedApplicationModuleProjectBuilder ExportAsContainer(
-        ModuleContainerExportOptions options,
+    /// <summary>Exports the project as a container using an advanced arbitrary publish command.</summary>
+    IDistributedApplicationModuleProjectBuilder ExportAsContainerWithCommand(
+        ModuleImageCommandOptions options,
         Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? configureContainer = null);
 }
 
-/// <summary>Controls how a module project is converted into a container resource.</summary>
-public sealed class ModuleContainerExportOptions(
+/// <summary>Controls the advanced command used to build a module container image.</summary>
+public sealed class ModuleImageCommandOptions(
     string imageName,
     string publishCommand,
     params string[] publishArguments)
 {
+    /// <summary>
+    /// Placeholder for the Docker or Podman executable selected when the image publish command runs.
+    /// </summary>
+    public const string ContainerRuntimePlaceholder = "{container-runtime}";
+
     /// <summary>Placeholder for the effective image name in a publish argument.</summary>
     public const string ImageNamePlaceholder = "{image-name}";
 
@@ -246,15 +242,18 @@ public sealed class ModuleContainerExportOptions(
     public string? ImageRegistry { get; set; }
 
     /// <summary>
-    /// Gets or sets the image reference produced by a legacy publish command. When it differs from the effective
-    /// image reference, the installer tags it after the command succeeds.
+    /// Gets or sets the image reference produced by the advanced publish command. When it differs from the effective
+    /// image reference, image preparation tags it after the command succeeds.
     /// </summary>
     public string? ProducedImageReference { get; set; }
 
     /// <summary>Gets or sets whether a missing clean image is pulled before the publish command is run.</summary>
     public bool PullBeforeBuild { get; set; }
 
-    /// <summary>Gets the executable invoked by the service installer.</summary>
+    /// <summary>
+    /// Gets the executable invoked during advanced image preparation. Use <see cref="ContainerRuntimePlaceholder"/> to defer
+    /// Docker or Podman selection until the image publish command runs.
+    /// </summary>
     public string PublishCommand { get; } = publishCommand;
 
     /// <summary>

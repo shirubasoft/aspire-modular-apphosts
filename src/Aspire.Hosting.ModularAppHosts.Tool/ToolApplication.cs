@@ -45,7 +45,7 @@ internal static class ToolApplication
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
-        var service = new ManifestCommandService(
+        var service = new ImageCommandService(
             processRunner,
             configuration,
             githubActions,
@@ -60,10 +60,10 @@ internal static class ToolApplication
             output,
             error);
         var root = new RootCommand("Workflow tooling for Aspire modular AppHosts.");
-        var manifest = new Command("manifest", "Creates and consumes workflow image manifests.");
-        manifest.Subcommands.Add(CreatePublishCommand(service));
-        manifest.Subcommands.Add(CreateApplyCommand(service));
-        root.Subcommands.Add(manifest);
+        var images = new Command("images", "Creates and consumes module image workflow documents.");
+        images.Subcommands.Add(CreatePublishCommand(service));
+        images.Subcommands.Add(CreateApplyCommand(service));
+        root.Subcommands.Add(images);
         var workflow = new Command("workflow", "Orchestrates external GitHub Actions workflows.");
         workflow.Subcommands.Add(CreateDispatchCommand(workflowService));
         root.Subcommands.Add(workflow);
@@ -97,16 +97,21 @@ internal static class ToolApplication
         }
     }
 
-    private static Command CreatePublishCommand(ManifestCommandService service)
+    private static Command CreatePublishCommand(ImageCommandService service)
     {
         var appHost = new Option<string>("--apphost")
         {
             Description = "AppHost project path or containing directory.",
             Required = true
         };
-        var selectors = new Option<string[]>("--selector")
+        var modules = new Option<string[]>("--module")
         {
-            Description = "Module or resource selector. Repeat for multiple selections.",
+            Description = "Module name to publish. Repeat for multiple modules.",
+            AllowMultipleArgumentsPerToken = true
+        };
+        var resources = new Option<string[]>("--resource")
+        {
+            Description = "Declared or effective resource name to publish. Repeat for multiple resources.",
             AllowMultipleArgumentsPerToken = true
         };
         var all = new Option<bool>("--all")
@@ -124,7 +129,7 @@ internal static class ToolApplication
         };
         var output = new Option<string?>("--output")
         {
-            Description = "Manifest output path."
+            Description = "Module image workflow document output path."
         };
         var aspirePath = new Option<string>("--aspire-path")
         {
@@ -133,7 +138,8 @@ internal static class ToolApplication
         };
         var command = new Command("publish", "Publishes selected images and writes their remote identities.");
         command.Options.Add(appHost);
-        command.Options.Add(selectors);
+        command.Options.Add(modules);
+        command.Options.Add(resources);
         command.Options.Add(all);
         command.Options.Add(tag);
         command.Options.Add(resourceTags);
@@ -141,7 +147,8 @@ internal static class ToolApplication
         command.Options.Add(aspirePath);
         command.SetAction((parse, cancellationToken) => service.PublishAsync(
             parse.GetRequiredValue(appHost),
-            parse.GetValue(selectors) ?? [],
+            parse.GetValue(modules) ?? [],
+            parse.GetValue(resources) ?? [],
             parse.GetValue(all),
             parse.GetValue(tag),
             parse.GetRequiredValue(resourceTags),
@@ -151,19 +158,19 @@ internal static class ToolApplication
         return command;
     }
 
-    private static Command CreateApplyCommand(ManifestCommandService service)
+    private static Command CreateApplyCommand(ImageCommandService service)
     {
         var file = new Option<string?>("--file")
         {
-            Description = "Manifest file path."
+            Description = "Module image workflow document file path."
         };
         var json = new Option<string?>("--json")
         {
-            Description = "Inline compact manifest JSON."
+            Description = "Inline compact module image workflow document JSON."
         };
         var tag = new Option<string?>("--tag")
         {
-            Description = "Tag applied to every manifest image."
+            Description = "Tag applied to every workflow image."
         };
         var resourceTags = new Option<string>("--resource-tags")
         {
@@ -172,7 +179,7 @@ internal static class ToolApplication
         };
         var childCommand = new Argument<string[]>("command")
         {
-            Description = "Command and arguments to run with the manifest configuration; precede them with '--'.",
+            Description = "Command and arguments to run with the workflow image configuration; precede them with '--'.",
             Arity = ArgumentArity.OneOrMore
         };
         var command = new Command("apply", "Runs a command with workflow image identities applied.");
@@ -208,15 +215,15 @@ internal static class ToolApplication
         {
             Description = "Target branch or tag containing the workflow. Defaults to the repository default branch."
         };
-        var manifest = new Option<string>("--manifest")
+        var workflowDocument = new Option<string>("--workflow-document")
         {
-            Description = "Module image manifest file passed to the target workflow.",
+            Description = "Module image workflow document file passed to the target workflow.",
             Required = true
         };
-        var manifestInput = new Option<string>("--manifest-input")
+        var workflowDocumentInput = new Option<string>("--workflow-document-input")
         {
-            Description = "Target workflow input that receives the manifest.",
-            DefaultValueFactory = _ => "image-manifest"
+            Description = "Target workflow input that receives the module image workflow document.",
+            DefaultValueFactory = _ => "image-workflow"
         };
         var inputs = new Option<string[]>("--input")
         {
@@ -232,16 +239,16 @@ internal static class ToolApplication
         command.Options.Add(repository);
         command.Options.Add(workflow);
         command.Options.Add(reference);
-        command.Options.Add(manifest);
-        command.Options.Add(manifestInput);
+        command.Options.Add(workflowDocument);
+        command.Options.Add(workflowDocumentInput);
         command.Options.Add(inputs);
         command.Options.Add(githubCliPath);
         command.SetAction((parse, cancellationToken) => service.DispatchAsync(
             parse.GetRequiredValue(repository),
             parse.GetRequiredValue(workflow),
             parse.GetValue(reference),
-            parse.GetRequiredValue(manifest),
-            parse.GetRequiredValue(manifestInput),
+            parse.GetRequiredValue(workflowDocument),
+            parse.GetRequiredValue(workflowDocumentInput),
             parse.GetValue(inputs) ?? [],
             parse.GetRequiredValue(githubCliPath),
             cancellationToken));

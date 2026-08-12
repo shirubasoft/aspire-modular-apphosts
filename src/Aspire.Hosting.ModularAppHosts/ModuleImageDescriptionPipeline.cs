@@ -29,14 +29,11 @@ internal static class ModuleImageDescriptionPipeline
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var selection = ModuleImagePipelineSelectionParser.GetSelection(
-            Environment.GetCommandLineArgs(),
-            StepName);
         builder.Pipeline.AddStep(new PipelineStep
         {
             Name = StepName,
             Description = "Writes effective module image identities and build origins.",
-            Action = context => DescribeAsync(context, selection)
+            Action = context => DescribeAsync(context, ModuleImageSelection.All)
         });
     }
 
@@ -64,7 +61,8 @@ internal static class ModuleImageDescriptionPipeline
             .Select(resource => (
                 Resource: resource,
                 Module: resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>().LastOrDefault(),
-                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()))
+                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault(),
+                NativePublisher: resource.Annotations.OfType<ModuleNativeImagePublisherAnnotation>().LastOrDefault()))
             .Where(item =>
                 item.Module is not null &&
                 item.Resource.Annotations.OfType<ContainerImageAnnotation>().Any())
@@ -101,23 +99,34 @@ internal static class ModuleImageDescriptionPipeline
             cancellationToken.ThrowIfCancellationRequested();
             var module = item.Module!;
             var publisher = item.Publisher;
+            var nativePublisher = item.NativePublisher;
+            ModuleImageExecutionPlan? executionPlan = null;
+            if (publisher is not null)
+            {
+                var sourceState = publisher.TryGetPreparedImage(out var preparedImage)
+                    ? preparedImage.SourceState
+                    : await publisher.InspectSourceAsync(cancellationToken).ConfigureAwait(false);
+                executionPlan = ModuleImageExecutionPlan.Create(publisher.Recipe, sourceState);
+            }
+
             var effective = await ModuleEffectiveImageResolver.ResolveAsync(
                 item.Resource,
                 cancellationToken,
-                allowUnqualifiedPullReference: true).ConfigureAwait(false);
+                allowUnqualifiedPullReference: true,
+                imagePlan: executionPlan).ConfigureAwait(false);
             var description = new ModuleImageDescription
             {
                 Module = module.ModuleName,
                 Resource = module.ResourceName,
                 EffectiveResource = item.Resource.Name,
-                ResourceKind = publisher?.ResourceKind ?? ModuleResourceKind.Container,
+                ResourceKind = publisher?.ResourceKind ?? nativePublisher?.ResourceKind ?? ModuleResourceKind.Container,
                 Registry = effective.Registry,
                 Repository = effective.Repository,
                 Tag = effective.Tag,
                 Digest = effective.Digest,
                 Reference = effective.Reference,
                 PullReference = effective.PullReference,
-                Push = publisher is null || effective.PushImage is null
+                Push = publisher is null && nativePublisher is null || effective.PushImage is null
                     ? null
                     : new ModuleImagePushDescription
                     {
@@ -136,7 +145,7 @@ internal static class ModuleImageDescriptionPipeline
                         Step = $"build-{item.Resource.Name}"
                     }
             };
-            foreach (var argument in publisher?.Plan.PublishArguments ?? [])
+            foreach (var argument in executionPlan?.PublishArguments ?? [])
             {
                 description.Build!.Arguments.Add(argument);
             }

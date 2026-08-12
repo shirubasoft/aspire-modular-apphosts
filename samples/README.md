@@ -50,22 +50,24 @@ representation receives the same value.
 ## Prerequisites
 
 - .NET 10 SDK
-- Aspire CLI 13.4 or later
+- Aspire CLI 13.4.6 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; `DOTNET_ASPIRE_CONTAINER_RUNTIME` is also accepted; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker.
+The sample publishers use `ModuleImageCommandOptions.ContainerRuntimePlaceholder`, which resolves
+through Aspire's `IContainerRuntimeResolver`. The build therefore follows the same configured Docker
+or Podman runtime as the AppHost.
 
 ## Run AppHost A
 
 ```bash
 cd samples/AppHostA
-aspire run
+aspire
 ```
 
 AppHost A materializes its local module and opts into the module-declared image publishers. Development
 configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for
-debugging while publish mode retains its container representation. `sample-generated-static-installer`
-builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly
+debugging while publish mode retains its container representation. The `sample-generated-static`
+resource builds its Dockerfile-based image immediately before it starts, and `sample-static` runs directly
 from `busybox:1.37`, serving the message obtained from the module-owned parameter. Clean images are
 reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`.
 The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate
@@ -77,10 +79,10 @@ Stop AppHost A, then run the importing host:
 
 ```bash
 cd ../AppHostB
-aspire run
+aspire
 ```
 
-AppHost B sets `Aspire:ModularAppHosts:RepositoryBasePath` to the sample source directory and supplies the AppHost A repository through its configuration-backed Aspire parameter. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api
@@ -93,9 +95,11 @@ aspire describe --include-hidden
 
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
-Run `bash samples/test-modular-apphosts.sh` from the repository root to start both AppHosts exactly as
-CI does and verify that project, exported-project, and declared-container callbacks resolve the
-module-owned message.
+After confirming Docker or Podman is running, execute
+`MODULAR_SAMPLES_E2E=true dotnet test samples/ModularSamples.Tests/ModularSamples.Tests.csproj` from
+the repository root to exercise both AppHosts through Aspire's in-process testing builder exactly as
+CI does. The test verifies project, exported-project, declared-container, generated-image, and gateway
+behavior against the module-owned message.
 
 ## E2E testing sample
 
@@ -105,8 +109,8 @@ module-owned message.
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. A second module proves module and multi-module push
-selection while verifying that unselected publishers are not built. The pull fixture also maps an
+an advanced factory-created publisher, and an Aspire-native Dockerfile resource. A second module proves image isolation through Aspire's
+named resource steps while verifying that unselected publishers are not built. The pull fixture also maps an
 image from one temporary registry to a local reference in a second registry. `test-image-describe.sh`
 separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
 the [sample README](ImagePushE2E/README.md) for commands.
@@ -116,5 +120,12 @@ the [sample README](ImagePushE2E/README.md) for commands.
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
 sample API from a contract package while its image build inputs live in a separately initialized
 local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
-and a second local-registry producer-to-consumer image-manifest handoff; it does not depend on an
-external `Shirubasoft/spire` checkout.
+and a second local-registry producer-to-consumer module image workflow document handoff; it does not depend
+on an external `Shirubasoft/spire` checkout.
+
+## Remote initialization sample
+
+[`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
+flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
+which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
+starts the imported service; later initialization runs can fast-forward its clean checkout.

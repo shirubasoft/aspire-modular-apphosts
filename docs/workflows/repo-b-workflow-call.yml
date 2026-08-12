@@ -14,7 +14,7 @@ on:
         default: '{}'
         type: string
       repo-a-image-tag:
-        description: Optional tag Repo A applies after receiving the manifest
+        description: Optional tag Repo A applies after receiving the workflow document
         required: false
         type: string
       repo-a-resource-tags:
@@ -36,7 +36,7 @@ jobs:
   publish-images:
     runs-on: ubuntu-latest
     outputs:
-      image-manifest: ${{ steps.images.outputs.manifest }}
+      image-workflow: ${{ steps.images.outputs['workflow-document'] }}
     env:
       MODULE_IMAGE_TAG: ${{ inputs.image-tag || github.sha }}
       MODULE_RESOURCE_TAGS: ${{ inputs.resource-tags || '{}' }}
@@ -66,9 +66,9 @@ jobs:
       - name: Publish selected Repo B images
         id: images
         run: >-
-          dotnet tool run modular-apphosts -- manifest publish
+          dotnet tool run modular-apphosts -- images publish
           --apphost src/RepoB.AppHost
-          --selector orders
+          --module orders
           --tag "$MODULE_IMAGE_TAG"
           --resource-tags "$MODULE_RESOURCE_TAGS"
 
@@ -76,7 +76,7 @@ jobs:
     needs: publish-images
     uses: your-org/repo-a/.github/workflows/external-e2e.yml@main
     with:
-      image-manifest: ${{ needs.publish-images.outputs.image-manifest }}
+      image-workflow: ${{ needs.publish-images.outputs.image-workflow }}
       repo-a-ref: ${{ inputs.repo-a-ref || 'main' }}
       image-tag: ${{ inputs.repo-a-image-tag }}
       resource-tags: ${{ inputs.repo-a-resource-tags || '{}' }}

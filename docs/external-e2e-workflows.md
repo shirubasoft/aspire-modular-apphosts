@@ -1,14 +1,14 @@
 # Cross-repository E2E image workflows
 
 This workflow lets a branch in Repo B build and push only the module images it owns, then run Repo
-A's existing E2E AppHost against those images. Repo A receives a strict manifest and ordinary .NET
+A's existing E2E AppHost against those images. Repo A receives a strict module image workflow document and ordinary .NET
 configuration; it does not clone Repo B or rebuild Repo B's resources.
 
 The checked-in examples contain no custom orchestration scripts:
 
 - [Repo A receiver](workflows/repo-a-e2e.yml) accepts both `workflow_call` and
   `workflow_dispatch`.
-- [Repo B reusable call](workflows/repo-b-workflow-call.yml) hands the compact manifest directly to
+- [Repo B reusable call](workflows/repo-b-workflow-call.yml) hands the compact workflow document directly to
   Repo A.
 - [Repo B dispatch](workflows/repo-b-dispatch.yml) uses the tool to dispatch, wait, and propagate
   Repo A's status.
@@ -16,8 +16,9 @@ The checked-in examples contain no custom orchestration scripts:
 ## Contract between the repos
 
 Repo B's AppHost must expose pushable module images. Each selected project/container needs a
-resolved registry, repository, tag, and build/push plan; see [module image publishing](modules.md).
-Repo A must import the same module contract identities. A manifest entry is keyed by the declared
+resolved registry, repository, tag, and build/push plan; see the
+[module image workflow guide](module-images.md).
+Repo A must import the same module contract identities. A module image workflow document entry is keyed by the declared
 `module/resource`, never by Repo A's effective Aspire alias.
 
 Pin the same release of the runtime package and tool in both repositories. In each repo:
@@ -32,10 +33,12 @@ The workflows restore that committed manifest with `dotnet tool restore`. Repo B
 CLI 13.4.6 or later. Dispatch additionally needs GitHub CLI 2.87.0 or later; GitHub-hosted runners
 already include `gh`, but verify the version on self-hosted runners.
 
-## Manifest contract
+## Module image workflow document contract
 
-Repo B publishes a [versioned image manifest](module-image-manifest.schema.json). A complete example
-is checked in at [examples/module-image-manifest.json](examples/module-image-manifest.json):
+Repo B publishes a [versioned module image workflow document](module-image-workflow.schema.json). This
+tool-specific contract is not an Aspire application manifest; it carries module/source identities
+needed for cross-repository handoff. A complete example
+is checked in at [examples/module-image-workflow.json](examples/module-image-workflow.json):
 
 ```json
 {
@@ -56,11 +59,11 @@ is checked in at [examples/module-image-manifest.json](examples/module-image-man
 
 Unknown properties, duplicate case-insensitive identities, incomplete registry references, invalid
 tags/digests, and reserved configuration separators are rejected. Each image has exactly one tag
-or SHA-256 digest. The manifest and the complete dispatch input payload are each limited to 65,535
+or SHA-256 digest. The workflow document and the complete dispatch input payload are each limited to 65,535
 characters.
 
-`manifest publish` records the pushed tag. It does not query the registry for a post-push digest.
-Use a unique immutable-by-convention tag such as the commit SHA, or supply a digest manifest from a
+`images publish` records the pushed tag. It does not query the registry for a post-push digest.
+Use a unique immutable-by-convention tag such as the commit SHA, or supply a digest workflow document from a
 trusted system when registry-level immutability is required.
 
 ## Publish in Repo B
@@ -68,47 +71,48 @@ trusted system when registry-level immutability is required.
 Authenticate the container runtime first, then publish an explicit selection:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest publish \
+dotnet tool run modular-apphosts -- images publish \
   --apphost src/RepoB.AppHost \
-  --selector orders \
-  --selector catalog/api \
+  --module orders \
+  --resource api \
   --tag "$GITHUB_SHA" \
   --resource-tags '{"orders/worker":"worker-candidate"}' \
-  --output module-image-manifest.json
+  --output module-image-workflow.json
 ```
 
-Selectors can be an unambiguous module/resource name, `module:<name>`, `resource:<name>`, or an
-exact `<module>/<resource>` identity. Use `--all` only when every publishable AppHost image should
-be pushed. The command runs Aspire's structured `describe-images` and `workflow-images` pipelines,
-then builds the manifest from the resolved push targets.
+Repeat `--module` and `--resource` to select module-owned publishers by their declared identities.
+Use `--all` only when every publishable module image should be pushed. The command runs Aspire's
+`workflow-images` pipeline once; the selected dependency graph prepares and pushes every selected
+image exactly once and writes the module image workflow document from those resolved push targets.
+Run `aspire do describe-images` separately when a read-only inventory is needed.
 
 On GitHub Actions it automatically emits step outputs:
 
 | Output | Use |
 | --- | --- |
-| `manifest` | Compact JSON passed to a reusable workflow. |
-| `manifest-path` | Saved file passed to `workflow dispatch`. |
+| `workflow-document` | Compact JSON passed to a reusable workflow. |
+| `workflow-document-path` | Saved file passed to `workflow dispatch`. |
 
 ## Apply in Repo A
 
-Pass the manifest through an environment variable and run the E2E command through `apply`:
+Pass the workflow document through an environment variable and run the E2E command through `apply`:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest apply \
-  --json "$IMAGE_MANIFEST" \
+dotnet tool run modular-apphosts -- images apply \
+  --json "$IMAGE_WORKFLOW" \
   --tag "$REPO_A_IMAGE_TAG" \
   --resource-tags "$REPO_A_RESOURCE_TAGS" \
   -- \
   dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
 
-`apply` projects the manifest into the standard `Aspire:ModularAppHosts:Modules` option hierarchy and
+`apply` projects the workflow document into the standard `Aspire:ModularAppHosts:Modules` option hierarchy and
 launches the command after `--` with that configuration. It does not invoke a shell or modify the
 parent process, so the exact invocation works locally and in CI. Projects run in container mode,
 listed resources do not publish locally, and `ImagePullPolicy.Always` prevents a stale local tag.
 When every source-backed image publisher is covered and the module does not explicitly require
 repository content, even a repository declared by the module contract is not discovered, prepared,
-or cloned; the receiving AppHost uses the contract assembly for its resource model and the manifest
+or cloned; the receiving AppHost uses the contract assembly for its resource model and the workflow document
 for images.
 Normal `IConfiguration` precedence still applies; later code configuration can intentionally replace
 a workflow override. Standard input and output are streamed, and the child exit code is returned.
@@ -118,10 +122,10 @@ The tag precedence is the same for both handoff styles:
 | Order | Source | Scope |
 | --- | --- | --- |
 | 1 | AppHost-resolved image tag/digest | Each Repo B resource. |
-| 2 | Repo B `manifest publish --tag` | Every selected resource. |
-| 3 | Repo B `manifest publish --resource-tags` | Named Repo B resources. |
-| 4 | Repo A `manifest apply --tag` | Every received resource. |
-| 5 | Repo A `manifest apply --resource-tags` | Named Repo A resources. |
+| 2 | Repo B `images publish --tag` | Every selected resource. |
+| 3 | Repo B `images publish --resource-tags` | Named Repo B resources. |
+| 4 | Repo A `images apply --tag` | Every received resource. |
+| 5 | Repo A `images apply --resource-tags` | Named Repo A resources. |
 
 Repo A's tag options only select existing images. They do not create or retag registry content.
 
@@ -144,7 +148,7 @@ dotnet tool run modular-apphosts -- workflow dispatch \
   --repository your-org/repo-a \
   --workflow external-e2e.yml \
   --ref main \
-  --manifest module-image-manifest.json \
+  --workflow-document module-image-workflow.json \
   --input repo-a-ref=main \
   --input image-tag="$REPO_A_IMAGE_TAG" \
   --input resource-tags="$REPO_A_RESOURCE_TAGS"
@@ -176,17 +180,17 @@ container inputs.
 
 Workflow values are assigned through `env` and passed as quoted command arguments in the examples;
 they are not interpolated directly into shell programs. Tokens stay in `GH_TOKEN` or action inputs,
-not command lines or manifests.
+not command lines or workflow documents.
 
 ## Exit status and troubleshooting
 
-Manifest commands return `0` on success, `1` for operational failures, `2` for invalid inputs, and
+Image workflow commands return `0` on success, `1` for operational failures, `2` for invalid inputs, and
 `130` when interrupted. Dispatch returns `gh run watch --exit-status` so Repo A failure makes Repo
 B fail without a second status-mapping layer.
 
 - **No run URL is returned:** upgrade `gh` to 2.87.0 or newer. Never guess by selecting the latest
   run; concurrent dispatches make that unsafe.
-- **Apply has no effect:** ensure the E2E command follows `--` in the same `manifest apply`
+- **Apply has no effect:** ensure the E2E command follows `--` in the same `images apply`
   invocation; configuration cannot escape into a parent shell or a later step.
 - **A tag cannot be pulled:** ensure it was pushed and that Repo A's container runtime is logged in.
 - **A resource is unknown:** use the declared `module/resource`, not an imported alias or effective

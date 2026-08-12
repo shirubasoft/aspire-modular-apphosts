@@ -22,14 +22,13 @@ public sealed class ModuleImageDescriptionPipelineTests
     public async Task Describes_contract_modules_without_container_images()
     {
         var builder = CreatePublishBuilder(Directory.GetCurrentDirectory());
-        var module = await builder.ExportModuleAsync(
+        var module = builder.ExportModule(
             "contract-only",
             "Sample.ContractOnly",
             definition => definition.AddResource<ParameterResource>(
                 "marker",
-                context => context.ApplicationBuilder.AddParameter(context.ResourceName)),
-            TestContext.Current.CancellationToken);
-        await builder.AddAsync(module, TestContext.Current.CancellationToken);
+                context => context.ApplicationBuilder.AddParameter(context.ResourceName)));
+        builder.AddModule(module);
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             builder.Resources,
@@ -55,20 +54,20 @@ public sealed class ModuleImageDescriptionPipelineTests
         ConfigureImage(builder, "Projects", "project", "acme/project", "project-ci");
         ConfigureImage(builder, "Containers", "declared", "acme/declared", "declared-ci");
         ConfigureImage(builder, "Containers", "factory", "acme/factory", "factory-ci");
-        var module = await builder.ExportModuleAsync(
+        var module = builder.ExportModule(
             "images",
             "Sample.Images.Contract",
             definition =>
             {
                 definition.WithRepository(repository.Path);
                 definition.AddProject("project", projectPath)
-                    .ExportAsContainer(new ModuleContainerExportOptions("old/project", "build-project", "publish")
+                    .ExportAsContainerWithCommand(new ModuleImageCommandOptions("old/project", "build-project", "publish")
                     {
                         ImageRegistry = "old.example.test",
                         ImageTag = "old"
                     });
                 definition.AddContainer("declared", "old.example.test/old/declared", "old")
-                    .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    .WithImagePublishCommand(new ModuleImageCommandOptions(
                         "old/declared",
                         "build-declared",
                         "publish")
@@ -79,16 +78,16 @@ public sealed class ModuleImageDescriptionPipelineTests
                 definition.AddResource<ContainerResource>(
                     "factory",
                     context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                    new ModuleContainerExportOptions("old/factory", "build-factory", "publish")
+                    new ModuleImageCommandOptions("old/factory", "build-factory", "publish")
                     {
                         ImageRegistry = "old.example.test",
                         ImageTag = "old"
                     });
                 definition.AddContainer("consumed", "registry.example.test/library/redis", "7");
-            },
-            TestContext.Current.CancellationToken);
+            });
 
-        await builder.AddAsync(module);
+        builder.AddModule(module);
+        UsePreparedPublishers(builder.Resources);
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             builder.Resources,
@@ -129,25 +128,41 @@ public sealed class ModuleImageDescriptionPipelineTests
             Image = "acme/api",
             Tag = "candidate"
         });
-        var options = new ModuleContainerExportOptions("acme/api", "docker", "build")
+        var options = new ModuleImageCommandOptions("acme/api", "docker", "build")
         {
             ImageRegistry = "registry.example.test",
             ImageTag = "candidate"
         };
-        var plan = await ModuleImagePublishPlan.CreateAsync(
-            options,
-            repositoryDirty: false,
-            (_, _) => Task.FromResult(false),
-            TestContext.Current.CancellationToken);
+        var recipe = new ModuleImageBuildRecipe(
+            new ModuleImageRecipeIdentity("orders", "api"),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                "https://example.test/orders.git",
+                "main",
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
+        var sourceState = new ModuleImageSourceState(
+            "main",
+            "abcdef012345",
+            IsDirty: false,
+            StatusFingerprint: "CLEAN");
+        var executionPlan = ModuleImageExecutionPlan.Create(recipe, sourceState);
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
-            "orders",
-            "api",
             ModuleResourceKind.Container,
-            options,
-            plan,
-            "/work",
-            "https://example.test/orders.git",
-            "main"));
+            recipe,
+            (_, _, _, _) => Task.FromResult(new ModulePreparedImage(
+                executionPlan.CanonicalImageReference,
+                recipe.LocalImageReference,
+                sourceState,
+                ModuleImagePreparationDisposition.Built)),
+            (_, _) => Task.FromResult(sourceState)));
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "api",
@@ -156,7 +171,7 @@ public sealed class ModuleImageDescriptionPipelineTests
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             [resource],
-            new ModuleImageSelection(["api"]),
+            new ModuleImageSelection([], ["api"]),
             TestContext.Current.CancellationToken);
 
         var image = Assert.Single(document.Images);
@@ -186,7 +201,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ModuleImageDescriptionPipeline.CreateDocumentAsync(
                 [resource],
-                new ModuleImageSelection(["missing-api"]),
+                new ModuleImageSelection([], ["missing-api"]),
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);
@@ -279,6 +294,36 @@ public sealed class ModuleImageDescriptionPipelineTests
         builder.Configuration[$"{section}:ImageRegistry"] = "registry.example.test";
         builder.Configuration[$"{section}:ImageName"] = repository;
         builder.Configuration[$"{section}:ImageTag"] = tag;
+    }
+
+    private static void UsePreparedPublishers(IEnumerable<IResource> resources)
+    {
+        foreach (var resource in resources)
+        {
+            var publisher = resource.Annotations
+                .OfType<ModuleImagePublisherAnnotation>()
+                .LastOrDefault();
+            if (publisher is null)
+            {
+                continue;
+            }
+
+            var sourceState = new ModuleImageSourceState(
+                "main",
+                "abcdef012345",
+                IsDirty: false,
+                StatusFingerprint: "CLEAN");
+            var executionPlan = ModuleImageExecutionPlan.Create(publisher.Recipe, sourceState);
+            resource.Annotations.Add(new ModuleImagePublisherAnnotation(
+                publisher.ResourceKind,
+                publisher.Recipe,
+                (_, _, _, _) => Task.FromResult(new ModulePreparedImage(
+                    executionPlan.CanonicalImageReference,
+                    publisher.Recipe.LocalImageReference,
+                    sourceState,
+                    ModuleImagePreparationDisposition.Built)),
+                (_, _) => Task.FromResult(sourceState)));
+        }
     }
 
     private static IDistributedApplicationBuilder CreatePublishBuilder(string projectDirectory)

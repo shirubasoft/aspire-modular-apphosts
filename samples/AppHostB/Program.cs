@@ -5,13 +5,11 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var samplesRoot = Path.GetFullPath("..", builder.AppHostDirectory);
 var appHostASource = Path.Combine(samplesRoot, "AppHostA");
-builder.Configuration[$"{ModularAppHostsOptions.ConfigurationSectionName}:RepositoryBasePath"] = samplesRoot;
 builder.Configuration[DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(AppHostAModule.Name)] =
     appHostASource;
-builder.BuildModuleImages();
 
-await AppHostAModule.RegisterAsync(builder, appHostASource);
-var imported = await builder.ImportAppHostAModuleAsync();
+AppHostAModule.Register(builder, appHostASource);
+var imported = builder.ImportAppHostAModule();
 
 var api = imported.Api;
 var staticSite = imported.Static;

@@ -22,7 +22,7 @@ public sealed class ExternalImageTests
             ModuleResourceKind.Container);
         Assert.SkipUnless(
             !string.IsNullOrWhiteSpace(configuration[$"{imageConfigurationKey}:ImageName"]),
-            "Run through modular-apphosts manifest apply with a workflow image manifest.");
+            "Run through modular-apphosts images apply with a module image workflow document.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TestTimeout);
@@ -32,16 +32,13 @@ public sealed class ExternalImageTests
         var unavailableBuildRepository = Path.Combine(
             Path.GetTempPath(),
             $"missing-workflow-image-build-{Guid.NewGuid():N}");
-        var unavailableManagedBase = Path.Combine(
-            Path.GetTempPath(),
-            $"missing-workflow-image-managed-{Guid.NewGuid():N}");
         await using var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.Spire_Consumer_AppHost>(
                 [
-                    $"Aspire:ModularAppHosts:RepositoryBasePath={unavailableManagedBase}",
-                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:DefinitionRepository=" +
+                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:Repository=" +
                     unavailableDefinitionRepository,
-                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:BuildRepository=" +
+                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:Containers:" +
+                    $"{SpireModule.ApiResourceName}:BuildRepository=" +
                     unavailableBuildRepository
                 ],
                 timeout.Token);
@@ -59,6 +56,5 @@ public sealed class ExternalImageTests
         Assert.Equal("multi-repo-resource-pinned-revision", marker.Trim());
         Assert.False(Directory.Exists(unavailableDefinitionRepository));
         Assert.False(Directory.Exists(unavailableBuildRepository));
-        Assert.False(Directory.Exists(unavailableManagedBase));
     }
 }
