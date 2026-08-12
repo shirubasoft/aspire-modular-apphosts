@@ -1,7 +1,6 @@
 #pragma warning disable CA1308 // Aspire hashes the lowercase AppHost identity.
 
 using System.Diagnostics;
-using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -347,6 +346,14 @@ internal static partial class Program
                     CreatePackageEnvironment()),
                 "Restore the isolated package consumer",
                 cancellationToken).ConfigureAwait(false);
+            await RunRequiredAsync(
+                new ProcessInvocation(
+                    "dotnet",
+                    ["build", _appHost, "--configuration", "Release", "--no-restore"],
+                    _consumerRepository,
+                    CreatePackageEnvironment()),
+                "Build the isolated package consumer",
+                cancellationToken).ConfigureAwait(false);
         }
 
         private async Task InitializeRepositoryAsync(string path, CancellationToken cancellationToken)
@@ -441,7 +448,7 @@ internal static partial class Program
             {
                 if (started)
                 {
-                    await StopAppHostAsync(cancellationToken).ConfigureAwait(false);
+                    await StopAppHostAsync().ConfigureAwait(false);
                 }
             }
         }
@@ -469,90 +476,38 @@ internal static partial class Program
             string expectedMarker,
             CancellationToken cancellationToken)
         {
-            var started = false;
-            try
-            {
-                var start = await RunAspireAsync(
-                    [
-                        "start",
-                        "--apphost", _appHost,
-                        "--isolated",
-                        "--format", "Json",
-                        "--non-interactive"
-                    ],
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(start, "aspire start");
-                started = true;
-
-                var wait = await RunAspireAsync(
-                    [
-                        "wait", ResourceName,
-                        "--apphost", _appHost,
-                        "--timeout", "180",
-                        "--non-interactive"
-                    ],
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                if (!wait.IsSuccess)
-                {
-                    var logs = await RunAspireAsync(
-                        [
-                            "logs", ResourceName,
-                            "--apphost", _appHost,
-                            "--format", "Json",
-                            "--non-interactive"
-                        ],
-                        environment,
-                        cancellationToken).ConfigureAwait(false);
-                    throw new InvalidOperationException(
-                        $"aspire wait {ResourceName} failed with exit code {wait.ExitCode}:" +
-                        $"{Environment.NewLine}{wait.CombinedOutput}{Environment.NewLine}{logs.CombinedOutput}");
-                }
-
-                var describe = await RunAspireAsync(
-                    [
-                        "describe", ResourceName,
-                        "--apphost", _appHost,
-                        "--format", "Json",
-                        "--non-interactive"
-                    ],
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(describe, $"aspire describe {ResourceName}");
-                var resourceUrl = FindHttpResourceUrl(describe.StandardOutput);
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-                var health = await client.GetStringAsync(
-                    new Uri(new Uri(resourceUrl.TrimEnd('/') + "/"), "health.txt"),
-                    cancellationToken).ConfigureAwait(false);
-                AssertEqual(
-                    "healthy-from-separate-build-repository",
-                    health.Trim(),
-                    "The running image does not contain the producer-owned health marker.");
-                var marker = await client.GetStringAsync(
-                    new Uri(new Uri(resourceUrl.TrimEnd('/') + "/"), "marker.txt"),
-                    cancellationToken).ConfigureAwait(false);
-                AssertEqual(expectedMarker, marker.Trim(), "The running image contains the wrong marker.");
-            }
-            finally
-            {
-                if (started)
-                {
-                    await StopAppHostAsync(cancellationToken).ConfigureAwait(false);
-                }
-            }
+            var resource = await AspireTestingAppHost.ReadResourceAsync(
+                _appHost,
+                ResourceName,
+                environment,
+                cancellationToken).ConfigureAwait(false);
+            AssertEqual(
+                "healthy-from-separate-build-repository",
+                resource.Health,
+                "The running image does not contain the producer-owned health marker.");
+            AssertEqual(expectedMarker, resource.Marker, "The running image contains the wrong marker.");
         }
 
-        private async Task StopAppHostAsync(CancellationToken cancellationToken)
+        private async Task StopAppHostAsync()
         {
-            var result = await RunAspireAsync(
-                ["stop", "--apphost", _appHost, "--non-interactive"],
-                environment: null,
-                cancellationToken).ConfigureAwait(false);
-            if (!result.IsSuccess)
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try
+            {
+                var result = await RunAspireAsync(
+                    ["stop", "--apphost", _appHost, "--non-interactive"],
+                    environment: null,
+                    cleanup.Token).ConfigureAwait(false);
+                if (!result.IsSuccess)
+                {
+                    await Console.Error.WriteLineAsync(
+                        $"Emergency Aspire stop failed:{Environment.NewLine}{result.CombinedOutput}")
+                        .ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cleanup.IsCancellationRequested)
             {
                 await Console.Error.WriteLineAsync(
-                    $"Emergency Aspire stop failed:{Environment.NewLine}{result.CombinedOutput}")
+                    "Emergency Aspire stop exceeded its independent 30-second cleanup timeout.")
                     .ConfigureAwait(false);
             }
         }
@@ -891,53 +846,6 @@ internal static partial class Program
             {
                 throw new InvalidOperationException("Runtime refresh fetched or pulled a dirty checkout.");
             }
-        }
-
-        private static string FindHttpResourceUrl(string json)
-        {
-            using var document = JsonDocument.Parse(json);
-            if (TryFindHttpUrl(document.RootElement, out var url))
-            {
-                return url;
-            }
-
-            throw new InvalidOperationException("Aspire describe did not return an HTTP URL for the resource.");
-        }
-
-        private static bool TryFindHttpUrl(JsonElement element, out string url)
-        {
-            if (element.ValueKind == JsonValueKind.Object)
-            {
-                var isHttpEndpoint = element.TryGetProperty("name", out var name) &&
-                    string.Equals(name.GetString(), "http", StringComparison.OrdinalIgnoreCase);
-                if (isHttpEndpoint && element.TryGetProperty("url", out var urlElement) &&
-                    urlElement.GetString() is { Length: > 0 } value)
-                {
-                    url = value;
-                    return true;
-                }
-
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (TryFindHttpUrl(property.Value, out url))
-                    {
-                        return true;
-                    }
-                }
-            }
-            else if (element.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in element.EnumerateArray())
-                {
-                    if (TryFindHttpUrl(item, out url))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            url = string.Empty;
-            return false;
         }
 
         private static void EnsureSuccess(ProcessResult result, string operation)

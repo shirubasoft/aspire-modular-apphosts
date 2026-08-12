@@ -1,14 +1,18 @@
 # Multi-repository E2E tests
 
-This xUnit project owns the MultiRepo sample's lifecycle and isolation validation. The checked-in
-consumer and producer AppHosts run through `Aspire.Hosting.Testing`, which supplies resource health
-notifications, endpoint discovery, HTTP clients, random host ports, and async cleanup.
+This xUnit project owns the MultiRepo sample's lifecycle and isolation validation. Both the checked-in
+AppHosts and the dynamically built isolated consumer run through `Aspire.Hosting.Testing`, which
+supplies resource health notifications, endpoint discovery, HTTP clients, random host ports, and
+async cleanup.
 
 The adjacent `Spire.MultiRepo.E2E.Support` executable handles the contracts that still require the
 real Aspire CLI: explicit initialization, fail-fast remediation commands, process isolation, and
-container-runtime selection. Its components are separated by responsibility:
+container-runtime selection. Normal isolated runs use the non-generic testing builder against the
+built fixture assembly. The support components are separated by responsibility:
 
 - `MultiRepositoryScenario` coordinates the behavior under test.
+- `AspireTestingAppHost` owns isolated AppHost lifecycle, health waits, endpoint discovery, clients,
+  and environment restoration.
 - `TrackedRepositoryFixture` copies only paths returned by `git ls-files`; it never recursively copies
   a developer worktree.
 - `GitProxy` records each invocation and rejects every command shape outside the exact read-only
