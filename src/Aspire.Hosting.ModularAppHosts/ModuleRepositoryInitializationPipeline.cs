@@ -1,8 +1,10 @@
 #pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES002
 #pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics;
 using Aspire.Hosting.Pipelines;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -72,30 +74,6 @@ internal static class ModuleRepositoryInitializationPipeline
             new EventId(5, nameof(LogRepositoryOperationSkipped)),
             "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
 
-    internal static bool IsInitializeCommand(IReadOnlyList<string> arguments)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        for (var index = 0; index < arguments.Count; index++)
-        {
-            if (string.Equals(arguments[index], "--step", StringComparison.Ordinal) &&
-                index + 1 < arguments.Count)
-            {
-                return string.Equals(arguments[index + 1], StepName, StringComparison.OrdinalIgnoreCase);
-            }
-
-            const string prefix = "--step=";
-            if (arguments[index].StartsWith(prefix, StringComparison.Ordinal))
-            {
-                return string.Equals(
-                    arguments[index][prefix.Length..],
-                    StepName,
-                    StringComparison.OrdinalIgnoreCase);
-            }
-        }
-
-        return false;
-    }
-
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -143,7 +121,8 @@ internal static class ModuleRepositoryInitializationPipeline
                         settingsFactory(),
                         context.Logger,
                         context.Logger,
-                        new FileModuleRepositoryStateStore(),
+                        context.Services.GetRequiredService<IModuleRepositoryStateStore>(),
+                        context.ReportingStep,
                         context.CancellationToken).ConfigureAwait(false);
                     await task.SucceedAsync(
                         $"Initialized at {requirement.RepositoryPath}",
@@ -198,6 +177,7 @@ internal static class ModuleRepositoryInitializationPipeline
         ILogger lifecycleLogger,
         ILogger resourceLogger,
         IModuleRepositoryStateStore stateStore,
+        IReportingStep? reportingStep,
         CancellationToken cancellationToken)
     {
         await InitializeAsync(
@@ -205,6 +185,7 @@ internal static class ModuleRepositoryInitializationPipeline
             settings,
             lifecycleLogger,
             resourceLogger,
+            reportingStep,
             cancellationToken).ConfigureAwait(false);
         await RecordStateAsync(
             requirement,
@@ -218,13 +199,14 @@ internal static class ModuleRepositoryInitializationPipeline
         ModuleRepositoryInitializationSettings settings,
         ILogger lifecycleLogger,
         ILogger resourceLogger,
+        IReportingStep? reportingStep,
         CancellationToken cancellationToken) =>
         InitializeAsync(
             requirement,
             settings,
             lifecycleLogger,
             resourceLogger,
-            static (plannedRepository, initializationSettings, progress, lifecycle, token) =>
+            (plannedRepository, initializationSettings, progress, lifecycle, token) =>
                 RepositorySynchronizer.SynchronizeAsync(
                     plannedRepository.RepositoryPath,
                     plannedRepository.Repository,
@@ -235,7 +217,8 @@ internal static class ModuleRepositoryInitializationPipeline
                     initializationSettings.GitHubCliPath,
                     initializationSettings.CommandTimeout,
                     progress,
-                    lifecycle),
+                    lifecycle,
+                    reportingStep),
             cancellationToken);
 
     internal static async Task InitializeAsync(
@@ -293,13 +276,12 @@ internal static class ModuleRepositoryInitializationPipeline
             ? null
             : resourceLogger.BeginScope(scopeState);
         var modules = string.Join(", ", requirement.ModuleNames.Order(StringComparer.OrdinalIgnoreCase));
-        LogBoth(lifecycleLogger, resourceLogger, target =>
-            LogInitializationStarted(
-                target,
-                requirement.NormalizedRepository,
-                requirement.RepositoryPath,
-                modules,
-                null));
+        LogInitializationStarted(
+            lifecycleLogger,
+            requirement.NormalizedRepository,
+            requirement.RepositoryPath,
+            modules,
+            null);
         var stopwatch = Stopwatch.StartNew();
         await synchronizeAsync(
             requirement,
@@ -313,38 +295,35 @@ internal static class ModuleRepositoryInitializationPipeline
             {
                 if (string.IsNullOrWhiteSpace(lifecycle.Reason))
                 {
-                    LogBoth(lifecycleLogger, resourceLogger, target =>
-                        LogRepositoryOperation(
-                            target,
-                            lifecycle.Operation,
-                            lifecycle.State,
-                            requirement.NormalizedRepository,
-                            requirement.RepositoryPath,
-                            lifecycle.ElapsedMilliseconds,
-                            null));
+                    LogRepositoryOperation(
+                        lifecycleLogger,
+                        lifecycle.Operation,
+                        lifecycle.State,
+                        requirement.NormalizedRepository,
+                        requirement.RepositoryPath,
+                        lifecycle.ElapsedMilliseconds,
+                        null);
                 }
                 else
                 {
-                    LogBoth(lifecycleLogger, resourceLogger, target =>
-                        LogRepositoryOperationSkipped(
-                            target,
-                            lifecycle.Operation,
-                            lifecycle.State,
-                            requirement.NormalizedRepository,
-                            requirement.RepositoryPath,
-                            lifecycle.Reason,
-                            null));
+                    LogRepositoryOperationSkipped(
+                        lifecycleLogger,
+                        lifecycle.Operation,
+                        lifecycle.State,
+                        requirement.NormalizedRepository,
+                        requirement.RepositoryPath,
+                        lifecycle.Reason,
+                        null);
                 }
             },
             cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
-        LogBoth(lifecycleLogger, resourceLogger, target =>
-            LogInitializationCompleted(
-                target,
-                requirement.NormalizedRepository,
-                requirement.RepositoryPath,
-                stopwatch.Elapsed.TotalMilliseconds,
-                null));
+        LogInitializationCompleted(
+            lifecycleLogger,
+            requirement.NormalizedRepository,
+            requirement.RepositoryPath,
+            stopwatch.Elapsed.TotalMilliseconds,
+            null);
     }
 
     internal static async Task RecordStateAsync(
@@ -373,7 +352,7 @@ internal static class ModuleRepositoryInitializationPipeline
                 $"Repository '{requirement.RepositoryPath}' could not be inspected after initialization.");
         }
 
-        var normalizedOrigin = ModuleRepositoryPathPlanner.NormalizeRepositoryIdentity(
+        var normalizedOrigin = RepositoryIdentity.NormalizeRepositoryIdentity(
             origin,
             requirement.RepositoryPath);
         if (!string.Equals(
@@ -400,12 +379,4 @@ internal static class ModuleRepositoryInitializationPipeline
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static void LogBoth(ILogger lifecycleLogger, ILogger resourceLogger, Action<ILogger> log)
-    {
-        log(lifecycleLogger);
-        if (!ReferenceEquals(lifecycleLogger, resourceLogger))
-        {
-            log(resourceLogger);
-        }
-    }
 }

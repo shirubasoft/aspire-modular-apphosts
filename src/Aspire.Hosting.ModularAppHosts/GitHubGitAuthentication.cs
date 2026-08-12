@@ -2,6 +2,9 @@ namespace Aspire.Hosting;
 
 internal static class GitHubGitAuthentication
 {
+    public static bool UsesCredentialProvider(string? repository) =>
+        TryGetHttpsCredentialScope(repository) is not null;
+
     public static bool IsGitHubRepository(string? repository)
     {
         if (string.IsNullOrWhiteSpace(repository))

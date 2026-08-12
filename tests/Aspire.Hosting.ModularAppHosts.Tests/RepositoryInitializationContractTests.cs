@@ -34,7 +34,8 @@ public sealed class RepositoryInitializationContractTests
             logger,
             logger,
             stateStore,
-            TestContext.Current.CancellationToken);
+            reportingStep: null,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEqual(sourcePath, requirement.RepositoryPath);
         Assert.Equal(workspace.Path, Path.GetDirectoryName(requirement.RepositoryPath));
@@ -214,8 +215,8 @@ public sealed class RepositoryInitializationContractTests
         var projectPath = Path.Combine(nestedPath, "AppHost.csproj");
         var branch = await ReadGitAsync(repositoryPath, "branch", "--show-current");
 
-        Assert.Equal(repositoryPath, RepositoryInspector.FindRepositoryRoot(projectPath));
-        Assert.Equal(repositoryPath, RepositoryInspector.TryFindRepositoryRoot(projectPath));
+        Assert.Equal(repositoryPath, RepositoryIdentity.FindRepositoryRoot(projectPath));
+        Assert.Equal(repositoryPath, RepositoryIdentity.TryFindRepositoryRoot(projectPath));
         Assert.Equal(repositoryPath, await RepositoryInspector.FindRepositoryRootAsync(
             projectPath,
             cancellationToken: TestContext.Current.CancellationToken));
@@ -244,8 +245,8 @@ public sealed class RepositoryInitializationContractTests
         var nonRepositoryPath = Path.Combine(workspace.Path, "not-a-repository");
         Directory.CreateDirectory(nonRepositoryPath);
         var missingFile = Path.Combine(nonRepositoryPath, "Missing.csproj");
-        Assert.Equal(nonRepositoryPath, RepositoryInspector.FindRepositoryRoot(missingFile));
-        Assert.Null(RepositoryInspector.TryFindRepositoryRoot(missingFile));
+        Assert.Equal(nonRepositoryPath, RepositoryIdentity.FindRepositoryRoot(missingFile));
+        Assert.Null(RepositoryIdentity.TryFindRepositoryRoot(missingFile));
         Assert.Equal(nonRepositoryPath, await RepositoryInspector.FindRepositoryRootAsync(
             missingFile,
             cancellationToken: TestContext.Current.CancellationToken));
@@ -494,7 +495,7 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
-    public async Task Initialization_routes_lifecycle_to_both_loggers_and_raw_output_only_to_the_resource()
+    public async Task Initialization_routes_lifecycle_to_pipeline_logs_and_raw_output_only_to_the_resource()
     {
         using var workspace = TemporaryDirectory.Create();
         var plans = new ModuleRepositoryPlanRegistry(CreateAppHostRepository(workspace.Path));
@@ -524,7 +525,7 @@ public sealed class RepositoryInitializationContractTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal([1, 4, 4, 3], lifecycleLogger.Entries.Select(entry => entry.EventId.Id));
-        Assert.Equal([1, 2, 4, 4, 3], resourceLogger.Entries.Select(entry => entry.EventId.Id));
+        Assert.Equal([2], resourceLogger.Entries.Select(entry => entry.EventId.Id));
         Assert.DoesNotContain(lifecycleLogger.Entries, entry => entry.EventId.Id == 2);
         Assert.Contains(resourceLogger.Entries, entry =>
             entry.EventId.Id == 2 && Equals(entry.State["Output"], "clone output"));

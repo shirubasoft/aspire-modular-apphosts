@@ -42,7 +42,7 @@ internal static class ModuleMaterializationPlanning
         if (!requiresRepository)
         {
             var optionalLocalPath = repository is not null &&
-                !GitHubRepositoryCloner.IsRemoteRepository(repository, builder.AppHostDirectory)
+                !RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory)
                     ? Path.GetFullPath(repository, builder.AppHostDirectory)
                     : Path.GetFullPath(builder.AppHostDirectory);
             return new ModuleRepositoryContext(
@@ -60,7 +60,7 @@ internal static class ModuleMaterializationPlanning
                 "or declare the repository with WithRepository().");
         }
 
-        var isRemote = GitHubRepositoryCloner.IsRemoteRepository(repository, builder.AppHostDirectory);
+        var isRemote = RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory);
         if (!isRemote && revision is null)
         {
             var localPath = Path.GetFullPath(repository, builder.AppHostDirectory);
@@ -118,12 +118,12 @@ internal static class ModuleMaterializationPlanning
         var repository = requestedRepository ??
             definitionRepository.Repository ??
             definitionRepository.RepositoryPath;
-        var normalizedRepository = GitHubRepositoryCloner.IsRemoteRepository(
+        var normalizedRepository = RepositoryIdentity.IsRemoteRepository(
             repository,
             builder.AppHostDirectory)
                 ? repository
                 : Path.GetFullPath(repository, builder.AppHostDirectory);
-        if (RepositoryIdentitiesMatch(
+        if (RepositoryIdentity.AreEquivalent(
                 normalizedRepository,
                 definitionRepository.Repository ?? definitionRepository.RepositoryPath,
                 builder.AppHostDirectory) &&
@@ -132,7 +132,7 @@ internal static class ModuleMaterializationPlanning
             return definitionRepository;
         }
 
-        var isRemote = GitHubRepositoryCloner.IsRemoteRepository(
+        var isRemote = RepositoryIdentity.IsRemoteRepository(
             normalizedRepository,
             builder.AppHostDirectory);
         if (!isRemote && requestedRevision is null)
@@ -165,32 +165,13 @@ internal static class ModuleMaterializationPlanning
             UsesModuleRepository: false);
     }
 
-    public static bool RepositoryIdentitiesMatch(
-        string first,
-        string second,
-        string baseDirectory)
-    {
-        var firstIsRemote = GitHubRepositoryCloner.IsRemoteRepository(first, baseDirectory);
-        var secondIsRemote = GitHubRepositoryCloner.IsRemoteRepository(second, baseDirectory);
-        if (firstIsRemote != secondIsRemote)
-        {
-            return false;
-        }
-
-        return firstIsRemote
-            ? GitHubRepositoryCloner.RefersToSameRepository(first, second, baseDirectory)
-            : PathSafety.AreEqual(
-                Path.GetFullPath(first, baseDirectory),
-                Path.GetFullPath(second, baseDirectory));
-    }
-
     private static string GetLocalDefinitionPath(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         string? repository)
     {
         if (repository is not null &&
-            !GitHubRepositoryCloner.IsRemoteRepository(repository, builder.AppHostDirectory))
+            !RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory))
         {
             return Path.GetFullPath(repository, builder.AppHostDirectory);
         }

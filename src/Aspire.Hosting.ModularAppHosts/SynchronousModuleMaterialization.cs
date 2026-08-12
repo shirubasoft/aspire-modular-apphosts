@@ -80,7 +80,6 @@ public static partial class DistributedApplicationModuleExtensions
         bool imported,
         ModuleImportOptions? importOptions = null)
     {
-        registry.RefreshConfiguration();
         ValidateOptions(registry.Options);
         var materializationKey = GetMaterializationKey(imported, importOptions);
         if (registry.TryGetMaterialization(module.Name, out var existingMaterialization))
@@ -255,6 +254,7 @@ public static partial class DistributedApplicationModuleExtensions
             imported,
             image);
         project.Export.ConfigureContainer?.Invoke(context, container);
+        ConfigureRepositoryLifecycle(builder, container, registry);
         ConfigureContainerImage(
             builder,
             container,
@@ -317,6 +317,7 @@ public static partial class DistributedApplicationModuleExtensions
             imported,
             image);
         definition.ConfigureContainer?.Invoke(context, container);
+        ConfigureRepositoryLifecycle(builder, container, registry);
         ConfigureContainerImage(
             builder,
             container,
@@ -377,6 +378,7 @@ public static partial class DistributedApplicationModuleExtensions
         if (resource is ContainerResource containerResource)
         {
             var container = builder.CreateResourceBuilder(containerResource);
+            ConfigureRepositoryLifecycle(builder, container, registry);
             ConfigureContainerImage(
                 builder,
                 container,
@@ -390,6 +392,13 @@ public static partial class DistributedApplicationModuleExtensions
                 $"Image-published module resource '{definition.Name}' did not create a container resource.");
         }
 
+        if (resource is not ContainerResource)
+        {
+            ConfigureRepositoryLifecycle(
+                builder,
+                builder.CreateResourceBuilder(resource),
+                registry);
+        }
         registry.TrackResource(resource);
         module.TrackMaterializedResource(builder, definition.Name, resource);
     }
@@ -479,8 +488,8 @@ public static partial class DistributedApplicationModuleExtensions
             return null;
         }
 
-        var appHostRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(builder.AppHostDirectory);
-        var buildRepositoryRoot = RepositoryInspector.TryFindRepositoryRoot(buildRepository.RepositoryPath);
+        var appHostRepositoryRoot = RepositoryIdentity.TryFindRepositoryRoot(builder.AppHostDirectory);
+        var buildRepositoryRoot = RepositoryIdentity.TryFindRepositoryRoot(buildRepository.RepositoryPath);
         if (appHostRepositoryRoot is null ||
             buildRepositoryRoot is null ||
             !PathSafety.AreEqual(appHostRepositoryRoot, buildRepositoryRoot))
@@ -559,6 +568,47 @@ public static partial class DistributedApplicationModuleExtensions
         }
     }
 
+    private static void ConfigureRepositoryLifecycle<TResource>(
+        IDistributedApplicationBuilder builder,
+        IResourceBuilder<TResource> resource,
+        ModuleApplicationRegistry registry)
+        where TResource : IResource
+    {
+        var requirements = registry.RepositoryPlans?.Requirements;
+        if (requirements is null || requirements.Count == 0)
+        {
+            return;
+        }
+
+        resource.WithRequiredCommand(registry.Options.GitExecutablePath);
+        if (requirements.Any(requirement =>
+                GitHubGitAuthentication.UsesCredentialProvider(requirement.Repository)))
+        {
+            resource.WithRequiredCommand(registry.Options.GitHubCliPath);
+        }
+
+        if (!builder.ExecutionContext.IsRunMode)
+        {
+            return;
+        }
+
+        resource.OnBeforeResourceStarted(async (startedResource, @event, cancellationToken) =>
+        {
+            var logger = @event.Services
+                .GetRequiredService<ResourceLoggerService>()
+                .GetLogger(startedResource);
+            await registry.ValidateRepositoryPreflightAsync(
+                @event.Services.GetRequiredService<IModuleRepositoryStateStore>(),
+                new ModuleRepositoryInitializationSettings(
+                    registry.Options.GitExecutablePath,
+                    registry.Options.GitHubCliPath,
+                    registry.Options.RepositoryCommandTimeout),
+                builder.AppHostDirectory,
+                logger,
+                cancellationToken).ConfigureAwait(false);
+        });
+    }
+
     private static void MaterializeProjectResourceSynchronously(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
@@ -605,6 +655,7 @@ public static partial class DistributedApplicationModuleExtensions
             repositoryPath,
             imported);
         project.ConfigureProject?.Invoke(context, resource);
+        ConfigureRepositoryLifecycle(builder, resource, registry);
         registry.TrackResource(resource.Resource);
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
@@ -680,6 +731,7 @@ public static partial class DistributedApplicationModuleExtensions
             });
             project.Export.ConfigureContainer?.Invoke(context, container);
         });
+        ConfigureRepositoryLifecycle(builder, resource, registry);
         registry.TrackResource(resource.Resource);
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }

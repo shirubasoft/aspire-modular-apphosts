@@ -56,7 +56,7 @@ public sealed class SynchronousModuleDefinitionTests
         var projectDirectory = Path.Combine(repository.Path, "src", "Orders");
         Directory.CreateDirectory(projectDirectory);
 
-        var root = RepositoryInspector.TryFindRepositoryRoot(projectDirectory);
+        var root = RepositoryIdentity.TryFindRepositoryRoot(projectDirectory);
 
         Assert.Equal(repository.Path, root);
     }

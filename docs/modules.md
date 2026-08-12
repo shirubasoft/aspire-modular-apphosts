@@ -559,7 +559,7 @@ builder.ConfigureModularAppHosts(options =>
 });
 ```
 
-Repository inspection and synchronization are bounded by `RepositoryCommandTimeout`; image builds use `ImageBuildTimeout`; image pulls, pushes, and tags use `ImageTransferTimeout`. `GitExecutablePath` and `GitHubCliPath` configure the repository tools without changing module contracts. GitHub HTTPS clones use `gh repo clone`; subsequent authenticated Git commands use the configured `gh` as a process-scoped credential helper. Lifecycle logs are structured, raw command output stays with the relevant operation/resource, and credential-bearing URI components and arguments are redacted.
+Repository inspection and synchronization are bounded by `RepositoryCommandTimeout`; image builds use `ImageBuildTimeout`; image pulls, pushes, and tags use `ImageTransferTimeout`. `GitExecutablePath` and `GitHubCliPath` configure the repository tools without changing module contracts. Every remote is cloned through Git; GitHub HTTPS repositories use the configured `gh` only as a process-scoped credential provider. Lifecycle logs are structured, raw command output stays with the relevant operation/resource, and credential-bearing URI components and arguments are redacted.
 
 ## Repository imports
 
@@ -576,10 +576,10 @@ Initialization locates the AppHost Git root without executing Git and assigns ma
 <workspace>/consumer/                         # AppHost Git root
 <workspace>/orders-<remote-hash>/             # unpinned checkout
 <workspace>/orders-<remote-hash>-rev-.../     # isolated pinned checkout
-<workspace>/consumer/.aspire/modular-apphosts/repositories/*.json
+~/.aspire/deployments/<apphost-sha>/<environment>.json
 ```
 
-Equivalent repositories share one initialization step. Pinned revisions receive distinct paths and are checked out detached after fetch. Initialization validates existing origins, preserves dirty worktrees, fast-forwards clean unpinned branches when enabled, updates submodules, and writes credential-free state records atomically. Repeating the command is idempotent.
+Equivalent repositories share one initialization step. Pinned revisions receive distinct paths and are checked out detached after fetch. Initialization validates existing origins, preserves dirty worktrees, fast-forwards clean unpinned branches when enabled, updates submodules, and writes credential-free per-repository sections through Aspire's deployment-state API. Repeating the command is idempotent.
 
 An existing unpinned local repository path is used directly and is excluded from initialization. A local repository paired with a revision is treated as a clone source for an initializer-owned sibling, protecting the developer checkout. Repository values can come from `WithRepository`, `DistributedApplicationModuleOptions.Repository`, or the standard `Aspire:ModularAppHosts:Modules:<module>:Repository` configuration key. Use `GetRepositoryConfigurationKey(moduleName)` to construct that key.
 

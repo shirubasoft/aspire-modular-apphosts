@@ -30,6 +30,11 @@ Module declaration no longer performs Git or image I/O, so its public APIs are s
 Remove `await` from those calls. Keep `await builder.Build().RunAsync()` for the Aspire application
 lifecycle.
 
+Call `ConfigureModularAppHosts(...)` before the first `DefineModule(...)`, `ExportModule(...)`,
+`AddModule(...)`, or `ImportModule(...)` call. Model-shaping options are now captured once as an
+immutable snapshot while the AppHost resource graph is constructed; later configuration calls throw
+instead of rebinding and mutating already-materialized resources.
+
 ## Initialize repositories explicitly
 
 Automatic cloning and updating during AppHost construction has been removed. Delete
@@ -50,6 +55,10 @@ aspire do initialize --apphost . --non-interactive
 
 Normal `aspire run` validates the checkout and its credential-free initialization state without
 mutating Git. If validation fails, copy the exact AppHost-aware recovery command from the error.
+Initialization state now lives in per-repository sections of Aspire's deployment-state file under
+`~/.aspire/deployments`; delete the old `.aspire/modular-apphosts/repositories` receipt directory
+after upgrading. Git is advertised as a required command on repository-backed resources, and `gh`
+is advertised only for GitHub HTTPS repositories that select it as the credential provider.
 `RefreshBuildRepositoriesOnRun` and `RefreshBuildRepositoryOnRun` are explicit opt-ins for
 fast-forwarding clean, unpinned image build repositories immediately before a resource starts.
 

@@ -1,5 +1,9 @@
+#pragma warning disable CA1308 // Aspire hashes the lowercase AppHost identity.
+
 using System.Diagnostics;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Spire.MultiRepo.E2E.Driver;
@@ -620,34 +624,68 @@ internal static class Program
             IReadOnlyDictionary<string, string?> environment,
             CancellationToken cancellationToken)
         {
-            var result = await RunAspireAsync(
-                [
-                    "start",
-                    "--apphost", _appHost,
-                    "--isolated",
-                    "--format", "Json",
-                    "--non-interactive"
-                ],
-                environment,
-                cancellationToken).ConfigureAwait(false);
-            if (result.IsSuccess)
+            var started = false;
+            try
             {
-                await StopAppHostAsync(cancellationToken).ConfigureAwait(false);
-                throw new InvalidOperationException("Aspire start succeeded before repository initialization.");
-            }
+                var start = await RunAspireAsync(
+                    [
+                        "start",
+                        "--apphost", _appHost,
+                        "--isolated",
+                        "--format", "Json",
+                        "--non-interactive"
+                    ],
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(start, "aspire start before repository initialization");
+                started = true;
 
-            AssertContains(
-                result.CombinedOutput,
-                "aspire do initialize --apphost",
-                "The preflight failure did not contain the AppHost-aware initialization command.");
-            AssertContains(
-                RemoveWhitespace(result.CombinedOutput),
-                RemoveWhitespace(Path.GetDirectoryName(_appHost)!),
-                "The preflight failure did not identify the AppHost to initialize.");
-            AssertContains(
-                result.CombinedOutput,
-                "--non-interactive",
-                "The preflight failure did not provide a non-interactive initialization command.");
+                var wait = await RunAspireAsync(
+                    [
+                        "wait", ResourceName,
+                        "--apphost", _appHost,
+                        "--timeout", "30",
+                        "--non-interactive"
+                    ],
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                if (wait.IsSuccess)
+                {
+                    throw new InvalidOperationException(
+                        "The repository-backed resource started before repository initialization.");
+                }
+
+                var logs = await RunAspireAsync(
+                    [
+                        "logs", ResourceName,
+                        "--apphost", _appHost,
+                        "--format", "Json",
+                        "--non-interactive"
+                    ],
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                var failureOutput = $"{wait.CombinedOutput}{Environment.NewLine}{logs.CombinedOutput}";
+
+                AssertContains(
+                    failureOutput,
+                    "aspire do initialize --apphost",
+                    "The resource preflight failure did not contain the AppHost-aware initialization command.");
+                AssertContains(
+                    RemoveWhitespace(failureOutput),
+                    RemoveWhitespace(Path.GetDirectoryName(_appHost)!),
+                    "The resource preflight failure did not identify the AppHost to initialize.");
+                AssertContains(
+                    failureOutput,
+                    "--non-interactive",
+                    "The resource preflight failure did not provide a non-interactive initialization command.");
+            }
+            finally
+            {
+                if (started)
+                {
+                    await StopAppHostAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
         }
 
         private async Task<ProcessResult> RunInitializeAsync(
@@ -698,7 +736,21 @@ internal static class Program
                     ],
                     environment,
                     cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(wait, $"aspire wait {ResourceName}");
+                if (!wait.IsSuccess)
+                {
+                    var logs = await RunAspireAsync(
+                        [
+                            "logs", ResourceName,
+                            "--apphost", _appHost,
+                            "--format", "Json",
+                            "--non-interactive"
+                        ],
+                        environment,
+                        cancellationToken).ConfigureAwait(false);
+                    throw new InvalidOperationException(
+                        $"aspire wait {ResourceName} failed with exit code {wait.ExitCode}:" +
+                        $"{Environment.NewLine}{wait.CombinedOutput}{Environment.NewLine}{logs.CombinedOutput}");
+                }
 
                 var describe = await RunAspireAsync(
                     [
@@ -800,7 +852,8 @@ internal static class Program
         {
             ["SpireContractPackageVersion"] = PackageVersion,
             ["RestoreAdditionalProjectSources"] = _packageFeed,
-            ["NUGET_PACKAGES"] = _nugetPackages
+            ["NUGET_PACKAGES"] = _nugetPackages,
+            ["DOTNET_ENVIRONMENT"] = "MultiRepoE2E"
         };
 
         private void ConfigureContainerRuntimeProxy()
@@ -916,23 +969,26 @@ internal static class Program
 
         private void AssertRepositoryStateIsCredentialFree()
         {
-            var stateDirectory = Path.Combine(
-                _consumerRepository,
+            var appHostIdentity = Path.GetFullPath(_appHost);
+            var appHostHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(appHostIdentity.ToLowerInvariant())));
+            var stateFile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 ".aspire",
-                "modular-apphosts",
-                "repositories");
-            var stateFiles = Directory.Exists(stateDirectory)
-                ? Directory.EnumerateFiles(stateDirectory, "*.json").ToArray()
-                : [];
-            if (stateFiles.Length == 0)
+                "deployments",
+                appHostHash,
+                "multirepoe2e.json");
+            if (!File.Exists(stateFile))
             {
                 throw new InvalidOperationException("Initialization did not write repository state.");
             }
 
-            foreach (var stateFile in stateFiles)
-            {
-                AssertRedacted(File.ReadAllText(stateFile));
-            }
+            var state = File.ReadAllText(stateFile);
+            AssertContains(
+                state,
+                "modular-apphosts:repositories:",
+                "Initialization did not write a per-repository deployment-state section.");
+            AssertRedacted(state);
         }
 
         private IReadOnlyList<GitProxyOperation> ReadGitProxyOperations()

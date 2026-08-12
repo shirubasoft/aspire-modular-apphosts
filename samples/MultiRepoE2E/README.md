@@ -54,10 +54,11 @@ The .NET E2E driver creates this layout outside the checked-out source tree:
 ├── resource-build-source/    # separately initialized producer Git repository
 ├── packages/                 # packed runtime and module contract
 ├── <remote-hash>/            # initializer-owned unpinned sibling
-├── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
-└── consumer/.aspire/modular-apphosts/repositories/
-    └── *.json                # credential-free initialization state
+└── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
 ```
+
+Credential-free per-repository initialization sections are stored through Aspire's deployment-state
+API under `~/.aspire/deployments/<apphost-sha>/<environment>.json`.
 
 The driver packs the contract, removes its source and the build fixture from the isolated consumer,
 and creates independent local producer repositories. It then exercises the real Aspire CLI and

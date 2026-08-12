@@ -156,12 +156,20 @@ public sealed class SafeMaterializationDefaultsTests
             configuredBuilder.ExportModule("cache", module =>
                 module.AddContainer("redis", "redis")));
         Assert.Contains(nameof(ModularAppHostsOptions.RepositoryCommandTimeout), configuredException.Message);
+        configuredBuilder.Configuration[$"{section}:RepositoryCommandTimeout"] = "00:00:30";
+        configuredBuilder.ExportModule("cache", module =>
+            module.AddContainer("redis", "redis"));
 
         var programmaticBuilder = CreateBuilder(source.Path);
         var programmaticException = Assert.Throws<InvalidOperationException>(() =>
             programmaticBuilder.ConfigureModularAppHosts(options =>
                 options.RepositoryCommandTimeout = TimeSpan.Zero));
         Assert.Contains(nameof(ModularAppHostsOptions.RepositoryCommandTimeout), programmaticException.Message);
+
+        programmaticBuilder.ConfigureModularAppHosts(options =>
+            options.RepositoryCommandTimeout = TimeSpan.FromSeconds(30));
+        programmaticBuilder.ExportModule("cache", module =>
+            module.AddContainer("redis", "redis"));
     }
 
     private static IDistributedApplicationBuilder CreateBuilder(string projectDirectory)

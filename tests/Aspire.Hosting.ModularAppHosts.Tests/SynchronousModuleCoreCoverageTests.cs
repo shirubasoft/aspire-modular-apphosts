@@ -462,23 +462,23 @@ public sealed class SynchronousModuleCoreCoverageTests
         Directory.CreateDirectory(Path.Combine(baseDirectory.Path, "first"));
         Directory.CreateDirectory(Path.Combine(baseDirectory.Path, "second"));
 
-        Assert.True(ModuleMaterializationPlanning.RepositoryIdentitiesMatch(
+        Assert.True(RepositoryIdentity.AreEquivalent(
             "first",
             Path.Combine(baseDirectory.Path, "first"),
             baseDirectory.Path));
-        Assert.False(ModuleMaterializationPlanning.RepositoryIdentitiesMatch(
+        Assert.False(RepositoryIdentity.AreEquivalent(
             "first",
             "second",
             baseDirectory.Path));
-        Assert.True(ModuleMaterializationPlanning.RepositoryIdentitiesMatch(
+        Assert.True(RepositoryIdentity.AreEquivalent(
             "https://github.com/example/orders.git",
             "git@github.com:example/orders.git",
             baseDirectory.Path));
-        Assert.False(ModuleMaterializationPlanning.RepositoryIdentitiesMatch(
+        Assert.False(RepositoryIdentity.AreEquivalent(
             "https://github.com/example/orders.git",
             "https://github.com/example/catalog.git",
             baseDirectory.Path));
-        Assert.False(ModuleMaterializationPlanning.RepositoryIdentitiesMatch(
+        Assert.False(RepositoryIdentity.AreEquivalent(
             "first",
             "https://github.com/example/orders.git",
             baseDirectory.Path));

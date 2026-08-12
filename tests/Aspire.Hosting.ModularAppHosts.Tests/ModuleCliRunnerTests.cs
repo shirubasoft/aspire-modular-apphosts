@@ -207,7 +207,7 @@ public sealed class ModuleCliRunnerTests
     }
 
     [Fact]
-    public async Task Missing_GitHub_repository_is_cloned_with_the_configured_GitHub_CLI()
+    public async Task Missing_GitHub_repository_is_cloned_with_Git_and_the_configured_credential_provider()
     {
         var path = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}");
 
@@ -218,10 +218,15 @@ public sealed class ModuleCliRunnerTests
             githubCliPath: "custom-gh",
             cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Equal("custom-gh", command.Executable);
-        Assert.Equal(
-            ["repo", "clone", "https://github.com/acme/orders.git", path, "--", "--recurse-submodules"],
+        Assert.Equal("git", command.Executable);
+        Assert.Contains(
+            "credential.https://github.com.helper=!\'custom-gh\' auth git-credential",
             command.Arguments);
+        Assert.Equal("clone", command.Arguments[^5]);
+        Assert.Equal("--recurse-submodules", command.Arguments[^4]);
+        Assert.Equal("--", command.Arguments[^3]);
+        Assert.Equal("https://github.com/acme/orders.git", command.Arguments[^2]);
+        Assert.Equal(path, command.Arguments[^1]);
     }
 
     [Fact]

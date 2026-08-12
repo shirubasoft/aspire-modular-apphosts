@@ -15,7 +15,6 @@ public interface IDistributedApplicationModuleCatalog
 
 internal sealed class ModuleApplicationRegistry(
     ModularAppHostsOptions? options = null,
-    IConfiguration? configuration = null,
     ModuleRepositoryPlanRegistry? repositoryPlans = null)
     : IDistributedApplicationModuleCatalog
 {
@@ -28,7 +27,6 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
     private readonly List<ModuleRequiredPath> _requiredPaths = [];
     private readonly HashSet<string> _requiredPathKeys = new(StringComparer.Ordinal);
     private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
@@ -133,35 +131,6 @@ internal sealed class ModuleApplicationRegistry(
             cancellationToken);
     }
 
-    internal void RefreshConfiguration()
-    {
-        var refreshed = configuration is null
-            ? new ModularAppHostsOptions()
-            : ModularAppHostsOptions.FromConfiguration(configuration);
-
-        foreach (var configure in _configurations)
-        {
-            configure(refreshed);
-        }
-
-        CopyOptions(refreshed, Options);
-    }
-
-    internal void Configure(Action<ModularAppHostsOptions> configure)
-    {
-        _configurations.Add(configure);
-        try
-        {
-            RefreshConfiguration();
-        }
-        catch
-        {
-            _configurations.RemoveAt(_configurations.Count - 1);
-            RefreshConfiguration();
-            throw;
-        }
-    }
-
     internal void ValidateConfiguredModules()
     {
         var missingModule = Options.Modules.Keys.FirstOrDefault(name => !_modules.ContainsKey(name));
@@ -178,25 +147,6 @@ internal sealed class ModuleApplicationRegistry(
         throw new InvalidOperationException(
             $"Configuration references module '{missingModule}', but no exported module with that name was found. " +
             $"Available modules: {availableModules}.");
-    }
-
-    private static void CopyOptions(
-        ModularAppHostsOptions source,
-        ModularAppHostsOptions destination)
-    {
-        destination.GitHubCliPath = source.GitHubCliPath;
-        destination.GitExecutablePath = source.GitExecutablePath;
-        destination.RepositoryCommandTimeout = source.RepositoryCommandTimeout;
-        destination.ImageBuildTimeout = source.ImageBuildTimeout;
-        destination.ImageTransferTimeout = source.ImageTransferTimeout;
-        destination.UpdateRepositoriesOnInitialize = source.UpdateRepositoriesOnInitialize;
-        destination.RefreshBuildRepositoriesOnRun = source.RefreshBuildRepositoriesOnRun;
-        destination.ProjectMode = source.ProjectMode;
-        destination.Modules.Clear();
-        foreach (var module in source.Modules)
-        {
-            destination.Modules.Add(module);
-        }
     }
 
     private void RequirePath(

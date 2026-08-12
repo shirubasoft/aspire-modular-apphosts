@@ -1,4 +1,5 @@
 #pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES002
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
@@ -56,7 +57,6 @@ public static partial class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(moduleBuilder);
 
         var registry = GetOrCreateRegistry(builder);
-        registry.RefreshConfiguration();
         ValidateOptions(registry.Options);
         if (registry.TryGetDefinition(name, out var existingModule) && existingModule is not null)
         {
@@ -80,9 +80,8 @@ public static partial class DistributedApplicationModuleExtensions
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(configure);
 
-        var registry = GetOrCreateRegistry(builder);
-        registry.Configure(configure);
-        ValidateOptions(registry.Options);
+        var optionsModel = GetOrCreateOptionsModel(builder);
+        _ = optionsModel.ConfigureAndCreatePreview(configure, builder.Configuration, ValidateOptions);
         return builder;
     }
 
@@ -215,21 +214,29 @@ public static partial class DistributedApplicationModuleExtensions
             return existing;
         }
 
-        var options = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
+        var optionsModel = GetOrCreateOptionsModel(builder);
+        var options = optionsModel.CreateSnapshot(builder.Configuration);
         ValidateOptions(options);
-        var registry = new ModuleApplicationRegistry(options, builder.Configuration);
+        optionsModel.Freeze();
+        var registry = new ModuleApplicationRegistry(options);
+        builder.Services.AddSingleton(_ => new ModuleRepositoryDeploymentStateManager(
+            ModuleRepositoryDeploymentStateManager.ResolveStateFilePath(
+                builder.Configuration["AppHost:PathSha256"],
+                builder.Environment.EnvironmentName)));
+        builder.Services.AddSingleton<IModuleRepositoryStateStore>(services =>
+            new AspireModuleRepositoryStateStore(
+                services.GetRequiredService<IDeploymentStateManager>(),
+                services.GetRequiredService<ModuleRepositoryDeploymentStateManager>()));
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
         ModuleImageWorkflowPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
-        builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(_ => Options.Create(registry.Options));
         var validationStep = new PipelineStep
         {
             Name = "validate-module-repositories",
             Description = "Validates initialized module repository checkouts.",
             Action = async context =>
             {
-                registry.RefreshConfiguration();
                 ValidateOptions(registry.Options);
                 registry.ValidateConfiguredModules();
                 var settings = new ModuleRepositoryInitializationSettings(
@@ -237,7 +244,7 @@ public static partial class DistributedApplicationModuleExtensions
                     GetConfiguredValue(registry.Options.GitHubCliPath) ?? "gh",
                     registry.Options.RepositoryCommandTimeout);
                 await registry.ValidateRepositoryPreflightAsync(
-                    new FileModuleRepositoryStateStore(),
+                    context.Services.GetRequiredService<IModuleRepositoryStateStore>(),
                     settings,
                     builder.AppHostDirectory,
                     context.Logger,
@@ -249,14 +256,43 @@ public static partial class DistributedApplicationModuleExtensions
                 WellKnownPipelineSteps.PublishPrereq
             ]
         };
-        if (!ModuleRepositoryInitializationPipeline.IsInitializeCommand(
-                Environment.GetCommandLineArgs()))
-        {
-            validationStep.RequiredBySteps.Add(WellKnownPipelineSteps.BeforeStart);
-        }
-
         builder.Pipeline.AddStep(validationStep);
         return registry;
+    }
+
+    private static ModularAppHostsOptionsModel GetOrCreateOptionsModel(
+        IDistributedApplicationBuilder builder)
+    {
+        var existing = builder.Services
+            .LastOrDefault(descriptor => descriptor.ServiceType == typeof(ModularAppHostsOptionsModel))?
+            .ImplementationInstance as ModularAppHostsOptionsModel;
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var model = new ModularAppHostsOptionsModel();
+        builder.Services.AddSingleton(model);
+        builder.Services
+            .AddOptions<ModularAppHostsOptions>()
+            .BindConfiguration(ModularAppHostsOptions.ConfigurationSectionName)
+            .PostConfigure(model.Apply)
+            .PostConfigure(ModularAppHostsOptionsModel.PostConfigure)
+            .Validate(AreOptionsValid, "Modular AppHost configuration is invalid.");
+        return model;
+    }
+
+    private static bool AreOptionsValid(ModularAppHostsOptions options)
+    {
+        try
+        {
+            ValidateOptions(options);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static void ValidateModuleConfiguration(

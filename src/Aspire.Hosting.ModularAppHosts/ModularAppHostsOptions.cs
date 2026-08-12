@@ -14,8 +14,8 @@ public sealed class ModularAppHostsOptions
     public const string ConfigurationSectionName = "Aspire:ModularAppHosts";
 
     /// <summary>
-    /// Gets or sets the GitHub CLI executable used by GitHub repository clones and as the process-scoped credential
-    /// helper for authenticated Git operations.
+    /// Gets or sets the GitHub CLI executable used as the process-scoped credential provider for authenticated
+    /// GitHub HTTPS operations.
     /// </summary>
     public string GitHubCliPath { get; set; } = "gh";
 
@@ -55,6 +55,68 @@ public sealed class ModularAppHostsOptions
 
     internal DistributedApplicationModuleOptions? FindModule(string name) =>
         Modules.FirstOrDefault(pair => string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase)).Value;
+}
+
+internal sealed class ModularAppHostsOptionsModel
+{
+    private readonly List<Action<ModularAppHostsOptions>> _configurations = [];
+    private bool _frozen;
+
+    public ModularAppHostsOptions ConfigureAndCreatePreview(
+        Action<ModularAppHostsOptions> configure,
+        IConfiguration configuration,
+        Action<ModularAppHostsOptions> validate)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(validate);
+        if (_frozen)
+        {
+            throw new InvalidOperationException(
+                "Configure modular AppHost options before defining or materializing modules.");
+        }
+
+        _configurations.Add(configure);
+        try
+        {
+            var preview = CreateSnapshot(configuration);
+            validate(preview);
+            return preview;
+        }
+        catch
+        {
+            _configurations.RemoveAt(_configurations.Count - 1);
+            throw;
+        }
+    }
+
+    public void Apply(ModularAppHostsOptions options)
+    {
+        foreach (var configure in _configurations)
+        {
+            configure(options);
+        }
+    }
+
+    public ModularAppHostsOptions CreateSnapshot(IConfiguration configuration)
+    {
+        var options = ModularAppHostsOptions.FromConfiguration(configuration);
+        Apply(options);
+        PostConfigure(options);
+        return options;
+    }
+
+    public void Freeze() => _frozen = true;
+
+    public static void PostConfigure(ModularAppHostsOptions options)
+    {
+        options.GitExecutablePath = string.IsNullOrWhiteSpace(options.GitExecutablePath)
+            ? "git"
+            : options.GitExecutablePath.Trim();
+        options.GitHubCliPath = string.IsNullOrWhiteSpace(options.GitHubCliPath)
+            ? "gh"
+            : options.GitHubCliPath.Trim();
+    }
 }
 
 /// <summary>Overrides materialization behavior for one distributed application module.</summary>

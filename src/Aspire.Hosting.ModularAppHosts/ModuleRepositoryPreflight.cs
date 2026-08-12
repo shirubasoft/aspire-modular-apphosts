@@ -84,7 +84,7 @@ internal static class ModuleRepositoryPreflight
                 cancellationToken).ConfigureAwait(false);
             var normalizedOrigin = origin is null
                 ? null
-                : ModuleRepositoryPathPlanner.NormalizeRepositoryIdentity(
+                : RepositoryIdentity.NormalizeRepositoryIdentity(
                     origin,
                     repository.RepositoryPath);
             if (!string.Equals(normalizedOrigin, repository.NormalizedRepository, StringComparison.Ordinal) ||

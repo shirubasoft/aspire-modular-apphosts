@@ -1,3 +1,5 @@
+#pragma warning disable ASPIRECOMMAND001
+
 using Aspire.Hosting.ApplicationModel;
 using Xunit;
 
@@ -28,6 +30,39 @@ public sealed class SynchronousModuleMaterializationTests
         var requirement = Assert.Single(registry.RepositoryPlans!.Requirements);
         Assert.Equal("example.test/acme/orders", requirement.NormalizedRepository);
         Assert.False(Directory.Exists(requirement.RepositoryPath));
+        var requiredCommands = Assert.Single(builder.Resources.OfType<ContainerResource>())
+            .Annotations
+            .OfType<RequiredCommandAnnotation>()
+            .Select(annotation => annotation.Command)
+            .ToArray();
+        Assert.Equal(["git-must-not-run-during-materialization"], requiredCommands);
+    }
+
+    [Fact]
+    public void GitHub_https_repository_advertises_Git_and_the_selected_credential_provider()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options =>
+        {
+            options.GitExecutablePath = "custom-git";
+            options.GitHubCliPath = "custom-gh";
+        });
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://github.com/acme/orders.git");
+            definition.RequiresRepository();
+            definition.AddContainer("orders-api", "busybox");
+        });
+
+        builder.ImportModule("orders");
+
+        var requiredCommands = Assert.Single(builder.Resources.OfType<ContainerResource>())
+            .Annotations
+            .OfType<RequiredCommandAnnotation>()
+            .Select(annotation => annotation.Command)
+            .ToArray();
+        Assert.Equal(["custom-git", "custom-gh"], requiredCommands);
     }
 
     [Fact]
@@ -307,18 +342,22 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
-    public void Registry_keeps_one_options_instance_when_configuration_is_refreshed()
+    public void Registry_uses_one_immutable_model_shaping_options_snapshot()
     {
         using var appHost = CreateGitAppHost();
         var builder = CreateBuilder(appHost.Path);
         builder.ConfigureModularAppHosts(options => options.GitExecutablePath = "first-git");
+        builder.ExportModule("orders", definition =>
+            definition.AddContainer("orders-api", "busybox"));
         var registry = GetRegistry(builder);
         var registeredOptions = registry.Options;
 
-        builder.ConfigureModularAppHosts(options => options.GitExecutablePath = "second-git");
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ConfigureModularAppHosts(options => options.GitExecutablePath = "second-git"));
 
         Assert.Same(registeredOptions, registry.Options);
-        Assert.Equal("second-git", registeredOptions.GitExecutablePath);
+        Assert.Equal("first-git", registeredOptions.GitExecutablePath);
+        Assert.Contains("before defining", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]

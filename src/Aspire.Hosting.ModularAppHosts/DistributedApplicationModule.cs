@@ -113,7 +113,7 @@ internal sealed class DistributedApplicationModule(
                 continue;
             }
 
-            var repositoryRoot = RepositoryInspector.FindRepositoryRoot(project.ProjectPath);
+            var repositoryRoot = RepositoryIdentity.FindRepositoryRoot(project.ProjectPath);
             var configuredRepositoryRoot = TryGetConfiguredLocalRepositoryRoot(
                 Repository,
                 appHostDirectory,
@@ -123,7 +123,7 @@ internal sealed class DistributedApplicationModule(
             {
                 repositoryRoot = configuredRepositoryRoot;
             }
-            else if (RepositoryInspector.TryFindRepositoryRoot(repositoryRoot) is null &&
+            else if (RepositoryIdentity.TryFindRepositoryRoot(repositoryRoot) is null &&
                 PathSafety.IsContainedBy(appHostDirectory, project.ProjectPath))
             {
                 repositoryRoot = appHostDirectory;
@@ -201,7 +201,7 @@ internal sealed class DistributedApplicationModule(
         string appHostDirectory)
     {
         if (!string.IsNullOrWhiteSpace(repository) &&
-            !GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+            !RepositoryIdentity.IsRemoteRepository(repository, appHostDirectory))
         {
             return Path.GetFullPath(repository, appHostDirectory);
         }
@@ -219,7 +219,7 @@ internal sealed class DistributedApplicationModule(
             return null;
         }
 
-        if (GitHubRepositoryCloner.IsRemoteRepository(repository, appHostDirectory))
+        if (RepositoryIdentity.IsRemoteRepository(repository, appHostDirectory))
         {
             return null;
         }

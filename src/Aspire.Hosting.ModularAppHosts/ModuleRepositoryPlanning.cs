@@ -17,8 +17,7 @@ internal sealed class ModuleRepositoryRequirement
         string repositoryPath,
         string? revision,
         bool updateOnInitialize,
-        string stepKey,
-        string statePath)
+        string stepKey)
     {
         AddModule(moduleName);
         Repository = repository;
@@ -27,7 +26,6 @@ internal sealed class ModuleRepositoryRequirement
         Revision = NormalizeRevision(revision);
         UpdateOnInitialize = Revision is null && updateOnInitialize;
         StepKey = stepKey;
-        StatePath = Path.GetFullPath(statePath);
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
@@ -48,8 +46,6 @@ internal sealed class ModuleRepositoryRequirement
     public bool UpdateOnInitialize { get; }
 
     public string StepKey { get; }
-
-    public string StatePath { get; }
 
     public string ConfigurationFingerprint { get; }
 
@@ -106,7 +102,6 @@ internal readonly record struct ModuleRepositoryPlanRegistration(
 
 internal sealed class ModuleRepositoryPlanRegistry
 {
-    private const string StateDirectoryName = "repositories";
     private readonly Dictionary<string, ModuleRepositoryRequirement> _requirements =
         new(PathSafety.Comparer);
 
@@ -114,15 +109,10 @@ internal sealed class ModuleRepositoryPlanRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
         AppHostDirectory = Path.GetFullPath(appHostDirectory);
-        AppHostRepositoryRoot = ModuleRepositoryPathPlanner.FindGitRoot(AppHostDirectory);
+        AppHostRepositoryRoot = RepositoryIdentity.FindGitRoot(AppHostDirectory);
         SiblingParent = Path.GetDirectoryName(AppHostRepositoryRoot)
             ?? throw new InvalidOperationException(
                 $"Unable to determine the parent of AppHost repository '{AppHostRepositoryRoot}'.");
-        StateDirectory = Path.Combine(
-            AppHostRepositoryRoot,
-            ".aspire",
-            "modular-apphosts",
-            StateDirectoryName);
     }
 
     public string AppHostDirectory { get; }
@@ -130,8 +120,6 @@ internal sealed class ModuleRepositoryPlanRegistry
     public string AppHostRepositoryRoot { get; }
 
     public string SiblingParent { get; }
-
-    public string StateDirectory { get; }
 
     public IReadOnlyCollection<ModuleRepositoryRequirement> Requirements =>
         _requirements.Values.ToArray();
@@ -143,7 +131,7 @@ internal sealed class ModuleRepositoryPlanRegistry
         bool updateOnInitialize)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        var repositoryPath = ModuleRepositoryPathPlanner.GetSiblingPath(
+        var repositoryPath = RepositoryIdentity.GetSiblingPath(
             SiblingParent,
             repository,
             revision,
@@ -168,12 +156,12 @@ internal sealed class ModuleRepositoryPlanRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
 
         var fullRepositoryPath = Path.GetFullPath(repositoryPath);
-        ModuleRepositoryPathPlanner.EnsureDirectSibling(
+        RepositoryIdentity.EnsureDirectSibling(
             AppHostRepositoryRoot,
             SiblingParent,
             fullRepositoryPath);
 
-        var normalizedRepository = ModuleRepositoryPathPlanner.NormalizeRepositoryIdentity(
+        var normalizedRepository = RepositoryIdentity.NormalizeRepositoryIdentity(
             repository,
             AppHostDirectory);
         if (_requirements.TryGetValue(fullRepositoryPath, out var existing))
@@ -183,7 +171,7 @@ internal sealed class ModuleRepositoryPlanRegistry
             return new ModuleRepositoryPlanRegistration(existing, IsNew: false);
         }
 
-        var stepKey = ModuleRepositoryPathPlanner.GetStepKey(
+        var stepKey = RepositoryIdentity.GetStepKey(
             normalizedRepository,
             revision,
             Path.GetFileName(fullRepositoryPath));
@@ -194,28 +182,27 @@ internal sealed class ModuleRepositoryPlanRegistry
             fullRepositoryPath,
             revision,
             updateOnInitialize,
-            stepKey,
-            Path.Combine(StateDirectory, $"{stepKey}.json"));
+            stepKey);
         _requirements.Add(fullRepositoryPath, requirement);
         return new ModuleRepositoryPlanRegistration(requirement, IsNew: true);
     }
 }
 
-internal static class ModuleRepositoryPathPlanner
+internal static class RepositoryIdentity
 {
     private const int HashLength = 10;
     private const int MaximumDirectoryNameLength = 72;
 
-    public static string FindGitRoot(string path)
+    public static string FindRepositoryRoot(string projectPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        return TryFindRepositoryRoot(projectPath) ?? GetWorkingDirectory(projectPath);
+    }
+
+    public static string? TryFindRepositoryRoot(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var fullPath = Path.GetFullPath(path);
-        var current = Directory.Exists(fullPath)
-            ? new DirectoryInfo(fullPath)
-            : new DirectoryInfo(Path.GetDirectoryName(fullPath)
-                ?? throw new InvalidOperationException(
-                    $"Unable to determine the directory containing '{path}'."));
-
+        var current = new DirectoryInfo(GetWorkingDirectory(path));
         while (current is not null)
         {
             if (HasGitMetadata(current.FullName))
@@ -226,7 +213,13 @@ internal static class ModuleRepositoryPathPlanner
             current = current.Parent;
         }
 
-        throw new InvalidOperationException(
+        return null;
+    }
+
+    public static string FindGitRoot(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return TryFindRepositoryRoot(path) ?? throw new InvalidOperationException(
             $"AppHost directory '{path}' is not inside a Git repository. " +
             "Repository initialization requires an AppHost Git root.");
     }
@@ -334,6 +327,54 @@ internal static class ModuleRepositoryPathPlanner
     public static string NormalizeRemoteIdentity(string repository) =>
         NormalizeRepositoryIdentity(repository, Directory.GetCurrentDirectory());
 
+    public static bool IsRemoteRepository(string repository, string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        if (Uri.TryCreate(repository, UriKind.Absolute, out var uri))
+        {
+            return !uri.IsFile;
+        }
+
+        if (Path.IsPathRooted(repository) || repository.StartsWith('.') ||
+            Directory.Exists(Path.GetFullPath(repository, baseDirectory)))
+        {
+            return false;
+        }
+
+        return repository.Contains('/', StringComparison.Ordinal) ||
+            repository.Contains(':', StringComparison.Ordinal);
+    }
+
+    public static bool RefersToSameRepository(string first, string second, string baseDirectory)
+    {
+        if (!IsRemoteRepository(first, baseDirectory) || !IsRemoteRepository(second, baseDirectory))
+        {
+            return false;
+        }
+
+        return string.Equals(
+            NormalizeRepositoryIdentity(first, baseDirectory),
+            NormalizeRepositoryIdentity(second, baseDirectory),
+            StringComparison.Ordinal);
+    }
+
+    public static bool AreEquivalent(string first, string second, string baseDirectory)
+    {
+        var firstIsRemote = IsRemoteRepository(first, baseDirectory);
+        var secondIsRemote = IsRemoteRepository(second, baseDirectory);
+        if (firstIsRemote != secondIsRemote)
+        {
+            return false;
+        }
+
+        return firstIsRemote
+            ? RefersToSameRepository(first, second, baseDirectory)
+            : PathSafety.AreEqual(
+                Path.GetFullPath(first, baseDirectory),
+                Path.GetFullPath(second, baseDirectory));
+    }
+
     public static string GetStepKey(
         string normalizedRepository,
         string? revision,
@@ -382,6 +423,16 @@ internal static class ModuleRepositoryPathPlanner
         }
 
         return $"{host}{port}/{normalizedPath}";
+    }
+
+    private static string GetWorkingDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        return Directory.Exists(fullPath)
+            ? fullPath
+            : Path.GetDirectoryName(fullPath)
+                ?? throw new InvalidOperationException(
+                    $"Unable to determine the directory containing '{path}'.");
     }
 
     private static string NormalizeLocalIdentity(string repository, string baseDirectory)

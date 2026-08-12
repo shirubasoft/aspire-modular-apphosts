@@ -189,7 +189,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
-    public async Task File_state_store_round_trips_credential_free_initialization_state()
+    public async Task Deployment_state_section_round_trips_credential_free_initialization_state()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -198,7 +198,9 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "https://build-user:secret@github.com/acme/services.git?token=secret",
             revision: "v2.0.0",
             updateOnInitialize: true).Requirement;
-        var store = new FileModuleRepositoryStateStore();
+        var statePath = Path.Combine(workspace.Path, "deployment-state.json");
+        var store = new AspireModuleRepositoryStateStore(
+            new ModuleRepositoryDeploymentStateManager(statePath));
         var state = new ModuleRepositoryInitializationState(
             ModuleRepositoryInitializationState.CurrentSchemaVersion,
             requirement.NormalizedRepository,
@@ -218,17 +220,21 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             requirement,
             TestContext.Current.CancellationToken);
         var serialized = await File.ReadAllTextAsync(
-            requirement.StatePath,
+            statePath,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(state, restored);
         Assert.True(restored!.Matches(requirement));
+        Assert.Contains(
+            AspireModuleRepositoryStateStore.GetSectionName(requirement),
+            serialized,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("secret", serialized, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("build-user", serialized, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Malformed_file_state_is_treated_as_not_initialized()
+    public async Task Malformed_deployment_state_is_treated_as_not_initialized()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -237,15 +243,65 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "acme/services",
             revision: null,
             updateOnInitialize: true).Requirement;
-        Directory.CreateDirectory(Path.GetDirectoryName(requirement.StatePath)!);
+        var statePath = Path.Combine(workspace.Path, "deployment-state.json");
         await File.WriteAllTextAsync(
-            requirement.StatePath,
+            statePath,
             "{not valid JSON",
             TestContext.Current.CancellationToken);
 
-        Assert.Null(await new FileModuleRepositoryStateStore().ReadAsync(
+        Assert.Null(await new AspireModuleRepositoryStateStore(
+            new ModuleRepositoryDeploymentStateManager(statePath)).ReadAsync(
             requirement,
             TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Run_mode_state_store_falls_back_to_Aspire_deployment_state()
+    {
+        using var workspace = CreateGitWorkspace();
+        var requirement = new ModuleRepositoryPlanRegistry(workspace.AppHostPath).Register(
+            "catalog",
+            "acme/services",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        using var runModeManager = new ModuleRepositoryDeploymentStateManager(
+            string.Empty);
+        using var deploymentManager = new ModuleRepositoryDeploymentStateManager(
+            Path.Combine(workspace.Path, "deployment-state.json"));
+        var deploymentStore = new AspireModuleRepositoryStateStore(deploymentManager);
+        var expected = new ModuleRepositoryInitializationState(
+            ModuleRepositoryInitializationState.CurrentSchemaVersion,
+            requirement.NormalizedRepository,
+            requirement.RepositoryPath,
+            requirement.Revision,
+            requirement.ConfigurationFingerprint,
+            requirement.NormalizedRepository,
+            "0123456789abcdef0123456789abcdef01234567",
+            DateTimeOffset.UtcNow);
+        await deploymentStore.WriteAsync(
+            requirement,
+            expected,
+            TestContext.Current.CancellationToken);
+
+        var store = new AspireModuleRepositoryStateStore(runModeManager, deploymentManager);
+        var actual = await store.ReadAsync(requirement, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Deployment_state_path_matches_Aspire_pipeline_convention()
+    {
+        var statePath = ModuleRepositoryDeploymentStateManager.ResolveStateFilePath(
+            "apphost-sha",
+            "Development");
+
+        Assert.EndsWith(
+            Path.Combine(".aspire", "deployments", "apphost-sha", "development.json"),
+            statePath,
+            OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
     }
 
     [Fact]
