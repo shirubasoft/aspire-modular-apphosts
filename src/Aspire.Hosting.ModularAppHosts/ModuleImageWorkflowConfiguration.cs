@@ -6,6 +6,12 @@ namespace Aspire.Hosting;
 /// <summary>Projects a workflow image manifest into standard modular AppHost configuration.</summary>
 public static class ModuleImageWorkflowConfiguration
 {
+    /// <summary>
+    /// Configuration section containing the effective resource names selected for a workflow image publish.
+    /// </summary>
+    public const string SelectionConfigurationSectionName =
+        "Aspire:ModularAppHosts:Workflow:Resources";
+
     /// <summary>Creates the configuration overrides represented by <paramref name="document"/>.</summary>
     public static IReadOnlyDictionary<string, string> Create(ModuleImageManifestDocument document)
     {

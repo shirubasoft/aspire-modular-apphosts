@@ -469,7 +469,7 @@ public sealed class ModuleImageDeferredCoverageTests
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("failed", buildException.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("failed to tag", tagException.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("IContainerRuntimeResolver", tagException.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -614,14 +614,17 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Push_step_uses_fake_runtime_for_container_target_and_clean_branch_alias()
+    public async Task Push_step_uses_aspires_image_manager_for_an_explicit_registry_target()
     {
-        using var runtime = new FakeContainerRuntimeEnvironment(FakeRuntimeMode.Success, configured: true);
         var builder = DistributedApplication.CreateBuilder();
-        var recipe = CreateRecipe();
+        var options = CreateOptions();
+        options.ImageTag = ModuleImageTag.FromBranch(CleanSource.Branch);
+        var recipe = CreateRecipe(options);
         var (resource, publisher) = CreatePublishedContainer(recipe);
         var container = builder.CreateResourceBuilder(resource);
         ModuleImagePushPipeline.AddPushStep(container);
+        var imageManager = new RecordingImageManager();
+        builder.Services.AddSingleton<IResourceContainerImageManager>(imageManager);
         await publisher.PrepareAsync(
             NullLogger.Instance,
             NullLogger.Instance,
@@ -633,13 +636,7 @@ public sealed class ModuleImageDeferredCoverageTests
             WellKnownPipelineTags.PushContainerImage));
         await ExecutePipelineStepAsync(application, step);
 
-        Assert.True(runtime.InvocationCount >= 3);
-        Assert.Contains(
-            runtime.Invocations,
-            invocation => invocation.Contains("push", StringComparison.Ordinal));
-        Assert.Contains(
-            runtime.Invocations,
-            invocation => invocation.Contains("tag", StringComparison.Ordinal));
+        Assert.Same(resource, Assert.Single(imageManager.PushedResources));
     }
 
     [Fact]
@@ -734,10 +731,13 @@ public sealed class ModuleImageDeferredCoverageTests
         using var runtime = new FakeContainerRuntimeEnvironment(mode, configured: true);
 
         var exists = await ContainerImageInspector.ExistsAsync(
+            "docker",
             "acme/api:test",
             TestContext.Current.CancellationToken);
         var pulled = await ContainerImageInspector.PullAsync(
+            "docker",
             "acme/api:test",
+            static _ => { },
             TestContext.Current.CancellationToken);
 
         Assert.Equal(expectedExists, exists);
@@ -797,29 +797,15 @@ public sealed class ModuleImageDeferredCoverageTests
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
             ContainerImageInspector.ExistsAsync(
+                "docker",
                 " ",
                 TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             ContainerImageInspector.PullAsync(
+                "docker",
                 string.Empty,
+                static _ => { },
                 TestContext.Current.CancellationToken));
-    }
-
-    [Fact]
-    public async Task Runtime_adapter_probes_fake_docker_and_podman_without_real_runtime()
-    {
-        using var runtime = new FakeContainerRuntimeEnvironment(FakeRuntimeMode.Success, configured: false);
-
-        var resolved = await ContainerRuntimeResolver.ResolveAsync(
-            TestContext.Current.CancellationToken);
-        var viaRecipeAdapter = await ModuleImageRecipeOperations.Instance.ResolveContainerRuntimeAsync(
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal("docker", resolved);
-        Assert.Equal("docker", viaRecipeAdapter);
-        Assert.Contains(
-            runtime.Invocations,
-            invocation => invocation.Contains("container", StringComparison.Ordinal));
     }
 
     private static ModuleContainerExportOptions CreateOptions() =>

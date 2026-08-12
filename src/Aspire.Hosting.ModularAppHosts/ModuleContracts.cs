@@ -79,8 +79,7 @@ public interface IDistributedApplicationModuleBuilder
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
         ModuleContainerExportOptions imagePublishOptions)
-        where TResource : ContainerResource =>
-        throw new NotSupportedException("This module builder does not support factory-created image publishers.");
+        where TResource : ContainerResource;
 
     /// <summary>Adds a generated Aspire project reference to the module.</summary>
     IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)
@@ -93,13 +92,7 @@ public interface IDistributedApplicationModuleBuilder
     IDistributedApplicationModuleProjectBuilder AddProject(
         string name,
         string projectPath,
-        ModuleProjectPathBase pathBase) => pathBase switch
-        {
-            ModuleProjectPathBase.AppHost => AddProject(name, projectPath),
-            ModuleProjectPathBase.Repository => throw new NotSupportedException(
-                "This module builder does not support repository-relative project paths."),
-            _ => throw new ArgumentOutOfRangeException(nameof(pathBase))
-        };
+        ModuleProjectPathBase pathBase);
 
     /// <summary>Adds an existing container image to the module.</summary>
     IDistributedApplicationModuleContainerBuilder AddContainer(
@@ -148,7 +141,7 @@ public interface IDistributedApplicationModuleResourceContext
     bool Imported { get; }
 
     /// <summary>Gets the resolved image for a container resource, when one is available.</summary>
-    ModuleResourceImage? Image => null;
+    ModuleResourceImage? Image { get; }
 
     /// <summary>Gets a previously materialized resource exported by the same module.</summary>
     IResourceBuilder<TResource> GetResource<TResource>(string name)

@@ -146,7 +146,7 @@ public sealed class ModuleImageBuildRecipeTests
     }
 
     [Fact]
-    public void Dirty_literal_clean_references_are_rewritten_for_publish_and_legacy_output()
+    public void Dirty_literal_references_are_not_magically_rewritten()
     {
         var options = CreateOptions();
         options.ImageTag = "candidate";
@@ -167,8 +167,8 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Equal(
             "registry.example.test/acme/orders-api:candidate-dirty",
             plan.CanonicalImageReference);
-        Assert.Equal(plan.CanonicalImageReference, plan.ProducedImageReference);
-        Assert.Equal([plan.CanonicalImageReference], plan.PublishArguments);
+        Assert.Equal(options.ProducedImageReference, plan.ProducedImageReference);
+        Assert.Equal([options.ProducedImageReference], plan.PublishArguments);
     }
 
     [Fact]

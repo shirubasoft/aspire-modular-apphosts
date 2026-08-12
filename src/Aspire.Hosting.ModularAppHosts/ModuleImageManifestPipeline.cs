@@ -5,6 +5,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Publishing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -29,19 +30,34 @@ internal static class ModuleImageManifestPipeline
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var selection = ModuleImagePipelineSelectionParser.GetSelection(
-            Environment.GetCommandLineArgs(),
-            StepName);
-        builder.Pipeline.AddStep(new PipelineStep
+        var selectors = builder.Configuration
+            .GetSection(ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName)
+            .Get<string[]>() ?? [];
+        var selection = selectors.Length == 0
+            ? ModuleImageSelection.All
+            : new ModuleImageSelection(selectors);
+        var workflowStep = new PipelineStep
         {
             Name = StepName,
             Description = "Pushes selected module images and writes their resolved remote identities.",
-            Action = context => WriteAsync(context, selection),
-            DependsOnSteps = [WellKnownPipelineSteps.Push]
-        });
+            Action = context => WriteAsync(context, selection)
+        };
+        builder.Pipeline.AddStep(workflowStep);
         builder.Pipeline.AddPipelineConfiguration(context =>
         {
-            ModuleImagePushPipeline.ApplySelection(context.Steps, selection);
+            var pushSteps = context.Steps
+                .Where(step =>
+                    step.Resource is not null &&
+                    step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+                .ToArray();
+            var selectedResources = selection.ResolveResources(
+                pushSteps.Select(step => step.Resource!),
+                "workflow image push steps");
+            foreach (var step in pushSteps.Where(step => selectedResources.Contains(step.Resource!)))
+            {
+                workflowStep.DependsOnSteps.Add(step.Name);
+            }
+
             return Task.CompletedTask;
         });
     }

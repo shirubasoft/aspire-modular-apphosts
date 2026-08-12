@@ -1,9 +1,11 @@
 #pragma warning disable ASPIRECOMPUTE003
+#pragma warning disable ASPIRECONTAINERRUNTIME001
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
 using CliWrap;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -59,17 +61,6 @@ internal static class ModuleImagePullPipeline
             Action = _ => Task.CompletedTask
         });
 
-        var selection = GetSelection(Environment.GetCommandLineArgs());
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        builder.Pipeline.AddPipelineConfiguration(context =>
-        {
-            ApplySelection(context.Steps, selection);
-            return Task.CompletedTask;
-        });
     }
 
     public static void AddPullStep(IResourceBuilder<ContainerResource> container)
@@ -104,37 +95,6 @@ internal static class ModuleImagePullPipeline
         });
     }
 
-    internal static ModuleImageSelection GetSelection(IReadOnlyList<string> arguments) =>
-        ModuleImagePipelineSelectionParser.GetSelection(arguments, PullStepName);
-
-    internal static void ApplySelection(
-        IReadOnlyList<PipelineStep> steps,
-        ModuleImageSelection selection)
-    {
-        ArgumentNullException.ThrowIfNull(steps);
-        ArgumentNullException.ThrowIfNull(selection);
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        var pullSteps = steps
-            .Where(step =>
-                step.Resource is not null &&
-                step.Tags.Contains(PullContainerImageTag) &&
-                step.RequiredBySteps.Contains(PullStepName))
-            .ToArray();
-        var selectedResources = selection.ResolveResources(
-            pullSteps.Select(step => step.Resource!),
-            "image pull steps");
-
-        foreach (var step in pullSteps.Where(step => !selectedResources.Contains(step.Resource!)))
-        {
-            step.RequiredBySteps.RemoveAll(requiredBy =>
-                string.Equals(requiredBy, PullStepName, StringComparison.Ordinal));
-        }
-    }
-
     internal static async Task<(string RemoteImage, string LocalImage)> ResolveImageReferencesAsync(
         IResource resource,
         CancellationToken cancellationToken)
@@ -144,23 +104,32 @@ internal static class ModuleImagePullPipeline
         return (resolved.PullReference, resolved.Reference);
     }
 
-    private static Task PullAsync(IResource resource, PipelineStepContext context) =>
-        PullAsync(
+    private static async Task PullAsync(IResource resource, PipelineStepContext context)
+    {
+        var runtime = await context.Services
+            .GetRequiredService<IContainerRuntimeResolver>()
+            .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
+        await PullAsync(
             resource,
             context,
-            ContainerRuntimeResolver.ResolveAsync,
-            ExecuteRuntimeAsync);
+            _ => Task.FromResult(runtime.Name),
+            ExecuteRuntimeAsync,
+            (source, target, cancellationToken) =>
+                runtime.TagImageAsync(source, target, cancellationToken)).ConfigureAwait(false);
+    }
 
     internal static async Task PullAsync(
         IResource resource,
         PipelineStepContext context,
         Func<CancellationToken, Task<string>> resolveRuntimeAsync,
-        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, Task> executeRuntimeAsync)
+        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, Task> executeRuntimeAsync,
+        Func<string, string, CancellationToken, Task> tagImageAsync)
     {
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(resolveRuntimeAsync);
         ArgumentNullException.ThrowIfNull(executeRuntimeAsync);
+        ArgumentNullException.ThrowIfNull(tagImageAsync);
 
         var (remoteImage, localImage) = await ResolveImageReferencesAsync(
             resource,
@@ -183,11 +152,10 @@ internal static class ModuleImagePullPipeline
         {
             LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
             LogImageRetagStarted(resourceLogger, remoteImage, localImage, resource.Name, null);
-            await executeRuntimeAsync(
-                runtime,
-                ["tag", remoteImage, localImage],
-                context,
-                resourceLogger).ConfigureAwait(false);
+            await tagImageAsync(
+                remoteImage,
+                localImage,
+                context.CancellationToken).ConfigureAwait(false);
             LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
             LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }

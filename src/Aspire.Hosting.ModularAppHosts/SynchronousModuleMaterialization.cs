@@ -513,6 +513,7 @@ public static partial class DistributedApplicationModuleExtensions
                     .GetRequiredService<ResourceLoggerService>()
                     .GetLogger(resource);
                 await publisher.PrepareAsync(
+                    @event.Services,
                     lifecycleLogger,
                     resourceLogger,
                     cancellationToken).ConfigureAwait(false);

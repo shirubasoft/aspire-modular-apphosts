@@ -138,19 +138,6 @@ internal static class ContainerImageInspector
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(5);
 
     public static async Task<bool> ExistsAsync(
-        string imageReference,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
-
-        var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
-        return await ExistsAsync(
-            runtime,
-            imageReference,
-            cancellationToken).ConfigureAwait(false);
-    }
-
-    public static async Task<bool> ExistsAsync(
         string containerRuntime,
         string imageReference,
         CancellationToken cancellationToken = default)
@@ -162,30 +149,6 @@ internal static class ContainerImageInspector
             containerRuntime,
             ["image", "inspect", imageReference],
             cancellationToken).ConfigureAwait(false) == 0;
-    }
-
-    public static async Task<bool> PullAsync(
-        string imageReference,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
-
-        try
-        {
-            var runtime = await ContainerRuntimeResolver.ResolveAsync(cancellationToken).ConfigureAwait(false);
-            return await PullAsync(
-                runtime,
-                imageReference,
-                static _ => { },
-                cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (
-            exception is InvalidOperationException
-                or System.ComponentModel.Win32Exception
-                or IOException)
-        {
-            return false;
-        }
     }
 
     public static async Task<bool> PullAsync(

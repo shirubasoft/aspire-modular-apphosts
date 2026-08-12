@@ -294,10 +294,6 @@ public sealed class PackedPackageContractTests
                 public static string ContainerRuntimePlaceholder =>
                     ModuleContainerExportOptions.ContainerRuntimePlaceholder;
 
-                public static System.Threading.Tasks.Task<string> ResolveContainerRuntimeAsync(
-                    System.Threading.CancellationToken cancellationToken = default) =>
-                    ContainerRuntimeResolver.ResolveAsync(cancellationToken);
-
                 public static IResourceBuilder<IResourceWithEndpoints> GetApi(OrdersModule.Module module) =>
                     module.OrdersApi;
             }

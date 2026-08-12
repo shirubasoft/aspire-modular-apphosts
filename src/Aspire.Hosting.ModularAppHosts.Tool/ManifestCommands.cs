@@ -83,7 +83,6 @@ internal sealed class ManifestCommandService(
                 appHostPath,
                 "describe-images",
                 descriptionPath,
-                [],
                 null,
                 cancellationToken).ConfigureAwait(false);
             if (!describe.IsSuccess)
@@ -99,19 +98,28 @@ internal sealed class ManifestCommandService(
                 .ToArray();
             var selected = SelectImages(publishable, selectors, all);
             var overrides = new ManifestTagOverrides(tag, resourceTags);
-            var producerEnvironment = overrides.CreateProducerEnvironment(selected);
+            var producerEnvironment = new Dictionary<string, string?>(
+                overrides.CreateProducerEnvironment(selected) ??
+                    new Dictionary<string, string?>(),
+                StringComparer.Ordinal);
             var effectiveSelectors = selected
                 .Select(image => image.EffectiveResource)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            var selectionPrefix = ModuleImageWorkflowConfiguration
+                .SelectionConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            for (var index = 0; index < effectiveSelectors.Length; index++)
+            {
+                producerEnvironment[$"{selectionPrefix}__{index}"] = effectiveSelectors[index];
+            }
 
             var publish = await RunAspireAsync(
                 aspirePath,
                 appHostPath,
                 "workflow-images",
                 manifestPath,
-                effectiveSelectors,
                 producerEnvironment,
                 cancellationToken).ConfigureAwait(false);
             if (!publish.IsSuccess)
@@ -159,7 +167,6 @@ internal sealed class ManifestCommandService(
         string appHost,
         string step,
         string? outputPath,
-        string[] selectors,
         IReadOnlyDictionary<string, string?>? environmentVariables,
         CancellationToken cancellationToken)
     {
@@ -177,12 +184,6 @@ internal sealed class ManifestCommandService(
         }
 
         arguments.Add("--non-interactive");
-        if (selectors.Length > 0)
-        {
-            arguments.Add("--");
-            arguments.AddRange(selectors);
-        }
-
         return await processRunner.RunAsync(
             new ProcessInvocation(
                 aspirePath,

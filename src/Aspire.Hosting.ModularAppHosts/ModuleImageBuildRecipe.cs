@@ -1,7 +1,10 @@
+#pragma warning disable ASPIRECONTAINERRUNTIME001
+
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using CliWrap;
+using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.Logging;
 using CliCommand = global::CliWrap.Cli;
 
@@ -131,7 +134,6 @@ internal sealed record ModuleImageExecutionPlan(
         var effectiveTag = sourceState.IsDirty
             ? ModuleImageTag.AppendDirtySuffix(cleanTag)
             : cleanTag;
-        var cleanImageReference = $"{imageRepository}:{cleanTag}";
         var canonicalImageReference = $"{imageRepository}:{effectiveTag}";
         var publishArguments = options.PublishArguments
             .Select(argument => ResolveValue(
@@ -139,9 +141,7 @@ internal sealed record ModuleImageExecutionPlan(
                 options,
                 imageRepository,
                 effectiveTag,
-                cleanImageReference,
-                canonicalImageReference,
-                sourceState.IsDirty))
+                canonicalImageReference))
             .ToArray();
         var producedImageReference = string.IsNullOrWhiteSpace(options.ProducedImageReference)
             ? null
@@ -150,9 +150,7 @@ internal sealed record ModuleImageExecutionPlan(
                 options,
                 imageRepository,
                 effectiveTag,
-                cleanImageReference,
-                canonicalImageReference,
-                sourceState.IsDirty);
+                canonicalImageReference);
 
         return new ModuleImageExecutionPlan(
             canonicalImageReference,
@@ -165,16 +163,9 @@ internal sealed record ModuleImageExecutionPlan(
         ModuleContainerExportOptions options,
         string imageRepository,
         string imageTag,
-        string cleanImageReference,
-        string canonicalImageReference,
-        bool repositoryDirty)
+        string canonicalImageReference)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (repositoryDirty && string.Equals(value, cleanImageReference, StringComparison.Ordinal))
-        {
-            value = canonicalImageReference;
-        }
-
         return value
             .Replace(ModuleContainerExportOptions.ImageReferencePlaceholder, canonicalImageReference, StringComparison.Ordinal)
             .Replace(ModuleContainerExportOptions.ImageRepositoryPlaceholder, imageRepository, StringComparison.Ordinal)
@@ -313,18 +304,6 @@ internal static class ModuleImageRecipeEvaluator
             LogLevel.Information,
             new EventId(14, nameof(LogCommandOutput)),
             "{Output}");
-
-    public static Task<ModulePreparedImage> PrepareAsync(
-        ModuleImageBuildRecipe recipe,
-        ILogger lifecycleLogger,
-        ILogger resourceLogger,
-        CancellationToken cancellationToken = default) =>
-        PrepareAsync(
-            recipe,
-            lifecycleLogger,
-            resourceLogger,
-            ModuleImageRecipeOperations.Instance,
-            cancellationToken);
 
     internal static async Task<ModulePreparedImage> PrepareAsync(
         ModuleImageBuildRecipe recipe,
@@ -667,18 +646,20 @@ internal static class ModuleImageRecipeEvaluator
         };
 }
 
-internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
+internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? runtimeResolver = null)
+    : IModuleImageRecipeOperations
 {
-    public static ModuleImageRecipeOperations Instance { get; } = new();
+    internal static ModuleImageRecipeOperations Instance { get; } = new();
 
-    private ModuleImageRecipeOperations()
-    {
-    }
-
-    public Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
-        ContainerRuntimeResolver.ResolveAsync(cancellationToken);
+    public async Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
+        (await GetRuntimeResolver().ResolveAsync(cancellationToken).ConfigureAwait(false)).Name;
 
     public async Task<ModuleImageSourceState> CaptureSourceStateAsync(
+        ModuleImageBuildRecipe recipe,
+        CancellationToken cancellationToken) =>
+        await InspectSourceStateAsync(recipe, cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<ModuleImageSourceState> InspectSourceStateAsync(
         ModuleImageBuildRecipe recipe,
         CancellationToken cancellationToken)
     {
@@ -817,21 +798,16 @@ internal sealed class ModuleImageRecipeOperations : IModuleImageRecipeOperations
         Action<string> progress,
         CancellationToken cancellationToken)
     {
-        var result = await ModuleCliRunner.RunAsync(
-            containerRuntime,
-            ["tag", sourceImageReference, targetImageReference],
-            Environment.CurrentDirectory,
-            recipe.CommandTimeout,
-            "tag module image",
-            cancellationToken,
-            progress).ConfigureAwait(false);
-        if (!result.IsSuccess)
-        {
-            throw new InvalidOperationException(
-                $"Container runtime '{ModuleCliOutputRedactor.Redact(containerRuntime)}' failed to tag " +
-                $"'{sourceImageReference}' as '{targetImageReference}' with exit code {result.ExitCode}.");
-        }
+        var runtime = await GetRuntimeResolver().ResolveAsync(cancellationToken).ConfigureAwait(false);
+        await runtime.TagImageAsync(
+            sourceImageReference,
+            targetImageReference,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    private IContainerRuntimeResolver GetRuntimeResolver() =>
+        runtimeResolver ?? throw new InvalidOperationException(
+            "Aspire's IContainerRuntimeResolver is required for container runtime operations.");
 
     private static async Task<string> RunGitAsync(
         ModuleImageBuildRecipe recipe,

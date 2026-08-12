@@ -29,14 +29,11 @@ internal static class ModuleImageDescriptionPipeline
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var selection = ModuleImagePipelineSelectionParser.GetSelection(
-            Environment.GetCommandLineArgs(),
-            StepName);
         builder.Pipeline.AddStep(new PipelineStep
         {
             Name = StepName,
             Description = "Writes effective module image identities and build origins.",
-            Action = context => DescribeAsync(context, selection)
+            Action = context => DescribeAsync(context, ModuleImageSelection.All)
         });
     }
 

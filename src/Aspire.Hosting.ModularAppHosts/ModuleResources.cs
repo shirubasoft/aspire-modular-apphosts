@@ -16,10 +16,6 @@ public sealed class DistributedApplicationModuleResourceAnnotation(
     /// <summary>Gets the exported resource name.</summary>
     public string ResourceName { get; } = resourceName;
 
-    /// <summary>Gets the exported resource name.</summary>
-    [Obsolete($"Use {nameof(ResourceName)} instead.")]
-    public string ProjectName => ResourceName;
-
     /// <summary>Gets the module-definition worktree associated with the resource.</summary>
     public string RepositoryPath { get; } = repositoryPath;
 

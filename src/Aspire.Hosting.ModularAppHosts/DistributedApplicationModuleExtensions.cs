@@ -197,13 +197,11 @@ public static partial class DistributedApplicationModuleExtensions
         var options = ModularAppHostsOptions.FromConfiguration(builder.Configuration);
         ValidateOptions(options);
         var registry = new ModuleApplicationRegistry(options, builder.Configuration);
-        ModuleImageBuildPipeline.ConfigureResourceSelection(builder);
-        ModuleImagePushPipeline.ConfigureResourceSelection(builder);
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
         ModuleImageManifestPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
-        builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
+        builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(_ => Options.Create(registry.Options));
         builder.Pipeline.AddStep(new PipelineStep
         {
             Name = "validate-module-repositories",

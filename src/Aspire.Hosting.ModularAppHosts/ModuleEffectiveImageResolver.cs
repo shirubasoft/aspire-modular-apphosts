@@ -1,7 +1,10 @@
 #pragma warning disable ASPIRECOMPUTE003
+#pragma warning disable ASPIRECONTAINERRUNTIME001
 #pragma warning disable ASPIREPIPELINES003
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Publishing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -23,9 +26,9 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger,
         ILogger,
         CancellationToken,
-        Task<ModulePreparedImage>> _prepareAsync = prepareAsync ?? ModuleImageRecipeEvaluator.PrepareAsync;
+        Task<ModulePreparedImage>>? _prepareAsync = prepareAsync;
     private readonly Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>> _inspectAsync =
-        inspectAsync ?? ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync;
+        inspectAsync ?? ModuleImageRecipeOperations.InspectSourceStateAsync;
     private Task<ModulePreparedImage>? _preparationTask;
     private ModulePreparedImage? _preparedImage;
 
@@ -46,10 +49,12 @@ internal sealed class ModuleImagePublisherAnnotation(
     public string? Revision => Recipe.Revision;
 
     public Task<ModulePreparedImage> PrepareAsync(
+        IServiceProvider services,
         ILogger lifecycleLogger,
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(lifecycleLogger);
         ArgumentNullException.ThrowIfNull(resourceLogger);
 
@@ -58,6 +63,7 @@ internal sealed class ModuleImagePublisherAnnotation(
             if (_preparationTask is null)
             {
                 var preparationTask = PrepareCoreAsync(
+                    services,
                     lifecycleLogger,
                     resourceLogger,
                     cancellationToken);
@@ -72,6 +78,24 @@ internal sealed class ModuleImagePublisherAnnotation(
 
             return _preparationTask;
         }
+    }
+
+    internal Task<ModulePreparedImage> PrepareAsync(
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
+    {
+        if (_prepareAsync is null)
+        {
+            throw new InvalidOperationException(
+                "Aspire application services are required to prepare a module image with the default runtime operations.");
+        }
+
+        return PrepareAsync(
+            EmptyServiceProvider.Instance,
+            lifecycleLogger,
+            resourceLogger,
+            cancellationToken);
     }
 
     public bool TryGetPreparedImage(out ModulePreparedImage preparedImage)
@@ -93,15 +117,24 @@ internal sealed class ModuleImagePublisherAnnotation(
         _inspectAsync(Recipe, cancellationToken);
 
     private async Task<ModulePreparedImage> PrepareCoreAsync(
+        IServiceProvider services,
         ILogger lifecycleLogger,
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
-        var preparedImage = await _prepareAsync(
-            Recipe,
-            lifecycleLogger,
-            resourceLogger,
-            cancellationToken).ConfigureAwait(false);
+        var preparedImage = _prepareAsync is not null
+            ? await _prepareAsync(
+                Recipe,
+                lifecycleLogger,
+                resourceLogger,
+                cancellationToken).ConfigureAwait(false)
+            : await ModuleImageRecipeEvaluator.PrepareAsync(
+                Recipe,
+                lifecycleLogger,
+                resourceLogger,
+                new ModuleImageRecipeOperations(
+                    services.GetRequiredService<IContainerRuntimeResolver>()),
+                cancellationToken).ConfigureAwait(false);
         lock (_preparationLock)
         {
             _preparedImage = preparedImage;
@@ -124,6 +157,13 @@ internal sealed class ModuleImagePublisherAnnotation(
                 _preparationTask = null;
             }
         }
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public static EmptyServiceProvider Instance { get; } = new();
+
+        public object? GetService(Type serviceType) => null;
     }
 }
 

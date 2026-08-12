@@ -47,81 +47,6 @@ public sealed class ModuleImageBuildPipelineTests
     }
 
     [Fact]
-    public void Build_selection_accepts_declared_aliases_and_rejects_unknown_resources()
-    {
-        var selected = CreateBuildStep("imported-api", "api");
-        var unselected = CreateBuildStep("imported-worker", "worker");
-
-        ModuleImageBuildPipeline.ApplySelection(
-            [selected, unselected],
-            new ModuleImageSelection(["api"]));
-
-        Assert.Contains(WellKnownPipelineSteps.Build, selected.RequiredBySteps);
-        Assert.DoesNotContain(WellKnownPipelineSteps.Build, unselected.RequiredBySteps);
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImageBuildPipeline.ApplySelection(
-                [selected, unselected],
-                new ModuleImageSelection(["missing"])));
-        Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("api", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("pull", false)]
-    [InlineData("describe-images", false)]
-    [InlineData("push", true)]
-    [InlineData("build", true)]
-    public void Pull_only_operations_do_not_prepare_build_repositories(
-        string step,
-        bool expected)
-    {
-        Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-            ["--operation", "publish", "--step", step],
-            "images",
-            "api",
-            "imported-api"));
-    }
-
-    [Theory]
-    [InlineData("push", "api", true)]
-    [InlineData("push", "imported-api", true)]
-    [InlineData("push", "worker", false)]
-    [InlineData("build", "api", true)]
-    [InlineData("build", "worker", false)]
-    [InlineData("push-api", null, true)]
-    [InlineData("push-worker", null, false)]
-    public void Scoped_operations_only_prepare_the_selected_build_repository(
-        string step,
-        string? positionalResource,
-        bool expected)
-    {
-        var arguments = positionalResource is null
-            ? new[] { "--operation", "publish", "--step", step }
-            : ["--operation", "publish", "--step", step, positionalResource];
-        Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-            arguments,
-            "images",
-            "api",
-            "imported-api"));
-    }
-
-    [Theory]
-    [InlineData("module:images", true)]
-    [InlineData("images", true)]
-    [InlineData("api", true)]
-    [InlineData("module:catalog", false)]
-    public void Module_selectors_control_build_repository_preparation(
-        string selector,
-        bool expected)
-    {
-        Assert.Equal(expected, ModuleImageBuildPipeline.ShouldPrepareBuildRepository(
-            ["--operation", "publish", "--step", "push", selector],
-            "images",
-            "api",
-            "imported-api"));
-    }
-
-    [Fact]
     public async Task Build_step_delegates_to_the_publisher_recipe_once()
     {
         var options = Publisher("api");
@@ -205,23 +130,6 @@ public sealed class ModuleImageBuildPipelineTests
             ReportingStep = reportingStep
         };
         return (resource, context, application);
-    }
-
-    private static PipelineStep CreateBuildStep(string effectiveName, string declaredName)
-    {
-        var resource = new ContainerResource(effectiveName);
-        var options = Publisher(declaredName);
-        resource.Annotations.Add(new ModuleImagePublisherAnnotation(
-            ModuleResourceKind.Container,
-            CreateRecipe(options, declaredName)));
-        return new PipelineStep
-        {
-            Name = $"build-{effectiveName}",
-            Action = _ => Task.CompletedTask,
-            RequiredBySteps = [WellKnownPipelineSteps.Build],
-            Tags = [ModuleImageBuildPipeline.BuildContainerImageTag],
-            Resource = resource
-        };
     }
 
     private static ModuleImageBuildRecipe CreateRecipe(

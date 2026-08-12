@@ -1,4 +1,5 @@
 #pragma warning disable ASPIRECOMPUTE003
+#pragma warning disable ASPIRECONTAINERRUNTIME001
 #pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIREPIPELINES003
 
@@ -25,23 +26,6 @@ internal static class ModuleImagePushPipeline
             LogLevel.Information,
             new EventId(3, nameof(LogBranchAlias)),
             "Publishing branch image alias {Alias} for resource {Resource}.");
-
-    public static void ConfigureResourceSelection(IDistributedApplicationBuilder builder)
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        var selection = GetSelection(Environment.GetCommandLineArgs());
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        builder.Pipeline.AddPipelineConfiguration(context =>
-        {
-            ApplySelection(context.Steps, selection);
-            return Task.CompletedTask;
-        });
-    }
 
     public static void AddPushStep(IResourceBuilder<ContainerResource> container)
     {
@@ -78,37 +62,6 @@ internal static class ModuleImagePushPipeline
         });
     }
 
-    internal static ModuleImageSelection GetSelection(IReadOnlyList<string> arguments) =>
-        ModuleImagePipelineSelectionParser.GetSelection(arguments, WellKnownPipelineSteps.Push);
-
-    internal static void ApplySelection(
-        IReadOnlyList<PipelineStep> steps,
-        ModuleImageSelection selection)
-    {
-        ArgumentNullException.ThrowIfNull(steps);
-        ArgumentNullException.ThrowIfNull(selection);
-        if (!selection.IsScoped)
-        {
-            return;
-        }
-
-        var pushSteps = steps
-            .Where(step =>
-                step.Resource is not null &&
-                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage) &&
-                step.RequiredBySteps.Contains(WellKnownPipelineSteps.Push))
-            .ToArray();
-        var selectedResources = selection.ResolveResources(
-            pushSteps.Select(step => step.Resource!),
-            "image push steps");
-
-        foreach (var step in pushSteps.Where(step => !selectedResources.Contains(step.Resource!)))
-        {
-            step.RequiredBySteps.RemoveAll(requiredBy =>
-                string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));
-        }
-    }
-
     private static async Task PushAsync(IResource resource, PipelineStepContext context)
     {
         var resourceLogger = context.Services
@@ -118,6 +71,7 @@ internal static class ModuleImagePushPipeline
             ?? throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a module image publisher.");
         var preparedImage = await publisher.PrepareAsync(
+            context.Services,
             context.Logger,
             resourceLogger,
             context.CancellationToken).ConfigureAwait(false);
@@ -132,26 +86,14 @@ internal static class ModuleImagePushPipeline
             resource,
             context.CancellationToken,
             usePreparedPublisherImage: true).ConfigureAwait(false);
-        string? runtime = null;
-        if (resolved.PushTargetKind == ModuleImagePushTargetKind.ContainerRuntime)
-        {
-            runtime = await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
-            await RunContainerRuntimeAsync(
-                runtime,
-                ["push", resolved.PushReference!],
-                context,
-                resourceLogger).ConfigureAwait(false);
-        }
-        else if (resolved.PushTargetKind == ModuleImagePushTargetKind.AspireRegistry)
-        {
-            var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();
-            await imageManager.PushImageAsync(resource, context.CancellationToken).ConfigureAwait(false);
-        }
-        else
+        if (resolved.PushTargetKind == ModuleImagePushTargetKind.None)
         {
             throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a remote image push target.");
         }
+
+        var imageManager = context.Services.GetRequiredService<IResourceContainerImageManager>();
+        await imageManager.PushImageAsync(resource, context.CancellationToken).ConfigureAwait(false);
 
         var branchAlias = GetBranchAliasReference(resource, resolved);
         if (branchAlias is null)
@@ -159,16 +101,17 @@ internal static class ModuleImagePushPipeline
             return;
         }
 
-        runtime ??= await ContainerRuntimeResolver.ResolveAsync(context.CancellationToken).ConfigureAwait(false);
+        var runtime = await context.Services
+            .GetRequiredService<IContainerRuntimeResolver>()
+            .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
         LogBranchAlias(context.Logger, branchAlias, resource.Name, null);
         LogBranchAlias(resourceLogger, branchAlias, resource.Name, null);
+        await runtime.TagImageAsync(
+            resolved.Reference,
+            branchAlias,
+            context.CancellationToken).ConfigureAwait(false);
         await RunContainerRuntimeAsync(
-            runtime,
-            ["tag", resolved.Reference, branchAlias],
-            context,
-            resourceLogger).ConfigureAwait(false);
-        await RunContainerRuntimeAsync(
-            runtime,
+            runtime.Name,
             ["push", branchAlias],
             context,
             resourceLogger).ConfigureAwait(false);

@@ -77,6 +77,7 @@ Aspire.Hosting.ModuleImageSelection.IsScoped.get -> bool
 Aspire.Hosting.ModuleImageSelection.ModuleImageSelection(System.Collections.Generic.IEnumerable<string!>! selectors) -> void
 Aspire.Hosting.ModuleImageSelection.ResolveDescriptions(System.Collections.Generic.IEnumerable<Aspire.Hosting.ModuleImageDescription!>! descriptions, string! operation) -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.ModuleImageDescription!>!
 Aspire.Hosting.ModuleImageWorkflowConfiguration
+const Aspire.Hosting.ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName = "Aspire:ModularAppHosts:Workflow:Resources" -> string!
 const Aspire.Hosting.ModuleImageDescriptionDocument.CurrentSchemaVersion = 3 -> int
 const Aspire.Hosting.ModuleImageManifestDocument.CurrentSchemaVersion = 1 -> int
 const Aspire.Hosting.ModuleImageManifestDocument.DefaultFileName = "module-image-manifest.json" -> string!
@@ -142,7 +143,6 @@ Aspire.Hosting.DistributedApplicationModuleImageOptions.ImageSHA256.get -> strin
 Aspire.Hosting.DistributedApplicationModuleImageOptions.ImageSHA256.set -> void
 *REMOVED*Aspire.Hosting.DistributedApplicationModuleImageOptions.UpdateBuildRepository.get -> bool?
 *REMOVED*Aspire.Hosting.DistributedApplicationModuleImageOptions.UpdateBuildRepository.set -> void
-Aspire.Hosting.ContainerRuntimeResolver
 Aspire.Hosting.ModuleContainerExportOptions.BuildRepository.get -> string?
 Aspire.Hosting.ModuleContainerExportOptions.BuildRepository.set -> void
 Aspire.Hosting.ModuleContainerExportOptions.BuildRepositoryRevision.get -> string?
@@ -168,7 +168,6 @@ Aspire.Hosting.ModuleProjectPathBase.AppHost = 0 -> Aspire.Hosting.ModuleProject
 Aspire.Hosting.ModuleProjectPathBase.Repository = 1 -> Aspire.Hosting.ModuleProjectPathBase
 const Aspire.Hosting.ModuleContainerExportOptions.ImageRegistryPlaceholder = "{image-registry}" -> string!
 const Aspire.Hosting.ModuleContainerExportOptions.ImageRepositoryPlaceholder = "{image-repository}" -> string!
-static Aspire.Hosting.ContainerRuntimeResolver.ResolveAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<string!>!
 static Aspire.Hosting.DistributedApplicationModuleExtensions.GetModuleConfigurationKey(string! moduleName) -> string!
 static Aspire.Hosting.DistributedApplicationModuleExtensions.WithImagePullMapping(this Aspire.Hosting.IDistributedApplicationModuleContainerBuilder! resource, string! remoteImageReference) -> Aspire.Hosting.IDistributedApplicationModuleContainerBuilder!
 static Aspire.Hosting.DistributedApplicationModuleExtensions.WithImagePullMapping<TResource>(this Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource!>! resource, string! remoteImageReference) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource!>!
@@ -407,7 +406,7 @@ Aspire.Hosting.DistributedApplicationModuleProjectOptions.ProjectMode.set -> voi
 Aspire.Hosting.DistributedApplicationModuleResourceAnnotation
 Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.Imported.get -> bool
 Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.ModuleName.get -> string!
-Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.ProjectName.get -> string!
+*REMOVED*Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.ProjectName.get -> string!
 Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.RepositoryPath.get -> string!
 Aspire.Hosting.DistributedApplicationModuleResourceAnnotation.ResourceName.get -> string!
 Aspire.Hosting.GenerateDistributedApplicationModuleAttribute

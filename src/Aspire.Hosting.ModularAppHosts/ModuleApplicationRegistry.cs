@@ -33,7 +33,7 @@ internal sealed class ModuleApplicationRegistry(
     private readonly HashSet<string> _requiredPathKeys = new(StringComparer.Ordinal);
     private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
 
-    internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
+    internal ModularAppHostsOptions Options { get; private set; } = options ?? new ModularAppHostsOptions();
 
     internal ModuleRepositoryPlanRegistry? RepositoryPlans => _repositoryPlans;
 
@@ -135,17 +135,16 @@ internal sealed class ModuleApplicationRegistry(
 
     internal void RefreshConfiguration()
     {
-        ResetOptions();
-        if (configuration is not null)
-        {
-            configuration.GetSection(ModularAppHostsOptions.ConfigurationSectionName).Bind(Options);
-        }
+        var refreshed = configuration is null
+            ? new ModularAppHostsOptions()
+            : ModularAppHostsOptions.FromConfiguration(configuration);
 
         foreach (var configure in _configurations)
         {
-            configure(Options);
+            configure(refreshed);
         }
 
+        Options = refreshed;
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)
@@ -161,18 +160,6 @@ internal sealed class ModuleApplicationRegistry(
             RefreshConfiguration();
             throw;
         }
-    }
-
-    private void ResetOptions()
-    {
-        var defaults = new ModularAppHostsOptions();
-        Options.GitHubCliPath = defaults.GitHubCliPath;
-        Options.GitExecutablePath = defaults.GitExecutablePath;
-        Options.RepositoryCommandTimeout = defaults.RepositoryCommandTimeout;
-        Options.UpdateRepositoriesOnInitialize = defaults.UpdateRepositoriesOnInitialize;
-        Options.RefreshBuildRepositoriesOnRun = defaults.RefreshBuildRepositoriesOnRun;
-        Options.ProjectMode = defaults.ProjectMode;
-        Options.Modules.Clear();
     }
 
     internal void ValidateConfiguredModules()

@@ -508,9 +508,11 @@ public sealed class ToolApplicationTests
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
+        Assert.DoesNotContain("--", runner.Invocations[1].Arguments);
         Assert.Equal(
-            ["imported-api"],
-            runner.Invocations[1].Arguments.SkipWhile(value => value != "--").Skip(1));
+            "imported-api",
+            runner.Invocations[1].EnvironmentVariables![
+                "Aspire__ModularAppHosts__Workflow__Resources__0"]);
     }
 
     [Fact]
@@ -685,8 +687,14 @@ public sealed class ToolApplicationTests
     {
         Assert.Equal(step, invocation.Arguments[1]);
         Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
-        Assert.Equal(["imported-api", "imported-worker"], invocation.Arguments.SkipWhile(value => value != "--").Skip(1));
+        Assert.DoesNotContain("--", invocation.Arguments);
         Assert.NotNull(invocation.EnvironmentVariables);
+        Assert.Equal(
+            "imported-api",
+            invocation.EnvironmentVariables["Aspire__ModularAppHosts__Workflow__Resources__0"]);
+        Assert.Equal(
+            "imported-worker",
+            invocation.EnvironmentVariables["Aspire__ModularAppHosts__Workflow__Resources__1"]);
         Assert.Equal(
             "api-tag",
             invocation.EnvironmentVariables[

@@ -198,6 +198,11 @@ public sealed class ModuleImagePullPipelineTests
             {
                 commands.Add((runtime, arguments.ToArray()));
                 return Task.CompletedTask;
+            },
+            (source, target, _) =>
+            {
+                commands.Add(("test-runtime", ["tag", source, target]));
+                return Task.CompletedTask;
             });
 
         Assert.Collection(
@@ -605,112 +610,6 @@ public sealed class ModuleImagePullPipelineTests
 
         Assert.Equal("remote.example.test/acme/orders-api:latest", resolved.PullReference);
         Assert.Equal(ModuleImagePushTargetKind.AspireRegistry, resolved.PushTargetKind);
-    }
-
-    [Fact]
-    public void Pull_arguments_scope_the_pipeline_to_named_resources()
-    {
-        var selection = ModuleImagePullPipeline.GetSelection(
-        [
-            "--operation",
-            "publish",
-            "--step",
-            "pull",
-            "--log-level",
-            "debug",
-            "orders-api",
-            "orders-worker"
-        ]);
-
-        Assert.True(selection.IsScoped);
-        Assert.True(selection.Includes("orders-api"));
-        Assert.True(selection.Includes("ORDERS-WORKER"));
-        Assert.False(selection.Includes("catalog-api"));
-    }
-
-    [Fact]
-    public void Pull_without_resource_arguments_keeps_all_pull_steps()
-    {
-        var selection = ModuleImagePullPipeline.GetSelection(
-        [
-            "--operation",
-            "publish",
-            "--step=pull",
-            "--output-path",
-            "artifacts",
-            "--include-exception-details",
-            "true"
-        ]);
-
-        Assert.False(selection.IsScoped);
-        Assert.True(selection.Includes("orders-api"));
-    }
-
-    [Fact]
-    public void Resource_arguments_for_another_step_do_not_scope_pull_steps()
-    {
-        var selection = ModuleImagePullPipeline.GetSelection(
-            ["--operation", "publish", "--step", "push", "orders-api"]);
-
-        Assert.False(selection.IsScoped);
-    }
-
-    [Fact]
-    public void Positional_separator_allows_resource_names_that_start_with_a_dash()
-    {
-        var selection = ModuleImagePullPipeline.GetSelection(
-            ["--operation", "publish", "--step", "pull", "--", "-orders-api"]);
-
-        Assert.True(selection.Includes("-orders-api"));
-    }
-
-    [Fact]
-    public void Scoped_pull_detaches_unselected_resource_steps_from_the_pull_aggregate()
-    {
-        var apiStep = CreatePullStep("orders-api");
-        var workerStep = CreatePullStep("orders-worker");
-
-        ModuleImagePullPipeline.ApplySelection(
-            [apiStep, workerStep],
-            new ModuleImageSelection(["orders-api"]));
-
-        Assert.Contains(ModuleImagePullPipeline.PullStepName, apiStep.RequiredBySteps);
-        Assert.DoesNotContain(ModuleImagePullPipeline.PullStepName, workerStep.RequiredBySteps);
-        Assert.False(workerStep.Resource!.IsExcludedFromPublish());
-    }
-
-    [Fact]
-    public void Scoped_pull_rejects_resources_without_a_pull_step()
-    {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleImagePullPipeline.ApplySelection(
-                [CreatePullStep("orders-api")],
-                new ModuleImageSelection(["missing-api"])));
-
-        Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Unscoped_selection_does_not_modify_pull_steps()
-    {
-        var step = CreatePullStep("orders-api");
-
-        ModuleImagePullPipeline.ApplySelection([step], ModuleImageSelection.All);
-
-        Assert.Contains(ModuleImagePullPipeline.PullStepName, step.RequiredBySteps);
-    }
-
-    private static PipelineStep CreatePullStep(string resourceName)
-    {
-        return new PipelineStep
-        {
-            Name = $"pull-{resourceName}",
-            Action = _ => Task.CompletedTask,
-            RequiredBySteps = [ModuleImagePullPipeline.PullStepName],
-            Tags = [ModuleImagePullPipeline.PullContainerImageTag],
-            Resource = new ContainerResource(resourceName)
-        };
     }
 
     private static ContainerRegistryResource CreateEmptyRegistry() =>
