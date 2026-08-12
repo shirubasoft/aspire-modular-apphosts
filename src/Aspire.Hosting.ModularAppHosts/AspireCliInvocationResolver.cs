@@ -4,7 +4,12 @@ namespace Aspire.Hosting;
 
 internal sealed record AspireCliInvocation(
     string Executable,
-    IReadOnlyList<string> PrefixArguments);
+    IReadOnlyList<string> PrefixArguments)
+{
+    internal bool UsesLocalToolManifest
+        => string.Equals(Executable, "dotnet", StringComparison.Ordinal)
+            && PrefixArguments.SequenceEqual(["tool", "run", "aspire", "--"]);
+}
 
 internal static class AspireCliInvocationResolver
 {
@@ -43,8 +48,7 @@ internal static class AspireCliInvocationResolver
     internal static bool ShouldFallBackToAspireOnPath(
         AspireCliInvocation invocation,
         string output)
-        => string.Equals(invocation.Executable, "dotnet", StringComparison.Ordinal)
-            && invocation.PrefixArguments.SequenceEqual(["tool", "run", "aspire", "--"])
+        => invocation.UsesLocalToolManifest
             && output.Contains("dotnet tool restore", StringComparison.OrdinalIgnoreCase);
 
     private static bool ManifestProvidesAspireCli(string manifestPath)
@@ -58,7 +62,9 @@ internal static class AspireCliInvocationResolver
             }
 
             return tools.EnumerateObject().Any(tool =>
-                tool.Value.TryGetProperty("commands", out var commands)
+                tool.Value.ValueKind == JsonValueKind.Object
+                && tool.Value.TryGetProperty("commands", out var commands)
+                && commands.ValueKind == JsonValueKind.Array
                 && commands.EnumerateArray().Any(command =>
                     string.Equals(command.GetString(), "aspire", StringComparison.Ordinal)));
         }
