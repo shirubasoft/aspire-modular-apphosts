@@ -288,6 +288,7 @@ internal static partial class Program
                         "--configuration", "Release",
                         "--no-build",
                         "--no-restore",
+                        "--disable-build-servers",
                         "--output", _packageFeed,
                         $"-p:PackageVersion={PackageVersion}"
                     ],
@@ -303,6 +304,7 @@ internal static partial class Program
                         "--configuration", "Release",
                         "--no-build",
                         "--no-restore",
+                        "--disable-build-servers",
                         "--output", _packageFeed,
                         $"-p:PackageVersion={PackageVersion}"
                     ],
