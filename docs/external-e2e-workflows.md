@@ -1,7 +1,7 @@
 # Cross-repository E2E image workflows
 
 This workflow lets a branch in Repo B build and push only the module images it owns, then run Repo
-A's existing E2E AppHost against those images. Repo A receives a strict manifest and ordinary .NET
+A's existing E2E AppHost against those images. Repo A receives a strict workflow image manifest and ordinary .NET
 configuration; it does not clone Repo B or rebuild Repo B's resources.
 
 The checked-in examples contain no custom orchestration scripts:
@@ -17,7 +17,7 @@ The checked-in examples contain no custom orchestration scripts:
 
 Repo B's AppHost must expose pushable module images. Each selected project/container needs a
 resolved registry, repository, tag, and build/push plan; see [module image publishing](modules.md).
-Repo A must import the same module contract identities. A manifest entry is keyed by the declared
+Repo A must import the same module contract identities. A workflow image manifest entry is keyed by the declared
 `module/resource`, never by Repo A's effective Aspire alias.
 
 Pin the same release of the runtime package and tool in both repositories. In each repo:
@@ -32,9 +32,11 @@ The workflows restore that committed manifest with `dotnet tool restore`. Repo B
 CLI 13.4.6 or later. Dispatch additionally needs GitHub CLI 2.87.0 or later; GitHub-hosted runners
 already include `gh`, but verify the version on self-hosted runners.
 
-## Manifest contract
+## Workflow image manifest contract
 
-Repo B publishes a [versioned image manifest](module-image-manifest.schema.json). A complete example
+Repo B publishes a [versioned workflow image manifest](module-image-manifest.schema.json). This
+tool-specific contract is not an Aspire application manifest; it carries module/source identities
+needed for cross-repository handoff. A complete example
 is checked in at [examples/module-image-manifest.json](examples/module-image-manifest.json):
 
 ```json

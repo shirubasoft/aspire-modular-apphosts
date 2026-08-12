@@ -39,45 +39,7 @@ internal sealed class ManifestTagOverrides
 
     public bool HasOverrides => GlobalTag is not null || _resources.Count > 0;
 
-    public IReadOnlyDictionary<string, string?>? CreateProducerEnvironment(
-        IReadOnlyList<ModuleImageDescription> images)
-    {
-        ArgumentNullException.ThrowIfNull(images);
-        if (!HasOverrides)
-        {
-            return null;
-        }
-
-        var matched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var values = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var image in images
-                     .OrderBy(image => image.Module, StringComparer.Ordinal)
-                     .ThenBy(image => image.Resource, StringComparer.Ordinal))
-        {
-            var tag = GlobalTag;
-            var identity = GetIdentity(image.Module, image.Resource);
-            if (_resources.TryGetValue(identity, out var resourceTag))
-            {
-                tag = resourceTag.Tag;
-                matched.Add(identity);
-            }
-
-            if (tag is null)
-            {
-                continue;
-            }
-
-            var prefix = ModuleImageWorkflowConfiguration.GetResourceKey(
-                image.Module,
-                image.Resource,
-                image.ResourceKind).Replace(":", "__", StringComparison.Ordinal);
-            values[$"{prefix}__ImageTag"] = tag;
-            values[$"{prefix}__ImageSHA256"] = string.Empty;
-        }
-
-        ThrowForUnmatched(matched);
-        return values;
-    }
+    public bool HasResourceOverrides => _resources.Count > 0;
 
     public void Apply(ModuleImageManifestDocument document)
     {

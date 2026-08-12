@@ -146,7 +146,9 @@ public sealed class ModuleImageBuildPipelineTests
             refreshCleanCheckout: false,
             "git",
             "gh",
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(10));
 
     private static ModulePreparedImage CreatePreparedImage(ModuleContainerExportOptions options)
     {

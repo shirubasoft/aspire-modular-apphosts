@@ -372,31 +372,21 @@ public sealed class ToolApplicationTests
         var destination = Path.Combine(directory.Path, "artifacts", "images.json");
         var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
         {
-            var step = invocation.Arguments[1];
             var outputPath = GetOption(invocation.Arguments, "--output-path");
-            if (string.Equals(step, "describe-images", StringComparison.Ordinal))
-            {
-                await CreateDescriptions().SaveAsync(
-                    Path.Combine(outputPath!, "module-images.json"),
-                    cancellationToken);
-            }
-            else if (string.Equals(step, "workflow-images", StringComparison.Ordinal))
-            {
-                var document = new ModuleImageManifestDocument();
-                document.Images.Add(CreateManifestImage(
-                    "orders",
-                    "worker",
-                    ModuleResourceKind.Container,
-                    "global-dirty"));
-                document.Images.Add(CreateManifestImage(
-                    "orders",
-                    "api",
-                    ModuleResourceKind.Project,
-                    "api-tag-dirty"));
-                await document.SaveAsync(
-                    Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
-                    cancellationToken);
-            }
+            var document = new ModuleImageManifestDocument();
+            document.Images.Add(CreateManifestImage(
+                "orders",
+                "worker",
+                ModuleResourceKind.Container,
+                "global-dirty"));
+            document.Images.Add(CreateManifestImage(
+                "orders",
+                "api",
+                ModuleResourceKind.Project,
+                "api-tag-dirty"));
+            await document.SaveAsync(
+                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                cancellationToken);
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
         var githubActions = Substitute.For<ICoreService>();
@@ -418,17 +408,15 @@ public sealed class ToolApplicationTests
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
         Assert.Contains(destination, output, StringComparison.Ordinal);
-        Assert.Collection(
-            runner.Invocations,
-            invocation =>
-            {
-                Assert.Equal("custom-aspire", invocation.FileName);
-                Assert.Equal("describe-images", invocation.Arguments[1]);
-                Assert.DoesNotContain("--", invocation.Arguments);
-                Assert.Null(invocation.EnvironmentVariables);
-                Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
-            },
-            invocation => AssertProducerInvocation(invocation, "workflow-images"));
+        var invocation = Assert.Single(runner.Invocations);
+        AssertProducerInvocation(invocation, "workflow-images");
+        Assert.Equal("custom-aspire", invocation.FileName);
+        Assert.Equal("orders", invocation.EnvironmentVariables![
+            "Aspire__ModularAppHosts__Workflow__Resources__0"]);
+        Assert.Equal("global", invocation.EnvironmentVariables[
+            "Aspire__ModularAppHosts__Workflow__Tag"]);
+        Assert.Equal("{\"orders/api\":\"api-tag\"}", invocation.EnvironmentVariables[
+            "Aspire__ModularAppHosts__Workflow__ResourceTags"]);
 
         var written = await ModuleImageManifestDocument.LoadAsync(
             destination,
@@ -479,25 +467,15 @@ public sealed class ToolApplicationTests
         using var directory = TestDirectory.Create();
         var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
         {
-            var step = invocation.Arguments[1];
             var outputPath = GetOption(invocation.Arguments, "--output-path");
-            if (step == "describe-images")
-            {
-                await CreateDescriptions().SaveAsync(
-                    Path.Combine(outputPath!, "module-images.json"),
-                    cancellationToken);
-            }
-            else if (step == "workflow-images")
-            {
-                var document = new ModuleImageManifestDocument();
-                document.Images.Add(CreateManifestImage(
-                    "orders",
-                    "api",
-                    ModuleResourceKind.Project));
-                await document.SaveAsync(
-                    Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
-                    cancellationToken);
-            }
+            var document = new ModuleImageManifestDocument();
+            document.Images.Add(CreateManifestImage(
+                "orders",
+                "api",
+                ModuleResourceKind.Project));
+            await document.SaveAsync(
+                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                cancellationToken);
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
@@ -508,33 +486,32 @@ public sealed class ToolApplicationTests
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
-        Assert.DoesNotContain("--", runner.Invocations[1].Arguments);
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.DoesNotContain("--", invocation.Arguments);
         Assert.Equal(
-            "imported-api",
-            runner.Invocations[1].EnvironmentVariables![
+            "orders/api",
+            invocation.EnvironmentVariables![
                 "Aspire__ModularAppHosts__Workflow__Resources__0"]);
     }
 
     [Fact]
-    public async Task Publish_rejects_ambiguous_bare_resource_selectors()
+    public async Task Publish_delegates_ambiguous_selector_validation_to_the_single_apphost_invocation()
     {
         using var directory = TestDirectory.Create();
-        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
-        {
-            await CreateDescriptions().SaveAsync(
-                Path.Combine(GetOption(invocation.Arguments, "--output-path")!, "module-images.json"),
-                cancellationToken);
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
-        });
+        var runner = new FakeProcessRunner((_, _) =>
+            Task.FromResult(new ProcessExecutionResult(1, string.Empty, "ambiguous selector")));
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
             ["manifest", "publish", "--apphost", directory.Path, "--selector", "api"],
             runner);
 
-        Assert.Equal(ToolExitCode.Usage, exitCode);
-        Assert.Contains("ambiguous", error, StringComparison.OrdinalIgnoreCase);
-        Assert.Single(runner.Invocations);
+        Assert.Equal(ToolExitCode.Failure, exitCode);
+        Assert.Contains("workflow image publish", error, StringComparison.OrdinalIgnoreCase);
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal(
+            "api",
+            invocation.EnvironmentVariables!["Aspire__ModularAppHosts__Workflow__Resources__0"]);
     }
 
     [Fact]
@@ -689,24 +666,6 @@ public sealed class ToolApplicationTests
         Assert.Equal(ProcessOutputMode.Stream, invocation.OutputMode);
         Assert.DoesNotContain("--", invocation.Arguments);
         Assert.NotNull(invocation.EnvironmentVariables);
-        Assert.Equal(
-            "imported-api",
-            invocation.EnvironmentVariables["Aspire__ModularAppHosts__Workflow__Resources__0"]);
-        Assert.Equal(
-            "imported-worker",
-            invocation.EnvironmentVariables["Aspire__ModularAppHosts__Workflow__Resources__1"]);
-        Assert.Equal(
-            "api-tag",
-            invocation.EnvironmentVariables[
-                "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageTag"]);
-        Assert.Equal(
-            "global",
-            invocation.EnvironmentVariables[
-                "Aspire__ModularAppHosts__Modules__orders__Containers__worker__ImageTag"]);
-        Assert.Equal(
-            string.Empty,
-            invocation.EnvironmentVariables[
-                "Aspire__ModularAppHosts__Modules__orders__Projects__api__ImageSHA256"]);
         Assert.NotNull(GetOption(invocation.Arguments, "--output-path"));
     }
 

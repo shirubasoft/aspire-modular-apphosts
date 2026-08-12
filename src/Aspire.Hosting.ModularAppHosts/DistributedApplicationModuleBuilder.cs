@@ -243,7 +243,9 @@ internal sealed class DistributedApplicationModuleContainerBuilder(
     {
         var copiedOptions = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
         var imageRepository = ModuleImageReference.GetRepository(copiedOptions);
-        if (!string.Equals(container.Image, imageRepository, StringComparison.Ordinal) ||
+        var imageMatches = string.Equals(container.Image, copiedOptions.ImageName, StringComparison.Ordinal) ||
+            string.Equals(container.Image, imageRepository, StringComparison.Ordinal);
+        if (!imageMatches ||
             (!string.IsNullOrWhiteSpace(copiedOptions.ImageTag) &&
                 !string.Equals(container.Tag, copiedOptions.ImageTag, StringComparison.Ordinal)))
         {

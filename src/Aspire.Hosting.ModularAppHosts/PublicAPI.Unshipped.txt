@@ -78,6 +78,9 @@ Aspire.Hosting.ModuleImageSelection.ModuleImageSelection(System.Collections.Gene
 Aspire.Hosting.ModuleImageSelection.ResolveDescriptions(System.Collections.Generic.IEnumerable<Aspire.Hosting.ModuleImageDescription!>! descriptions, string! operation) -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.ModuleImageDescription!>!
 Aspire.Hosting.ModuleImageWorkflowConfiguration
 const Aspire.Hosting.ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName = "Aspire:ModularAppHosts:Workflow:Resources" -> string!
+const Aspire.Hosting.ModuleImageWorkflowConfiguration.ConfigurationSectionName = "Aspire:ModularAppHosts:Workflow" -> string!
+const Aspire.Hosting.ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName = "ResourceTags" -> string!
+const Aspire.Hosting.ModuleImageWorkflowConfiguration.TagConfigurationName = "Tag" -> string!
 const Aspire.Hosting.ModuleImageDescriptionDocument.CurrentSchemaVersion = 3 -> int
 const Aspire.Hosting.ModuleImageManifestDocument.CurrentSchemaVersion = 1 -> int
 const Aspire.Hosting.ModuleImageManifestDocument.DefaultFileName = "module-image-manifest.json" -> string!
@@ -459,6 +462,10 @@ Aspire.Hosting.ModularAppHostsOptions.GitExecutablePath.get -> string!
 Aspire.Hosting.ModularAppHostsOptions.GitExecutablePath.set -> void
 Aspire.Hosting.ModularAppHostsOptions.GitHubCliPath.get -> string!
 Aspire.Hosting.ModularAppHostsOptions.GitHubCliPath.set -> void
+Aspire.Hosting.ModularAppHostsOptions.ImageBuildTimeout.get -> System.TimeSpan
+Aspire.Hosting.ModularAppHostsOptions.ImageBuildTimeout.set -> void
+Aspire.Hosting.ModularAppHostsOptions.ImageTransferTimeout.get -> System.TimeSpan
+Aspire.Hosting.ModularAppHostsOptions.ImageTransferTimeout.set -> void
 Aspire.Hosting.ModularAppHostsOptions.ModularAppHostsOptions() -> void
 Aspire.Hosting.ModularAppHostsOptions.Modules.get -> System.Collections.Generic.IDictionary<string!, Aspire.Hosting.DistributedApplicationModuleOptions!>!
 *REMOVED*Aspire.Hosting.ModularAppHostsOptions.PublishImages.get -> bool

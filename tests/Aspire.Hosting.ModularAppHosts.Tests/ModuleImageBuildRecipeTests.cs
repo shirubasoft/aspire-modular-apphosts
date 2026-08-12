@@ -6,6 +6,18 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class ModuleImageBuildRecipeTests
 {
+    [Theory]
+    [InlineData("Docker", "docker")]
+    [InlineData("Podman", "podman")]
+    public void Aspire_runtime_names_are_normalized_for_direct_cli_operations(
+        string runtimeName,
+        string expectedExecutable)
+    {
+        Assert.Equal(
+            expectedExecutable,
+            ModuleImageRecipeOperations.GetContainerRuntimeExecutableName(runtimeName));
+    }
+
     private static readonly ModuleImageSourceState CleanMain = new(
         "main",
         "abcdef012345",
@@ -421,7 +433,9 @@ public sealed class ModuleImageBuildRecipeTests
             refreshCleanCheckout,
             "git",
             "gh",
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(10));
 
     private static ModuleContainerExportOptions CreateOptions(string imageName = "acme/orders-api") =>
         new(imageName, "build-image", "publish", ModuleContainerExportOptions.ImageReferencePlaceholder)
@@ -524,6 +538,7 @@ public sealed class ModuleImageBuildRecipeTests
         public Task<bool> PullImageAsync(
             string containerRuntime,
             string imageReference,
+            TimeSpan timeout,
             Action<string> progress,
             CancellationToken cancellationToken)
         {

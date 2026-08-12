@@ -74,45 +74,29 @@ internal sealed class ManifestCommandService(
             }
 
             temporaryPath = Path.Combine(Path.GetTempPath(), $"modular-apphosts-{Guid.NewGuid():N}");
-            var descriptionPath = Path.Combine(temporaryPath, "description");
             var manifestPath = Path.Combine(temporaryPath, "manifest");
-            Directory.CreateDirectory(descriptionPath);
-
-            var describe = await RunAspireAsync(
-                aspirePath,
-                appHostPath,
-                "describe-images",
-                descriptionPath,
-                null,
-                cancellationToken).ConfigureAwait(false);
-            if (!describe.IsSuccess)
-            {
-                return await WriteAspireFailureAsync(describe, "Aspire image discovery").ConfigureAwait(false);
-            }
-
-            var descriptions = await ModuleImageDescriptionDocument.LoadAsync(
-                Path.Combine(descriptionPath, "module-images.json"),
-                cancellationToken).ConfigureAwait(false);
-            var publishable = descriptions.Images
-                .Where(image => image.Build is not null && image.Push is not null)
-                .ToArray();
-            var selected = SelectImages(publishable, selectors, all);
             var overrides = new ManifestTagOverrides(tag, resourceTags);
-            var producerEnvironment = new Dictionary<string, string?>(
-                overrides.CreateProducerEnvironment(selected) ??
-                    new Dictionary<string, string?>(),
-                StringComparer.Ordinal);
-            var effectiveSelectors = selected
-                .Select(image => image.EffectiveResource)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+            var producerEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal);
             var selectionPrefix = ModuleImageWorkflowConfiguration
                 .SelectionConfigurationSectionName
                 .Replace(":", "__", StringComparison.Ordinal);
-            for (var index = 0; index < effectiveSelectors.Length; index++)
+            for (var index = 0; index < selectors.Length; index++)
             {
-                producerEnvironment[$"{selectionPrefix}__{index}"] = effectiveSelectors[index];
+                producerEnvironment[$"{selectionPrefix}__{index}"] = selectors[index];
+            }
+
+            var workflowPrefix = ModuleImageWorkflowConfiguration.ConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            if (overrides.GlobalTag is not null)
+            {
+                producerEnvironment[$"{workflowPrefix}__{ModuleImageWorkflowConfiguration.TagConfigurationName}"] =
+                    overrides.GlobalTag;
+            }
+
+            if (overrides.HasResourceOverrides)
+            {
+                producerEnvironment[$"{workflowPrefix}__{ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName}"] =
+                    resourceTags;
             }
 
             var publish = await RunAspireAsync(
@@ -192,27 +176,6 @@ internal sealed class ManifestCommandService(
                 environmentVariables,
                 ProcessOutputMode.Stream),
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private static ModuleImageDescription[] SelectImages(
-        ModuleImageDescription[] publishable,
-        string[] selectors,
-        bool all)
-    {
-        try
-        {
-            if (all && publishable.Length == 0)
-            {
-                throw new ToolUsageException("The AppHost does not expose any publishable module images.");
-            }
-
-            var selection = all ? ModuleImageSelection.All : new ModuleImageSelection(selectors);
-            return selection.ResolveDescriptions(publishable, "publishable module images").ToArray();
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-        {
-            throw new ToolUsageException(exception.Message, exception);
-        }
     }
 
     private async Task<int> WriteAspireFailureAsync(

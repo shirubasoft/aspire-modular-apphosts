@@ -8,7 +8,7 @@ reference remains as a development convenience.
 The contract declares:
 
 - the `multi-repo-api` container and HTTP health check;
-- `bash build-image.sh <resolved-image-reference>` as its image build command;
+- a Dockerfile build command that uses the standard `{container-runtime}` and `{image}` placeholders;
 - module-scoped `IOptions<SpireModuleOptions>` for the build repository and optional revision; and
 - an `appsettings.json` default that uses the checked-in build fixture without environment variables.
 
@@ -16,12 +16,33 @@ It also provides two AppHosts for the cross-repository workflow:
 
 - `Spire.Producer.AppHost` represents Repo B, builds the module image, and exposes its remote
   registry identity to `modular-apphosts manifest publish`.
-- `Spire.Consumer.AppHost` represents Repo A. A full workflow manifest makes it pull the producer's
+- `Spire.Consumer.AppHost` represents Repo A. A workflow image manifest makes it pull the producer's
   image even when the producer build repository is unavailable.
 
 [`ResourceBuildRepository`](ResourceBuildRepository) is source material for the independent
-repository used by the fixture. It owns only a Dockerfile, its build script, and the HTTP health and
-marker files copied into the nginx image.
+repository used by the fixture. It owns only a Dockerfile and the HTTP health and marker files copied
+into the nginx image.
+
+## Run the sample
+
+The checked-in configuration uses the local build fixture. From either AppHost directory, the sample
+works with the ordinary Aspire command and Aspire's configured Docker or Podman runtime:
+
+```bash
+cd samples/MultiRepoE2E/Spire.Consumer.AppHost
+aspire run
+```
+
+```bash
+cd samples/MultiRepoE2E/Spire.Producer.AppHost
+aspire run
+```
+
+For an independent checkout or pinned build, set `BuildRepository` and
+`BuildRepositoryRevision` under
+`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` through JSON, command-line, or another
+standard .NET configuration provider. If that repository needs initialization, run the exact
+AppHost-aware command reported by preflight.
 
 ## What CI proves
 
@@ -35,25 +56,26 @@ The .NET E2E driver creates this layout outside the checked-out source tree:
 ├── <remote-hash>/            # initializer-owned unpinned sibling
 ├── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
 └── consumer/.aspire/modular-apphosts/repositories/
-    └── *.json                # credential-free initialization receipts
+    └── *.json                # credential-free initialization state
 ```
 
 The driver packs the contract, removes its source and the build fixture from the isolated consumer,
 and creates independent local producer repositories. It then exercises the real Aspire CLI and
 verifies all of these behaviors in one locally reproducible command:
 
-1. `aspire start` fails fast before initialization with the exact initialization command.
-2. `aspire do initialize --non-interactive` creates direct sibling checkouts and credential-free receipts.
-3. Repeated initialization is idempotent.
-4. A configured local source plus a revision uses a detached initializer-owned sibling without moving
+1. Both checked-in AppHosts start and become healthy using only their default configuration.
+2. `aspire start` fails fast before initialization with the exact `--apphost` recovery command.
+3. `aspire do initialize --apphost <path> --non-interactive` creates direct sibling checkouts and credential-free state.
+4. Repeated initialization is idempotent.
+5. A configured local source plus a revision uses a detached initializer-owned sibling without moving
    the developer checkout.
-5. Another initialization fast-forwards a clean unpinned checkout.
-6. Default run performs only read-only Git inspection for image state; it never clones, fetches, pulls,
-   checks out, or otherwise moves a repository.
-7. Opt-in runtime refresh fast-forwards a clean build checkout.
-8. A dirty checkout is preserved and rebuilt, including when runtime refresh is enabled.
-9. Repository lifecycle output is emitted and credential-bearing command output and receipts are redacted.
-10. The requested Docker or Podman executable is selected through the existing runtime resolver.
+6. Another initialization fast-forwards a clean unpinned checkout.
+7. Default run permits only explicitly allowlisted read-only Git inspection; every other Git command
+   shape is rejected and recorded.
+8. Opt-in runtime refresh fast-forwards a clean build checkout.
+9. A dirty checkout is preserved and rebuilt, including when runtime refresh is enabled.
+10. Repository lifecycle output is emitted and credential-bearing command output and state are redacted.
+11. The requested Docker or Podman executable is selected through Aspire's runtime resolver.
 
 The build command and Dockerfile are executed from the initialized build checkout. Each run waits for
 the resulting container to become healthy and verifies the exact `/marker.txt` content, so using the
@@ -68,11 +90,11 @@ A separate CI job starts an ordinary local registry service and uses only the pa
 1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged
    reference plus GitHub step outputs.
 2. `manifest apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
-   the consumer AppHost with deliberately missing definition and build repositories plus a missing
+   the consumer AppHost with deliberately missing definition and build repositories plus missing
    initialization siblings. They verify `/marker.txt` from the image that Repo B published and prove
    that complete manifest identities do not prepare or clone source checkouts.
 
-## Run manually
+## Run the maintainer validation
 
 Run the complete initialization scenario from the repository root. This is the same command CI uses;
 add `--keep-temporary` to preserve its isolated repositories for inspection after a successful run:
@@ -88,21 +110,6 @@ dotnet run \
 ```
 
 Use `--container-runtime podman` to validate the same scenario with Podman.
-
-From the repository root, start the AppHost. Its normal configuration points the module at the
-checked-in build fixture, and the build script selects a running Docker or Podman installation:
-
-```bash
-cd samples/MultiRepoE2E/Spire.Consumer.AppHost
-aspire run
-```
-
-The producer AppHost is independently runnable in the same way:
-
-```bash
-cd samples/MultiRepoE2E/Spire.Producer.AppHost
-aspire run
-```
 
 To reproduce the image handoff from the repository root, start the same local registry used by CI:
 
@@ -147,9 +154,4 @@ the two AppHosts. Stop the registry when finished:
 docker stop modular-apphosts-sample-registry
 ```
 
-For an independent checkout or pinned build, set `BuildRepository` and
-`BuildRepositoryRevision` under
-`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` through JSON, command-line, or another
-standard .NET configuration provider.
-
-The sample requires the .NET 10 SDK, Aspire CLI 13.4 or later, Git, Bash, Docker, and `curl`.
+The sample requires the .NET 10 SDK, Aspire CLI 13.4.6 or later, Git, and Docker or Podman.

@@ -1,5 +1,6 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -71,6 +72,44 @@ public sealed class ModuleImageWorkflowConfigurationTests
             .ResolveDescriptions(descriptions, "test images")).EffectiveResource);
         Assert.Throws<InvalidOperationException>(() => new ModuleImageSelection(["api"])
             .ResolveDescriptions(descriptions, "test images"));
+    }
+
+    [Fact]
+    public void Workflow_configuration_owns_raw_selectors_and_tag_overrides()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName}:0"] = "orders/api",
+                [$"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:{ModuleImageWorkflowConfiguration.TagConfigurationName}"] =
+                    "global",
+                [$"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:{ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName}"] =
+                    "{\"orders/api\":\"candidate\"}"
+            })
+            .Build();
+
+        var workflow = ModuleImageWorkflowConfiguration.Read(configuration);
+
+        Assert.True(workflow.Selection.IsScoped);
+        Assert.Equal("candidate", workflow.ResolveTag("orders", "api"));
+        Assert.Equal("global", workflow.ResolveTag("orders", "worker"));
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("{\"orders/api/extra\":\"candidate\"}")]
+    [InlineData("{\"orders/api\":\"invalid tag\"}")]
+    public void Workflow_configuration_rejects_invalid_resource_tags(string resourceTags)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:{ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName}"] =
+                    resourceTags
+            })
+            .Build();
+
+        Assert.ThrowsAny<Exception>(() => ModuleImageWorkflowConfiguration.Read(configuration));
     }
 
     private static ModuleImageDescription CreateDescription(

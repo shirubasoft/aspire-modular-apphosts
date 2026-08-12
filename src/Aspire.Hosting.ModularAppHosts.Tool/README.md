@@ -1,9 +1,12 @@
 # Shirubasoft.Aspire.ModularAppHosts.Tool
 
 `modular-apphosts` publishes module images from one repository, transfers their exact registry
-identities in a versioned manifest, applies those identities to another AppHost, and can dispatch
+identities in a versioned workflow image manifest, applies those identities to another AppHost, and can dispatch
 and wait for the receiving repository's GitHub Actions workflow. Workflow YAML needs no custom
 orchestration script.
+
+The workflow image manifest is the tool's cross-repository contract. It is distinct from Aspire's
+application manifest and includes module/source identities that the standard manifest does not model.
 
 ## Requirements
 

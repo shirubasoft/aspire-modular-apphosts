@@ -56,6 +56,8 @@ internal static class Program
         var succeeded = false;
         try
         {
+            var checkedInSamples = new CheckedInSampleScenario(repositoryRoot, options);
+            await checkedInSamples.RunAsync(cancellationSource.Token).ConfigureAwait(false);
             var scenario = new MultiRepositoryScenario(repositoryRoot, temporaryRoot, options);
             await scenario.RunAsync(cancellationSource.Token).ConfigureAwait(false);
             succeeded = true;
@@ -142,6 +144,170 @@ internal static class Program
         }
         catch (InvalidOperationException)
         {
+        }
+    }
+
+    private sealed class CheckedInSampleScenario(string repositoryRoot, E2EOptions options)
+    {
+        private readonly ProcessExecutor _process = new();
+        private readonly AspireCommand _aspire = AspireCommand.Create(options.AspirePath);
+
+        public async Task RunAsync(CancellationToken cancellationToken)
+        {
+            await Console.Out.WriteLineAsync(
+                "[multi-repo-e2e] Run the checked-in consumer and producer with their default configuration")
+                .ConfigureAwait(false);
+            await RunAppHostAsync("Spire.Consumer.AppHost", cancellationToken).ConfigureAwait(false);
+            await RunAppHostAsync("Spire.Producer.AppHost", cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task RunAppHostAsync(string appHostName, CancellationToken cancellationToken)
+        {
+            var appHostDirectory = Path.Combine(repositoryRoot, "samples", "MultiRepoE2E", appHostName);
+            var appHost = Path.Combine(appHostDirectory, $"{appHostName}.csproj");
+            var environment = string.IsNullOrWhiteSpace(options.ContainerRuntime)
+                ? null
+                : new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    ["ASPIRE_CONTAINER_RUNTIME"] = options.ContainerRuntime
+                };
+            var started = false;
+            try
+            {
+                var start = await RunAspireAsync(
+                    [
+                        "start",
+                        "--apphost", appHost,
+                        "--isolated",
+                        "--format", "Json",
+                        "--non-interactive"
+                    ],
+                    appHostDirectory,
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(start, $"aspire start in {appHostName}");
+                started = true;
+
+                var wait = await RunAspireAsync(
+                    [
+                        "wait", ResourceName,
+                        "--apphost", appHost,
+                        "--timeout", "180",
+                        "--non-interactive"
+                    ],
+                    appHostDirectory,
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(wait, $"aspire wait {ResourceName} in {appHostName}");
+
+                var describe = await RunAspireAsync(
+                    [
+                        "describe", ResourceName,
+                        "--apphost", appHost,
+                        "--format", "Json",
+                        "--non-interactive"
+                    ],
+                    appHostDirectory,
+                    environment,
+                    cancellationToken).ConfigureAwait(false);
+                EnsureSuccess(describe, $"aspire describe {ResourceName} in {appHostName}");
+                var resourceUrl = FindHttpResourceUrl(describe.StandardOutput);
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                var marker = await client.GetStringAsync(
+                    new Uri(new Uri(resourceUrl.TrimEnd('/') + "/"), "marker.txt"),
+                    cancellationToken).ConfigureAwait(false);
+                AssertEqual(
+                    PinnedMarker,
+                    marker.Trim(),
+                    $"The checked-in {appHostName} started the wrong image.");
+            }
+            finally
+            {
+                if (started)
+                {
+                    var stop = await RunAspireAsync(
+                        ["stop", "--apphost", appHost, "--non-interactive"],
+                        appHostDirectory,
+                        environment,
+                        cancellationToken).ConfigureAwait(false);
+                    if (!stop.IsSuccess)
+                    {
+                        await Console.Error.WriteLineAsync(
+                            $"Emergency Aspire stop failed for {appHostName}:{Environment.NewLine}" +
+                            Redact(stop.CombinedOutput)).ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+
+        private Task<ProcessResult> RunAspireAsync(
+            IReadOnlyList<string> arguments,
+            string workingDirectory,
+            IReadOnlyDictionary<string, string?>? environment,
+            CancellationToken cancellationToken) =>
+            _process.RunAsync(
+                new ProcessInvocation(
+                    _aspire.FileName,
+                    [.. _aspire.PrefixArguments, .. arguments],
+                    workingDirectory,
+                    environment),
+                cancellationToken);
+
+        private static void EnsureSuccess(ProcessResult result, string operation)
+        {
+            if (!result.IsSuccess)
+            {
+                throw new InvalidOperationException(
+                    $"{operation} failed with exit code {result.ExitCode}:{Environment.NewLine}" +
+                    Redact(result.CombinedOutput));
+            }
+        }
+
+        private static string FindHttpResourceUrl(string json)
+        {
+            using var document = JsonDocument.Parse(json);
+            if (TryFindHttpUrl(document.RootElement, out var url))
+            {
+                return url;
+            }
+
+            throw new InvalidOperationException("Aspire describe did not return an HTTP URL for the resource.");
+        }
+
+        private static bool TryFindHttpUrl(JsonElement element, out string url)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                if (element.TryGetProperty("name", out var name) &&
+                    string.Equals(name.GetString(), "http", StringComparison.OrdinalIgnoreCase) &&
+                    element.TryGetProperty("url", out var endpoint) &&
+                    endpoint.GetString() is { Length: > 0 } value)
+                {
+                    url = value;
+                    return true;
+                }
+
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (TryFindHttpUrl(property.Value, out url))
+                    {
+                        return true;
+                    }
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (TryFindHttpUrl(item, out url))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            url = string.Empty;
+            return false;
         }
     }
 

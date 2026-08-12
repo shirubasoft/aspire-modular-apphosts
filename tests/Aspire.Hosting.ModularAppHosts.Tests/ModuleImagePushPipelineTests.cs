@@ -41,6 +41,24 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Contains(WellKnownPipelineTags.PushContainerImage, step.Tags);
     }
 
+    [Theory]
+    [InlineData("Podman", "localhost:5000/acme/api:test", true)]
+    [InlineData("podman", "127.0.0.1:5000/acme/api:test", true)]
+    [InlineData("podman", "[::1]:5000/acme/api:test", true)]
+    [InlineData("podman", "registry.example.test/acme/api:test", false)]
+    [InlineData("docker", "localhost:5000/acme/api:test", false)]
+    public void Podman_disables_tls_verification_only_for_loopback_registry_pushes(
+        string runtime,
+        string reference,
+        bool disablesTls)
+    {
+        var arguments = ModuleImagePushPipeline.CreatePushArguments(runtime, reference);
+
+        Assert.Equal("push", arguments[0]);
+        Assert.Equal(reference, arguments[^1]);
+        Assert.Equal(disablesTls, arguments.Contains("--tls-verify=false"));
+    }
+
     [Fact]
     public async Task Declared_and_factory_created_image_publishers_contribute_push_steps()
     {
@@ -289,6 +307,8 @@ public sealed class ModuleImagePushPipelineTests
             "git",
             "gh",
             TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(10),
             detachedBranchAlias);
         var sourceState = new ModuleImageSourceState(
             branchImageTag,

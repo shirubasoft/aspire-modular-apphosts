@@ -25,6 +25,12 @@ public sealed class ModularAppHostsOptions
     /// <summary>Gets or sets the maximum duration of one repository CLI command.</summary>
     public TimeSpan RepositoryCommandTimeout { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>Gets or sets the maximum duration of one module image build command.</summary>
+    public TimeSpan ImageBuildTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Gets or sets the maximum duration of one image pull, push, or tag operation.</summary>
+    public TimeSpan ImageTransferTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
     /// <summary>Gets or sets whether clean unpinned repositories are fast-forwarded by <c>aspire do initialize</c>.</summary>
     public bool UpdateRepositoriesOnInitialize { get; set; } = true;
 

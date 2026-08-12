@@ -30,17 +30,12 @@ internal static class ModuleImageManifestPipeline
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var selectors = builder.Configuration
-            .GetSection(ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName)
-            .Get<string[]>() ?? [];
-        var selection = selectors.Length == 0
-            ? ModuleImageSelection.All
-            : new ModuleImageSelection(selectors);
+        var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
         var workflowStep = new PipelineStep
         {
             Name = StepName,
             Description = "Pushes selected module images and writes their resolved remote identities.",
-            Action = context => WriteAsync(context, selection)
+            Action = context => WriteAsync(context, workflow.Selection)
         };
         builder.Pipeline.AddStep(workflowStep);
         builder.Pipeline.AddPipelineConfiguration(context =>
@@ -50,9 +45,10 @@ internal static class ModuleImageManifestPipeline
                     step.Resource is not null &&
                     step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
                 .ToArray();
-            var selectedResources = selection.ResolveResources(
+            var selectedResources = workflow.Selection.ResolveResources(
                 pushSteps.Select(step => step.Resource!),
                 "workflow image push steps");
+            workflow.ValidateSelectedResources(selectedResources);
             foreach (var step in pushSteps.Where(step => selectedResources.Contains(step.Resource!)))
             {
                 workflowStep.DependsOnSteps.Add(step.Name);
@@ -122,6 +118,12 @@ internal static class ModuleImageManifestPipeline
             context.Model.Resources,
             selection,
             context.CancellationToken).ConfigureAwait(false);
+        if (document.Images.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "The AppHost does not expose any publishable module images.");
+        }
+
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
         var path = Path.Combine(output, ModuleImageManifestDocument.DefaultFileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);

@@ -50,10 +50,12 @@ representation receives the same value.
 ## Prerequisites
 
 - .NET 10 SDK
-- Aspire CLI 13.4 or later
+- Aspire CLI 13.4.6 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers use the library's `ContainerRuntimeResolver`, which follows Aspire's container-runtime selection: an explicit `ASPIRE_CONTAINER_RUNTIME` value wins; `DOTNET_ASPIRE_CONTAINER_RUNTIME` is also accepted; otherwise Docker and Podman are probed in parallel, a running runtime is preferred over one that is merely installed, and Docker is the tie-breaker.
+The sample publishers use `ModuleContainerExportOptions.ContainerRuntimePlaceholder`, which resolves
+through Aspire's `IContainerRuntimeResolver`. The build therefore follows the same configured Docker
+or Podman runtime as the AppHost.
 
 ## Run AppHost A
 
@@ -64,8 +66,8 @@ aspire run
 
 AppHost A materializes its local module and opts into the module-declared image publishers. Development
 configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for
-debugging while publish mode retains its container representation. `sample-generated-static-installer`
-builds the Dockerfile-based static image before its container starts, and `sample-static` runs directly
+debugging while publish mode retains its container representation. The `sample-generated-static`
+resource builds its Dockerfile-based image immediately before it starts, and `sample-static` runs directly
 from `busybox:1.37`, serving the message obtained from the module-owned parameter. Clean images are
 reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`.
 The additional project, C# app, executable, and .NET tool resources use explicit start so they demonstrate
@@ -105,8 +107,8 @@ module-owned message.
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. A second module proves module and multi-module push
-selection while verifying that unselected publishers are not built. The pull fixture also maps an
+and a factory-created container publisher. A second module proves image isolation through Aspire's
+named resource steps while verifying that unselected publishers are not built. The pull fixture also maps an
 image from one temporary registry to a local reference in a second registry. `test-image-describe.sh`
 separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
 the [sample README](ImagePushE2E/README.md) for commands.
@@ -116,5 +118,5 @@ the [sample README](ImagePushE2E/README.md) for commands.
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
 sample API from a contract package while its image build inputs live in a separately initialized
 local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
-and a second local-registry producer-to-consumer image-manifest handoff; it does not depend on an
-external `Shirubasoft/spire` checkout.
+and a second local-registry producer-to-consumer workflow image manifest handoff; it does not depend
+on an external `Shirubasoft/spire` checkout.

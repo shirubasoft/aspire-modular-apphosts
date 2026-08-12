@@ -8,6 +8,12 @@ namespace Aspire.Hosting;
 
 public static partial class DistributedApplicationModuleExtensions
 {
+    private static readonly Action<ILogger, string, string, Exception?> LogImagePreparationFailed =
+        LoggerMessage.Define<string, string>(
+            LogLevel.Error,
+            new EventId(1, nameof(LogImagePreparationFailed)),
+            "Image preparation failed for module {ModuleName} resource {ResourceName}.");
+
     /// <summary>Adds a defined module using its local source checkout.</summary>
     public static IDistributedApplicationModule AddModule(
         this IDistributedApplicationBuilder builder,
@@ -176,6 +182,7 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModuleOptions? moduleOptions)
     {
         var projectOptions = moduleOptions?.FindProject(project.Name);
+        ValidatePublisherDigest(project.Name, project.IsExportedAsContainer, projectOptions);
         var runAsContainer = !builder.ExecutionContext.IsRunMode ||
             ResolveProjectMode(options, moduleOptions, projectOptions, imported) == ModuleProjectMode.Container;
         if (!runAsContainer)
@@ -236,7 +243,8 @@ public static partial class DistributedApplicationModuleExtensions
             builder,
             container,
             publisher,
-            projectOptions);
+            projectOptions,
+            publisher is null && !UsesExternalImage(projectOptions) ? null : image);
         registry.TrackResource(container.Resource);
         module.TrackMaterializedResource(builder, project.Name, container.Resource);
     }
@@ -297,7 +305,8 @@ public static partial class DistributedApplicationModuleExtensions
             builder,
             container,
             publisher,
-            configured);
+            configured,
+            publisher is null && !UsesExternalImage(configured) ? null : image);
         registry.TrackResource(container.Resource);
         module.TrackMaterializedResource(builder, definition.Name, container.Resource);
     }
@@ -333,19 +342,14 @@ public static partial class DistributedApplicationModuleExtensions
                 options,
                 moduleOptions,
                 defaultWorkingDirectory: ".");
+        var resourceImage = CreateFactoryResourceImage(publisher, configured);
         var context = new DistributedApplicationModuleResourceContext(
             builder,
             module,
             resourceName,
             definitionRepository.RepositoryPath,
             imported,
-            publisher is null
-                ? null
-                : new ModuleResourceImage(
-                    publisher.Recipe.Options.ImageRegistry,
-                    publisher.Recipe.Options.ImageName,
-                    ModuleImageBuildRecipe.LocalRunTag,
-                    GetConfiguredValue(configured?.ImageSHA256)));
+            resourceImage);
         var resource = definition.Materialize(
             context,
             new DistributedApplicationModuleResourceAnnotation(
@@ -357,19 +361,12 @@ public static partial class DistributedApplicationModuleExtensions
         if (resource is ContainerResource containerResource)
         {
             var container = builder.CreateResourceBuilder(containerResource);
-            if (publisher is not null)
-            {
-                container
-                    .WithImage(publisher.Recipe.Options.ImageName)
-                    .WithImageTag(ModuleImageBuildRecipe.LocalRunTag);
-                ApplyImageRegistry(container, publisher.Recipe.Options.ImageRegistry);
-            }
-
             ConfigureContainerImage(
                 builder,
                 container,
                 publisher,
-                configured);
+                configured,
+                resourceImage);
         }
         else if (publisher is not null)
         {
@@ -395,7 +392,11 @@ public static partial class DistributedApplicationModuleExtensions
         string defaultWorkingDirectory,
         string? requiredProjectRelativePath = null)
     {
-        var effectiveOptions = ApplyImageRecipeOptions(declared, configured);
+        var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
+        var effectiveOptions = ApplyImageRecipeOptions(
+            declared,
+            configured,
+            workflow.ResolveTag(module.Name, declaredResourceName));
         var buildRepository = ModuleMaterializationPlanning.ResolveBuildRepository(
             builder,
             module,
@@ -440,6 +441,8 @@ public static partial class DistributedApplicationModuleExtensions
             GetConfiguredValue(options.GitExecutablePath) ?? "git",
             GetConfiguredValue(options.GitHubCliPath) ?? "gh",
             options.RepositoryCommandTimeout,
+            options.ImageBuildTimeout,
+            options.ImageTransferTimeout,
             GetDetachedAppHostBranchAlias(builder, buildRepository));
         return new ModuleImagePublisherAnnotation(resourceKind, recipe);
     }
@@ -476,8 +479,14 @@ public static partial class DistributedApplicationModuleExtensions
         IDistributedApplicationBuilder builder,
         IResourceBuilder<ContainerResource> container,
         ModuleImagePublisherAnnotation? publisher,
-        DistributedApplicationModuleImageOptions? configured)
+        DistributedApplicationModuleImageOptions? configured,
+        ModuleResourceImage? ownedImage)
     {
+        if (ownedImage is not null)
+        {
+            ApplyOwnedImage(container, ownedImage);
+        }
+
         ApplyImageSHA256(container, configured?.ImageSHA256);
         ApplyImagePullPolicy(container, configured?.ImagePullPolicy);
         ModuleImagePullPipeline.AddPullStep(container);
@@ -512,11 +521,34 @@ public static partial class DistributedApplicationModuleExtensions
                 var resourceLogger = @event.Services
                     .GetRequiredService<ResourceLoggerService>()
                     .GetLogger(resource);
-                await publisher.PrepareAsync(
-                    @event.Services,
-                    lifecycleLogger,
-                    resourceLogger,
-                    cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await publisher.PrepareAsync(
+                        @event.Services,
+                        lifecycleLogger,
+                        resourceLogger,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    exception is not OperationCanceledException ||
+                    !cancellationToken.IsCancellationRequested)
+                {
+                    LogImagePreparationFailed(
+                        lifecycleLogger,
+                        publisher.ModuleName,
+                        publisher.ResourceName,
+                        exception);
+                    if (!ReferenceEquals(lifecycleLogger, resourceLogger))
+                    {
+                        LogImagePreparationFailed(
+                            resourceLogger,
+                            publisher.ModuleName,
+                            publisher.ResourceName,
+                            exception);
+                    }
+
+                    throw;
+                }
             });
         }
     }
@@ -573,7 +605,8 @@ public static partial class DistributedApplicationModuleExtensions
 
     private static ModuleContainerExportOptions ApplyImageRecipeOptions(
         ModuleContainerExportOptions declared,
-        DistributedApplicationModuleImageOptions? configured)
+        DistributedApplicationModuleImageOptions? configured,
+        string? workflowTag)
     {
         var imageName = GetConfiguredValue(configured?.ImageName) ?? declared.ImageName;
         var imageRegistry = configured?.ImageRegistry is null
@@ -588,7 +621,9 @@ public static partial class DistributedApplicationModuleExtensions
             ImageRegistry = imageRegistry,
             ProducedImageReference = configured?.ProducedImageReference ?? declared.ProducedImageReference,
             PullBeforeBuild = configured?.PullBeforeBuild ?? declared.PullBeforeBuild,
-            ImageTag = GetConfiguredValue(configured?.ImageTag) ?? GetConfiguredValue(declared.ImageTag),
+            ImageTag = workflowTag ??
+                GetConfiguredValue(configured?.ImageTag) ??
+                GetConfiguredValue(declared.ImageTag),
             WorkingDirectory = configured?.PublishWorkingDirectory ?? declared.WorkingDirectory,
             BuildRepository = GetConfiguredValue(configured?.BuildRepository) ??
                 GetConfiguredValue(declared.BuildRepository),
@@ -608,6 +643,45 @@ public static partial class DistributedApplicationModuleExtensions
             publisher?.Recipe.Options.ImageName ?? image.Image,
             publisher is null ? image.Tag ?? "latest" : ModuleImageBuildRecipe.LocalRunTag,
             GetConfiguredValue(configured?.ImageSHA256));
+    }
+
+    private static ModuleResourceImage? CreateFactoryResourceImage(
+        ModuleImagePublisherAnnotation? publisher,
+        DistributedApplicationModuleImageOptions? configured)
+    {
+        if (publisher is not null)
+        {
+            return new ModuleResourceImage(
+                publisher.Recipe.Options.ImageRegistry,
+                publisher.Recipe.Options.ImageName,
+                ModuleImageBuildRecipe.LocalRunTag,
+                GetConfiguredValue(configured?.ImageSHA256));
+        }
+
+        if (!UsesExternalImage(configured))
+        {
+            return null;
+        }
+
+        return new ModuleResourceImage(
+            GetConfiguredValue(configured!.ImageRegistry),
+            GetConfiguredValue(configured.ImageName)!,
+            GetConfiguredValue(configured.ImageTag) ?? "latest",
+            GetConfiguredValue(configured.ImageSHA256));
+    }
+
+    private static void ApplyOwnedImage(
+        IResourceBuilder<ContainerResource> container,
+        ModuleResourceImage image)
+    {
+        var annotation = container.Resource.Annotations
+            .OfType<ContainerImageAnnotation>()
+            .LastOrDefault() ?? throw new InvalidOperationException(
+                $"Image-published module resource '{container.Resource.Name}' created a container without an image. " +
+                "Create it with AddContainer and use context.Image for the managed image identity.");
+        annotation.Registry = image.Registry;
+        annotation.Image = image.Name;
+        container.WithImageTag(image.Tag);
     }
 
     private static bool RequiresRepositoryForSynchronousMaterialization(

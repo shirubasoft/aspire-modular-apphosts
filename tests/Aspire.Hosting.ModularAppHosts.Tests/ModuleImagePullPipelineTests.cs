@@ -194,7 +194,7 @@ public sealed class ModuleImagePullPipelineTests
             container,
             stepContext,
             _ => Task.FromResult("test-runtime"),
-            (runtime, arguments, _, _) =>
+            (runtime, arguments, _, _, _) =>
             {
                 commands.Add((runtime, arguments.ToArray()));
                 return Task.CompletedTask;
@@ -203,7 +203,8 @@ public sealed class ModuleImagePullPipelineTests
             {
                 commands.Add(("test-runtime", ["tag", source, target]));
                 return Task.CompletedTask;
-            });
+            },
+            TestContext.Current.CancellationToken);
 
         Assert.Collection(
             commands,

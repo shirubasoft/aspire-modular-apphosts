@@ -9,6 +9,7 @@ using Aspire.Hosting.Publishing;
 using CliWrap;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
@@ -106,24 +107,34 @@ internal static class ModuleImagePullPipeline
 
     private static async Task PullAsync(IResource resource, PipelineStepContext context)
     {
+        var timeout = context.Services
+            .GetRequiredService<IOptions<ModularAppHostsOptions>>()
+            .Value.ImageTransferTimeout;
         var runtime = await context.Services
             .GetRequiredService<IContainerRuntimeResolver>()
             .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
-        await PullAsync(
-            resource,
-            context,
-            _ => Task.FromResult(runtime.Name),
-            ExecuteRuntimeAsync,
-            (source, target, cancellationToken) =>
-                runtime.TagImageAsync(source, target, cancellationToken)).ConfigureAwait(false);
+        await ModuleOperationTimeout.RunAsync(
+            token => PullAsync(
+                resource,
+                context,
+                _ => Task.FromResult(
+                    ModuleImageRecipeOperations.GetContainerRuntimeExecutableName(runtime.Name)),
+                ExecuteRuntimeAsync,
+                (source, target, cancellationToken) =>
+                    runtime.TagImageAsync(source, target, cancellationToken),
+                token),
+            timeout,
+            $"Image pull for resource '{resource.Name}'",
+            context.CancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task PullAsync(
         IResource resource,
         PipelineStepContext context,
         Func<CancellationToken, Task<string>> resolveRuntimeAsync,
-        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, Task> executeRuntimeAsync,
-        Func<string, string, CancellationToken, Task> tagImageAsync)
+        Func<string, IReadOnlyList<string>, PipelineStepContext, ILogger, CancellationToken, Task> executeRuntimeAsync,
+        Func<string, string, CancellationToken, Task> tagImageAsync,
+        CancellationToken operationCancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(resource);
         ArgumentNullException.ThrowIfNull(context);
@@ -131,10 +142,13 @@ internal static class ModuleImagePullPipeline
         ArgumentNullException.ThrowIfNull(executeRuntimeAsync);
         ArgumentNullException.ThrowIfNull(tagImageAsync);
 
+        var cancellationToken = operationCancellationToken.CanBeCanceled
+            ? operationCancellationToken
+            : context.CancellationToken;
         var (remoteImage, localImage) = await ResolveImageReferencesAsync(
             resource,
-            context.CancellationToken).ConfigureAwait(false);
-        var runtime = await resolveRuntimeAsync(context.CancellationToken)
+            cancellationToken).ConfigureAwait(false);
+        var runtime = await resolveRuntimeAsync(cancellationToken)
             .ConfigureAwait(false);
         var resourceLogger = context.Services
             .GetRequiredService<ResourceLoggerService>()
@@ -147,7 +161,8 @@ internal static class ModuleImagePullPipeline
             runtime,
             ["pull", remoteImage],
             context,
-            resourceLogger).ConfigureAwait(false);
+            resourceLogger,
+            cancellationToken).ConfigureAwait(false);
         if (!string.Equals(remoteImage, localImage, StringComparison.Ordinal))
         {
             LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
@@ -155,7 +170,7 @@ internal static class ModuleImagePullPipeline
             await tagImageAsync(
                 remoteImage,
                 localImage,
-                context.CancellationToken).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
             LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
             LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }
@@ -165,7 +180,8 @@ internal static class ModuleImagePullPipeline
         string runtime,
         IReadOnlyList<string> arguments,
         PipelineStepContext context,
-        ILogger resourceLogger)
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
         ArgumentNullException.ThrowIfNull(arguments);
@@ -187,7 +203,7 @@ internal static class ModuleImagePullPipeline
                     ModuleCliOutputRedactor.Redact(runtime),
                     ModuleCliOutputRedactor.Redact(line),
                     null)))
-            .ExecuteAsync(context.CancellationToken)
+            .ExecuteAsync(cancellationToken)
             .ConfigureAwait(false);
         if (result.ExitCode != 0)
         {

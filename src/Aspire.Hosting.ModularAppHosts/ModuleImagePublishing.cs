@@ -154,6 +154,7 @@ internal static class ContainerImageInspector
     public static async Task<bool> PullAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         Action<string> progress,
         CancellationToken cancellationToken = default)
     {
@@ -178,13 +179,17 @@ internal static class ContainerImageInspector
                 }
             }
 
-            var result = await CliCommand.Wrap(containerRuntime)
-                .WithArguments(["pull", imageReference])
-                .WithValidation(CommandResultValidation.None)
-                .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportProgress))
-                .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportProgress))
-                .ExecuteAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var result = await ModuleOperationTimeout.RunAsync(
+                async token => await CliCommand.Wrap(containerRuntime)
+                        .WithArguments(["pull", imageReference])
+                        .WithValidation(CommandResultValidation.None)
+                        .WithStandardOutputPipe(PipeTarget.ToDelegate(ReportProgress))
+                        .WithStandardErrorPipe(PipeTarget.ToDelegate(ReportProgress))
+                        .ExecuteAsync(token)
+                        .ConfigureAwait(false),
+                timeout,
+                $"Container image pull '{imageReference}'",
+                cancellationToken).ConfigureAwait(false);
             return result.ExitCode == 0;
         }
         catch (Exception exception) when (

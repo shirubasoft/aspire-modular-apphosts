@@ -8,7 +8,7 @@
 
 ## Validate the repository
 
-From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all three public packages:
+From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all four public packages:
 
 ```bash
 ./build.sh
@@ -32,14 +32,14 @@ Include the real Docker Compose deployment lifecycle when Docker or Podman is ru
 ./build.ps1 -Containers
 ```
 
-The package contract suite packs the library, testing, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
+The package contract suite packs the core library, testing library, workflow tool, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
 
 ## Repository layout
 
 - `src/Aspire.Hosting.ModularAppHosts`: core module APIs.
 - `src/Aspire.Hosting.ModularAppHosts.Generators`: source generator packaged with the core library.
 - `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
-- `src/Aspire.Hosting.ModularAppHosts.Tool`: reserved empty project.
+- `src/Aspire.Hosting.ModularAppHosts.Tool`: workflow image manifest publication/application and cross-repository dispatch CLI.
 - `tests`: unit, lifecycle, generator, and package contract tests.
 - `samples`: runnable modular AppHost and E2E examples.
 - `templates`: the packaged `dotnet new` item template for the first module contract.

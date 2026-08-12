@@ -207,6 +207,17 @@ public sealed class SynchronousModuleCoreCoverageTests
                 {
                     ImageTag = "candidate"
                 }));
+
+            var registryPublished = definition.AddContainer(
+                "registry-published",
+                "example/registry-published");
+            registryPublished.WithImagePublishCommand(new ModuleContainerExportOptions(
+                "example/registry-published",
+                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                "build")
+            {
+                ImageRegistry = "registry.example"
+            });
         });
 
         var typed = Assert.IsType<DistributedApplicationModule>(module);
@@ -221,6 +232,9 @@ public sealed class SynchronousModuleCoreCoverageTests
         Assert.Equal(declaredOptions.BuildRepository, copiedOptions.BuildRepository);
         Assert.Equal(declaredOptions.BuildRepositoryRevision, copiedOptions.BuildRepositoryRevision);
         Assert.NotNull(typed.ContainerDefinitions.Single(container => container.Name == "published").ImagePublishOptions);
+        Assert.NotNull(typed.ContainerDefinitions
+            .Single(container => container.Name == "registry-published")
+            .ImagePublishOptions);
     }
 
     [Fact]

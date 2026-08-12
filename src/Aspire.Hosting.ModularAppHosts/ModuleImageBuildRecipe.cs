@@ -25,7 +25,9 @@ internal sealed class ModuleImageBuildRecipe
         bool refreshCleanCheckout,
         string gitExecutablePath,
         string githubCliPath,
-        TimeSpan commandTimeout,
+        TimeSpan repositoryCommandTimeout,
+        TimeSpan imageBuildTimeout,
+        TimeSpan imageTransferTimeout,
         string? detachedBranchAlias = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
@@ -37,13 +39,9 @@ internal sealed class ModuleImageBuildRecipe
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(gitExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(githubCliPath);
-        if (commandTimeout <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(commandTimeout),
-                commandTimeout,
-                "The image preparation command timeout must be positive.");
-        }
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(repositoryCommandTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(imageBuildTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(imageTransferTimeout, TimeSpan.Zero);
 
         ModuleName = moduleName;
         ResourceName = resourceName;
@@ -55,7 +53,9 @@ internal sealed class ModuleImageBuildRecipe
         RefreshCleanCheckout = refreshCleanCheckout;
         GitExecutablePath = gitExecutablePath;
         GitHubCliPath = githubCliPath;
-        CommandTimeout = commandTimeout;
+        RepositoryCommandTimeout = repositoryCommandTimeout;
+        ImageBuildTimeout = imageBuildTimeout;
+        ImageTransferTimeout = imageTransferTimeout;
         DetachedBranchAlias = string.IsNullOrWhiteSpace(detachedBranchAlias)
             ? null
             : detachedBranchAlias.Trim();
@@ -84,7 +84,11 @@ internal sealed class ModuleImageBuildRecipe
 
     public string GitHubCliPath { get; }
 
-    public TimeSpan CommandTimeout { get; }
+    public TimeSpan RepositoryCommandTimeout { get; }
+
+    public TimeSpan ImageBuildTimeout { get; }
+
+    public TimeSpan ImageTransferTimeout { get; }
 
     public string? DetachedBranchAlias { get; }
 
@@ -200,6 +204,7 @@ internal interface IModuleImageRecipeOperations
     Task<bool> PullImageAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         Action<string> progress,
         CancellationToken cancellationToken);
 
@@ -384,6 +389,7 @@ internal static class ModuleImageRecipeEvaluator
             if (await operations.PullImageAsync(
                     containerRuntime,
                     plan.CanonicalImageReference,
+                    recipe.ImageTransferTimeout,
                     line => LogRawOutput(resourceLogger, line),
                     cancellationToken).ConfigureAwait(false))
             {
@@ -652,7 +658,24 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
     internal static ModuleImageRecipeOperations Instance { get; } = new();
 
     public async Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
-        (await GetRuntimeResolver().ResolveAsync(cancellationToken).ConfigureAwait(false)).Name;
+        GetContainerRuntimeExecutableName(
+            (await GetRuntimeResolver().ResolveAsync(cancellationToken).ConfigureAwait(false)).Name);
+
+    internal static string GetContainerRuntimeExecutableName(string runtimeName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runtimeName);
+        if (string.Equals(runtimeName, "Docker", StringComparison.OrdinalIgnoreCase))
+        {
+            return "docker";
+        }
+
+        if (string.Equals(runtimeName, "Podman", StringComparison.OrdinalIgnoreCase))
+        {
+            return "podman";
+        }
+
+        return runtimeName;
+    }
 
     public async Task<ModuleImageSourceState> CaptureSourceStateAsync(
         ModuleImageBuildRecipe recipe,
@@ -706,7 +729,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         RepositoryInspector.HasUpstreamAsync(
             recipe.RepositoryPath,
             recipe.GitExecutablePath,
-            recipe.CommandTimeout,
+            recipe.RepositoryCommandTimeout,
             cancellationToken);
 
     public Task RefreshRepositoryAsync(
@@ -721,7 +744,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
             revision: null,
             recipe.GitExecutablePath,
             recipe.GitHubCliPath,
-            recipe.CommandTimeout,
+            recipe.RepositoryCommandTimeout,
             progress);
 
     public Task<bool> ImageExistsAsync(
@@ -733,11 +756,13 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
     public Task<bool> PullImageAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         Action<string> progress,
         CancellationToken cancellationToken) =>
         ContainerImageInspector.PullAsync(
             containerRuntime,
             imageReference,
+            timeout,
             progress,
             cancellationToken);
 
@@ -748,46 +773,39 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         Action<string> progress,
         CancellationToken cancellationToken)
     {
-        using var timeout = new CancellationTokenSource(recipe.CommandTimeout);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            timeout.Token);
-        try
-        {
-            var publishCommand = ResolveContainerRuntimePlaceholder(
-                recipe.Options.PublishCommand,
-                containerRuntime);
-            var publishArguments = plan.PublishArguments
-                .Select(argument => ResolveContainerRuntimePlaceholder(argument, containerRuntime))
-                .ToArray();
-            var result = await CliCommand.Wrap(publishCommand)
-                .WithArguments(publishArguments)
-                .WithWorkingDirectory(recipe.WorkingDirectory)
-                .WithEnvironmentVariables(new Dictionary<string, string?>
-                {
-                    ["ASPIRE_MODULE_IMAGE"] = plan.CanonicalImageReference
-                })
-                .WithValidation(CommandResultValidation.None)
-                .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                    progress(ModuleCliOutputRedactor.Redact(line))))
-                .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                    progress(ModuleCliOutputRedactor.Redact(line))))
-                .ExecuteAsync(linked.Token)
-                .ConfigureAwait(false);
-            if (result.ExitCode != 0)
+        await ModuleOperationTimeout.RunAsync(
+            async operationToken =>
             {
-                throw new InvalidOperationException(
-                    $"Image build command '{ModuleCliOutputRedactor.Redact(recipe.Options.PublishCommand)}' failed " +
-                    $"for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' with exit code {result.ExitCode}.");
-            }
-        }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"Image build for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' exceeded " +
-                $"the configured timeout of {recipe.CommandTimeout}.",
-                exception);
-        }
+                var publishCommand = ResolveContainerRuntimePlaceholder(
+                    recipe.Options.PublishCommand,
+                    containerRuntime);
+                var publishArguments = plan.PublishArguments
+                    .Select(argument => ResolveContainerRuntimePlaceholder(argument, containerRuntime))
+                    .ToArray();
+                var result = await CliCommand.Wrap(publishCommand)
+                    .WithArguments(publishArguments)
+                    .WithWorkingDirectory(recipe.WorkingDirectory)
+                    .WithEnvironmentVariables(new Dictionary<string, string?>
+                    {
+                        ["ASPIRE_MODULE_IMAGE"] = plan.CanonicalImageReference
+                    })
+                    .WithValidation(CommandResultValidation.None)
+                    .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
+                        progress(ModuleCliOutputRedactor.Redact(line))))
+                    .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
+                        progress(ModuleCliOutputRedactor.Redact(line))))
+                    .ExecuteAsync(operationToken)
+                    .ConfigureAwait(false);
+                if (result.ExitCode != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Image build command '{ModuleCliOutputRedactor.Redact(recipe.Options.PublishCommand)}' failed " +
+                        $"for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' with exit code {result.ExitCode}.");
+                }
+            },
+            recipe.ImageBuildTimeout,
+            $"Image build for module '{recipe.ModuleName}' resource '{recipe.ResourceName}'",
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task TagImageAsync(
@@ -799,9 +817,10 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         CancellationToken cancellationToken)
     {
         var runtime = await GetRuntimeResolver().ResolveAsync(cancellationToken).ConfigureAwait(false);
-        await runtime.TagImageAsync(
-            sourceImageReference,
-            targetImageReference,
+        await ModuleOperationTimeout.RunAsync(
+            token => runtime.TagImageAsync(sourceImageReference, targetImageReference, token),
+            recipe.ImageTransferTimeout,
+            $"Image tag for module '{recipe.ModuleName}' resource '{recipe.ResourceName}'",
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -818,7 +837,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
             recipe.GitExecutablePath,
             ["-C", recipe.RepositoryPath, .. arguments],
             recipe.RepositoryPath,
-            recipe.CommandTimeout,
+            recipe.RepositoryCommandTimeout,
             $"inspect image build repository for {recipe.ModuleName}/{recipe.ResourceName}",
             cancellationToken,
             static _ => { }).ConfigureAwait(false);
@@ -932,7 +951,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         CancellationToken cancellationToken)
     {
         using var output = new MemoryStream();
-        using var timeout = new CancellationTokenSource(recipe.CommandTimeout);
+        using var timeout = new CancellationTokenSource(recipe.RepositoryCommandTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeout.Token);
@@ -955,7 +974,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         {
             throw new TimeoutException(
                 $"Image source inspection for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' " +
-                $"exceeded the configured timeout of {recipe.CommandTimeout}.",
+                $"exceeded the configured timeout of {recipe.RepositoryCommandTimeout}.",
                 exception);
         }
 

@@ -165,7 +165,7 @@ retag_completed_message="Re-tagged remote image $mapped_remote_image as local im
 retag_target_message="$mapped_local_image for resource image-pull-mapped."
 
 cd "$repository_root"
-dotnet tool run aspire -- do pull image-push-project \
+dotnet tool run aspire -- do pull-image-push-project \
     --apphost "$apphost_project" \
     --non-interactive \
     2>&1 | tee "$scoped_pull_output"

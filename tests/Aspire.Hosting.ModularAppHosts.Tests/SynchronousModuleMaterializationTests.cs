@@ -215,6 +215,207 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.Contains(ModuleRepositoryPreflight.CreateInitializeCommand(appHost.Path), exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Managed_project_container_and_factory_images_win_over_resource_callbacks()
+    {
+        using var appHost = CreateGitAppHost();
+        var projectPath = Path.Combine(appHost.Path, "Api.csproj");
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(appHost.Path).UseModuleContainers();
+        ModuleResourceImage? factoryImage = null;
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddProject("project", projectPath)
+                .ExportAsContainer(
+                    Publisher("project"),
+                    (_, container) => OverrideImage(container));
+            definition.AddContainer("declared", "acme/declared", "candidate")
+                .WithImagePublishCommand(Publisher("declared"))
+                .Configure((_, container) => OverrideImage(container));
+            definition.AddResource<ContainerResource>(
+                "factory",
+                context =>
+                {
+                    factoryImage = context.Image;
+                    return OverrideImage(
+                        context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"));
+                },
+                Publisher("factory"));
+        });
+
+        builder.AddModule(module);
+
+        Assert.Equal("registry.example.test/acme/factory:aspire-run", factoryImage?.Reference);
+        var containers = builder.Resources.OfType<ContainerResource>().ToDictionary(resource => resource.Name);
+        foreach (var resourceName in new[] { "project", "declared", "factory" })
+        {
+            var image = Assert.Single(containers[resourceName].Annotations.OfType<ContainerImageAnnotation>());
+            Assert.Equal("registry.example.test", image.Registry);
+            Assert.Equal($"acme/{resourceName}", image.Image);
+            Assert.Equal(ModuleImageBuildRecipe.LocalRunTag, image.Tag);
+            Assert.Null(image.SHA256);
+        }
+    }
+
+    [Fact]
+    public void Factory_external_image_override_is_checkout_free_and_applied_after_materialization()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options =>
+        {
+            options.Modules["orders"] = new DistributedApplicationModuleOptions
+            {
+                Containers =
+                {
+                    ["factory"] = new DistributedApplicationModuleContainerOptions
+                    {
+                        PublishImage = false,
+                        ImageRegistry = "registry.example.test",
+                        ImageName = "external/factory",
+                        ImageTag = "2026.08"
+                    }
+                }
+            };
+        });
+        ModuleResourceImage? factoryImage = null;
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://example.test/acme/orders.git");
+            definition.AddResource<ContainerResource>(
+                "factory",
+                context =>
+                {
+                    factoryImage = context.Image;
+                    return context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder");
+                },
+                Publisher("factory"));
+        });
+
+        builder.ImportModule("orders");
+
+        Assert.Equal("registry.example.test/external/factory:2026.08", factoryImage?.Reference);
+        var registry = GetRegistry(builder);
+        Assert.Null(registry.RepositoryPlans);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("registry.example.test", image.Registry);
+        Assert.Equal("external/factory", image.Image);
+        Assert.Equal("2026.08", image.Tag);
+        Assert.Empty(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+    }
+
+    [Fact]
+    public void Registry_keeps_one_options_instance_when_configuration_is_refreshed()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options => options.GitExecutablePath = "first-git");
+        var registry = GetRegistry(builder);
+        var registeredOptions = registry.Options;
+
+        builder.ConfigureModularAppHosts(options => options.GitExecutablePath = "second-git");
+
+        Assert.Same(registeredOptions, registry.Options);
+        Assert.Equal("second-git", registeredOptions.GitExecutablePath);
+    }
+
+    [Theory]
+    [InlineData("project")]
+    [InlineData("declared")]
+    [InlineData("factory")]
+    public void Published_images_reject_external_digest_pins(string resourceKind)
+    {
+        using var appHost = CreateGitAppHost();
+        var projectPath = Path.Combine(appHost.Path, "Api.csproj");
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var builder = CreateBuilder(appHost.Path).UseModuleContainers();
+        builder.ConfigureModularAppHosts(options =>
+        {
+            var module = new DistributedApplicationModuleOptions();
+            var image = new DistributedApplicationModuleContainerOptions
+            {
+                ImageSHA256 = $"sha256:{new string('a', 64)}"
+            };
+            if (resourceKind == "project")
+            {
+                module.Projects[resourceKind] = new DistributedApplicationModuleProjectOptions
+                {
+                    ImageSHA256 = image.ImageSHA256
+                };
+            }
+            else
+            {
+                module.Containers[resourceKind] = image;
+            }
+
+            options.Modules["orders"] = module;
+        });
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            switch (resourceKind)
+            {
+                case "project":
+                    definition.AddProject(resourceKind, projectPath)
+                        .ExportAsContainer(Publisher(resourceKind));
+                    break;
+                case "declared":
+                    definition.AddContainer(resourceKind, $"acme/{resourceKind}", "candidate")
+                        .WithImagePublishCommand(Publisher(resourceKind));
+                    break;
+                case "factory":
+                    definition.AddResource<ContainerResource>(
+                        resourceKind,
+                        context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
+                        Publisher(resourceKind));
+                    break;
+            }
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.AddModule(module));
+
+        Assert.Contains(nameof(DistributedApplicationModuleImageOptions.ImageSHA256), exception.Message);
+        Assert.Contains(nameof(DistributedApplicationModuleImageOptions.PublishImage), exception.Message);
+        Assert.Contains("external immutable image", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Factory_publisher_requires_a_container_image_annotation()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddResource<ContainerResource>(
+                "factory",
+                context => context.ApplicationBuilder.AddResource(new ContainerResource(context.ResourceName)),
+                Publisher("factory"));
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.AddModule(module));
+
+        Assert.Contains("created a container without an image", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("context.Image", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static ModuleContainerExportOptions Publisher(string resource) =>
+        new($"acme/{resource}", "publisher", "build")
+        {
+            ImageRegistry = "registry.example.test",
+            ImageTag = "candidate"
+        };
+
+    private static IResourceBuilder<ContainerResource> OverrideImage(
+        IResourceBuilder<ContainerResource> container) =>
+        container
+            .WithImage("callback-override")
+            .WithImageRegistry("wrong.example.test")
+            .WithImageTag("wrong")
+            .WithImageSHA256(new string('f', 64));
+
     private static TemporaryDirectory CreateGitAppHost()
     {
         var appHost = TemporaryDirectory.Create();

@@ -24,18 +24,19 @@ public static partial class SpireModule
                 $"Configure '{module.ConfigurationSection.Path}:DefinitionRepository'.");
         }
 
-        var image = string.IsNullOrWhiteSpace(options.ImageRegistry)
-            ? ImageName
-            : $"{options.ImageRegistry}/{ImageName}";
         module.WithRepository(options.DefinitionRepository);
-        module.AddContainer(ApiResourceName, image)
+        module.AddContainer(ApiResourceName, ImageName)
             .WithImagePublishCommand(new ModuleContainerExportOptions(
                 imageName: ImageName,
-                publishCommand: "bash",
+                publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
                 publishArguments:
                 [
-                    "build-image.sh",
-                    ModuleContainerExportOptions.ImageReferencePlaceholder
+                    "build",
+                    "--file",
+                    "Dockerfile",
+                    "--tag",
+                    ModuleContainerExportOptions.ImageReferencePlaceholder,
+                    "."
                 ])
             {
                 ImageRegistry = options.ImageRegistry,

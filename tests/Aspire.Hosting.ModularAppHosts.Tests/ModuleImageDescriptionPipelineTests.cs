@@ -144,7 +144,9 @@ public sealed class ModuleImageDescriptionPipelineTests
             refreshCleanCheckout: false,
             "git",
             "gh",
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(10));
         var sourceState = new ModuleImageSourceState(
             "main",
             "abcdef012345",

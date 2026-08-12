@@ -114,7 +114,7 @@ export ImagePush__RegistryEndpoint="$registry_endpoint"
 export ASPIRE_CONTAINER_RUNTIME="$container_runtime"
 
 cd "$repository_root"
-dotnet tool run aspire -- do push image-push-project \
+dotnet tool run aspire -- do push-image-push-project \
     --apphost "$apphost_project" \
     --non-interactive
 
@@ -124,7 +124,11 @@ assert_repository_absent "image-push/declared"
 assert_repository_absent "image-push/factory"
 assert_repository_absent "image-push/extra"
 
-dotnet tool run aspire -- do push module:image-push-e2e \
+dotnet tool run aspire -- do push-image-push-declared \
+    --apphost "$apphost_project" \
+    --non-interactive
+
+dotnet tool run aspire -- do push-image-push-factory \
     --apphost "$apphost_project" \
     --non-interactive
 
@@ -141,11 +145,11 @@ if "$container_runtime" image exists "$registry_endpoint/image-push/extra:$image
     exit 1
 fi
 
-dotnet tool run aspire -- do push module:image-push-e2e module:image-push-extra \
+dotnet tool run aspire -- do push-image-push-extra \
     --apphost "$apphost_project" \
     --non-interactive
 
 assert_repository_has_tag "image-push/extra" "$image_tag"
 assert_repository_has_tag "image-push/extra" "$branch_image_tag"
 
-echo "Verified scoped Aspire image pushes and branch alias '$branch_image_tag' against $registry_endpoint."
+echo "Verified named-resource Aspire image pushes and branch alias '$branch_image_tag' against $registry_endpoint."

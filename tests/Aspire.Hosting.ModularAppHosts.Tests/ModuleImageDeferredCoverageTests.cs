@@ -488,7 +488,9 @@ public sealed class ModuleImageDeferredCoverageTests
             refreshCleanCheckout: false,
             "git",
             "gh",
-            TimeSpan.FromTicks(1));
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromTicks(1),
+            TimeSpan.FromMinutes(10));
         var plan = new ModuleImageExecutionPlan(
             "acme/api:test",
             ProducedImageReference: null,
@@ -503,6 +505,27 @@ public sealed class ModuleImageDeferredCoverageTests
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("exceeded", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Operation_timeout_distinguishes_deadline_from_caller_cancellation()
+    {
+        var timeout = await Assert.ThrowsAsync<TimeoutException>(() =>
+            ModuleOperationTimeout.RunAsync(
+                token => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                TimeSpan.FromTicks(1),
+                "test transfer",
+                TestContext.Current.CancellationToken));
+        Assert.Contains("test transfer", timeout.Message, StringComparison.Ordinal);
+
+        using var cancellationSource = new CancellationTokenSource();
+        await cancellationSource.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ModuleOperationTimeout.RunAsync(
+                token => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                TimeSpan.FromMinutes(1),
+                "test transfer",
+                cancellationSource.Token));
     }
 
     [Fact]
@@ -614,29 +637,36 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Push_step_uses_aspires_image_manager_for_an_explicit_registry_target()
+    public async Task Explicit_registry_push_uses_aspires_container_runtime_instead_of_the_registry_manager()
     {
-        var builder = DistributedApplication.CreateBuilder();
         var options = CreateOptions();
         options.ImageTag = ModuleImageTag.FromBranch(CleanSource.Branch);
         var recipe = CreateRecipe(options);
         var (resource, publisher) = CreatePublishedContainer(recipe);
-        var container = builder.CreateResourceBuilder(resource);
-        ModuleImagePushPipeline.AddPushStep(container);
         var imageManager = new RecordingImageManager();
-        builder.Services.AddSingleton<IResourceContainerImageManager>(imageManager);
         await publisher.PrepareAsync(
             NullLogger.Instance,
             NullLogger.Instance,
             TestContext.Current.CancellationToken);
+        var runtimePushed = new List<string>();
 
-        await using var application = builder.Build();
-        var step = Assert.Single(await CreatePipelineStepsAsync(
+        await ModuleImagePushPipeline.PushImageAsync(
+            ModuleImagePushTargetKind.ContainerRuntime,
             resource,
-            WellKnownPipelineTags.PushContainerImage));
-        await ExecutePipelineStepAsync(application, step);
+            "registry.example.test/acme/api:feature-coverage-0123456789ab",
+            (reference, _) =>
+            {
+                runtimePushed.Add(reference);
+                return Task.CompletedTask;
+            },
+            imageManager.PushImageAsync,
+            TimeSpan.FromMinutes(10),
+            TestContext.Current.CancellationToken);
 
-        Assert.Same(resource, Assert.Single(imageManager.PushedResources));
+        Assert.Equal(
+            "registry.example.test/acme/api:feature-coverage-0123456789ab",
+            Assert.Single(runtimePushed));
+        Assert.Empty(imageManager.PushedResources);
     }
 
     [Fact]
@@ -737,6 +767,7 @@ public sealed class ModuleImageDeferredCoverageTests
         var pulled = await ContainerImageInspector.PullAsync(
             "docker",
             "acme/api:test",
+            TimeSpan.FromSeconds(30),
             static _ => { },
             TestContext.Current.CancellationToken);
 
@@ -771,7 +802,8 @@ public sealed class ModuleImageDeferredCoverageTests
             "docker",
             ["pull", "acme/api:test"],
             stepContext,
-            resourceLogger);
+            resourceLogger,
+            TestContext.Current.CancellationToken);
 
         Assert.Empty(pipelineLogger.Entries);
         Assert.NotEmpty(resourceLogger.Entries);
@@ -804,6 +836,7 @@ public sealed class ModuleImageDeferredCoverageTests
             ContainerImageInspector.PullAsync(
                 "docker",
                 string.Empty,
+                TimeSpan.FromSeconds(30),
                 static _ => { },
                 TestContext.Current.CancellationToken));
     }
@@ -837,7 +870,9 @@ public sealed class ModuleImageDeferredCoverageTests
             refreshCleanCheckout,
             "git",
             "gh",
-            TimeSpan.FromMinutes(2));
+            TimeSpan.FromMinutes(2),
+            TimeSpan.FromMinutes(15),
+            TimeSpan.FromMinutes(10));
 
     private static ModuleImagePublisherAnnotation CreatePublisher(
         ModuleImageBuildRecipe recipe,
@@ -990,6 +1025,7 @@ public sealed class ModuleImageDeferredCoverageTests
         public Task<bool> PullImageAsync(
             string containerRuntime,
             string imageReference,
+            TimeSpan timeout,
             Action<string> progress,
             CancellationToken cancellationToken) =>
             Task.FromResult(false);

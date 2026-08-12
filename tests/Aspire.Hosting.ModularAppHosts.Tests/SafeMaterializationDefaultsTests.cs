@@ -17,6 +17,8 @@ public sealed class SafeMaterializationDefaultsTests
         Assert.Equal("git", options.GitExecutablePath);
         Assert.Equal("gh", options.GitHubCliPath);
         Assert.Equal(TimeSpan.FromMinutes(2), options.RepositoryCommandTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(15), options.ImageBuildTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(10), options.ImageTransferTimeout);
     }
 
     [Fact]
@@ -79,6 +81,8 @@ public sealed class SafeMaterializationDefaultsTests
         var section = ModularAppHostsOptions.ConfigurationSectionName;
         builder.Configuration[$"{section}:GitExecutablePath"] = "custom-git";
         builder.Configuration[$"{section}:RepositoryCommandTimeout"] = "00:00:15";
+        builder.Configuration[$"{section}:ImageBuildTimeout"] = "00:20:00";
+        builder.Configuration[$"{section}:ImageTransferTimeout"] = "00:05:00";
         builder.Configuration[$"{section}:ProjectMode"] = nameof(ModuleProjectMode.Project);
         builder.Configuration[$"{section}:Modules:orders:ProjectMode"] = nameof(ModuleProjectMode.Container);
         builder.Configuration[$"{section}:Modules:orders:Projects:orders-api:ProjectMode"] =
@@ -88,11 +92,37 @@ public sealed class SafeMaterializationDefaultsTests
 
         Assert.Equal("custom-git", options.GitExecutablePath);
         Assert.Equal(TimeSpan.FromSeconds(15), options.RepositoryCommandTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(20), options.ImageBuildTimeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), options.ImageTransferTimeout);
         Assert.Equal(ModuleProjectMode.Project, options.ProjectMode);
         Assert.Equal(ModuleProjectMode.Container, options.Modules["orders"].ProjectMode);
         Assert.Equal(
             ModuleProjectMode.Project,
             options.Modules["orders"].Projects["orders-api"].ProjectMode);
+    }
+
+    [Theory]
+    [InlineData(nameof(ModularAppHostsOptions.ImageBuildTimeout))]
+    [InlineData(nameof(ModularAppHostsOptions.ImageTransferTimeout))]
+    public void Non_positive_image_timeouts_are_rejected(string optionName)
+    {
+        using var source = TemporaryDirectory.Create();
+        var builder = CreateBuilder(source.Path);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ConfigureModularAppHosts(options =>
+            {
+                if (optionName == nameof(ModularAppHostsOptions.ImageBuildTimeout))
+                {
+                    options.ImageBuildTimeout = TimeSpan.Zero;
+                }
+                else
+                {
+                    options.ImageTransferTimeout = TimeSpan.Zero;
+                }
+            }));
+
+        Assert.Contains(optionName, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

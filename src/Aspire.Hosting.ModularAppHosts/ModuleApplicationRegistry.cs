@@ -33,7 +33,7 @@ internal sealed class ModuleApplicationRegistry(
     private readonly HashSet<string> _requiredPathKeys = new(StringComparer.Ordinal);
     private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
 
-    internal ModularAppHostsOptions Options { get; private set; } = options ?? new ModularAppHostsOptions();
+    internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
 
     internal ModuleRepositoryPlanRegistry? RepositoryPlans => _repositoryPlans;
 
@@ -144,7 +144,7 @@ internal sealed class ModuleApplicationRegistry(
             configure(refreshed);
         }
 
-        Options = refreshed;
+        CopyOptions(refreshed, Options);
     }
 
     internal void Configure(Action<ModularAppHostsOptions> configure)
@@ -178,6 +178,25 @@ internal sealed class ModuleApplicationRegistry(
         throw new InvalidOperationException(
             $"Configuration references module '{missingModule}', but no exported module with that name was found. " +
             $"Available modules: {availableModules}.");
+    }
+
+    private static void CopyOptions(
+        ModularAppHostsOptions source,
+        ModularAppHostsOptions destination)
+    {
+        destination.GitHubCliPath = source.GitHubCliPath;
+        destination.GitExecutablePath = source.GitExecutablePath;
+        destination.RepositoryCommandTimeout = source.RepositoryCommandTimeout;
+        destination.ImageBuildTimeout = source.ImageBuildTimeout;
+        destination.ImageTransferTimeout = source.ImageTransferTimeout;
+        destination.UpdateRepositoriesOnInitialize = source.UpdateRepositoriesOnInitialize;
+        destination.RefreshBuildRepositoriesOnRun = source.RefreshBuildRepositoriesOnRun;
+        destination.ProjectMode = source.ProjectMode;
+        destination.Modules.Clear();
+        foreach (var module in source.Modules)
+        {
+            destination.Modules.Add(module);
+        }
     }
 
     private void RequirePath(

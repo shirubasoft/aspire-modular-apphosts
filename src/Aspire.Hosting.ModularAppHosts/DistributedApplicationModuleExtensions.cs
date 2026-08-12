@@ -130,7 +130,13 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModuleContainerOptions? configured,
         string declarationMethod)
     {
-        if (hasDeclaredPublisher || configured is null)
+        if (configured is null)
+        {
+            return;
+        }
+
+        ValidatePublisherDigest(resourceName, hasDeclaredPublisher, configured);
+        if (hasDeclaredPublisher)
         {
             return;
         }
@@ -148,6 +154,22 @@ public static partial class DistributedApplicationModuleExtensions
             throw new InvalidOperationException(
                 $"Container resource '{resourceName}' configures image publishing, but its module definition does not " +
                 $"call {declarationMethod}() with image publish options.");
+        }
+    }
+
+    private static void ValidatePublisherDigest(
+        string resourceName,
+        bool hasDeclaredPublisher,
+        DistributedApplicationModuleImageOptions? configured)
+    {
+        if (hasDeclaredPublisher &&
+            configured is { PublishImage: not false } &&
+            GetConfiguredValue(configured.ImageSHA256) is not null)
+        {
+            throw new InvalidOperationException(
+                $"Image-published resource '{resourceName}' cannot configure {nameof(configured.ImageSHA256)} " +
+                $"unless {nameof(configured.PublishImage)} is false. A digest identifies an external immutable image, " +
+                "not the image produced by the declared publish command.");
         }
     }
 
@@ -374,6 +396,18 @@ public static partial class DistributedApplicationModuleExtensions
         {
             throw new InvalidOperationException(
                 $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.RepositoryCommandTimeout)} must be positive.");
+        }
+
+        if (options.ImageBuildTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.ImageBuildTimeout)} must be positive.");
+        }
+
+        if (options.ImageTransferTimeout <= TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.ImageTransferTimeout)} must be positive.");
         }
 
         ValidateEnum(
