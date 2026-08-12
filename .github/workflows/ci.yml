@@ -313,6 +313,14 @@ jobs:
           --tag workflow-e2e
           --output artifacts/module-image-workflow.json
 
+      - name: Validate publisher fallback without the build checkout
+        env:
+          MODULAR_PUBLISHER_FALLBACK_IMAGE: localhost:5000/multi-repo-e2e-resource:workflow-e2e
+        run: >-
+          dotnet test samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
+          --configuration Release
+          --filter FullyQualifiedName~PublisherFallbackTests
+
       - name: Run Repo A E2E tests against the overridden image
         run: >-
           artifacts/workflow-tool/modular-apphosts images apply

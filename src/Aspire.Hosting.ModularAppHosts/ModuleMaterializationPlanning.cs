@@ -97,7 +97,8 @@ internal static class ModuleMaterializationPlanning
         DistributedApplicationModuleImageOptions? configured,
         ModuleRepositoryContext definitionRepository,
         ModuleApplicationRegistry registry,
-        DistributedApplicationModuleOptions? moduleOptions)
+        DistributedApplicationModuleOptions? moduleOptions,
+        bool allowMissingBuildRepository = false)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(module);
@@ -140,7 +141,8 @@ internal static class ModuleMaterializationPlanning
             registry.RequireDirectory(
                 module.Name,
                 $"build repository for resource '{resourceName}'",
-                normalizedRepository);
+                normalizedRepository,
+                requiredOnRun: !allowMissingBuildRepository);
             return new ModuleRepositoryContext(
                 normalizedRepository,
                 normalizedRepository,
@@ -156,7 +158,8 @@ internal static class ModuleMaterializationPlanning
             $"{module.Name}/{resourceName} image",
             normalizedRepository,
             requestedRevision,
-            updateRepository);
+            updateRepository,
+            requiredOnRun: !allowMissingBuildRepository);
         return new ModuleRepositoryContext(
             requirement.RepositoryPath,
             requirement.Repository,

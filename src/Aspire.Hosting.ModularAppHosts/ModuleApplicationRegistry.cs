@@ -28,7 +28,7 @@ internal sealed class ModuleApplicationRegistry(
         new(StringComparer.OrdinalIgnoreCase);
 
     private readonly List<ModuleRequiredPath> _requiredPaths = [];
-    private readonly HashSet<string> _requiredPathKeys = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _requiredPathIndices = new(StringComparer.Ordinal);
     private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
 
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
@@ -78,7 +78,8 @@ internal sealed class ModuleApplicationRegistry(
         string moduleName,
         string repository,
         string? revision,
-        bool updateRepository)
+        bool updateRepository,
+        bool requiredOnRun = true)
     {
         ArgumentNullException.ThrowIfNull(builder);
         if (_repositoryPlans is null)
@@ -92,7 +93,8 @@ internal sealed class ModuleApplicationRegistry(
             moduleName,
             repository,
             revision,
-            updateRepository);
+            updateRepository,
+            requiredOnRun);
         if (registration.IsNew)
         {
             var settings = new ModuleRepositoryInitializationSettings(
@@ -108,11 +110,19 @@ internal sealed class ModuleApplicationRegistry(
         return registration.Requirement;
     }
 
-    internal void RequireFile(string moduleName, string description, string path) =>
-        RequirePath(moduleName, description, path, ModuleRequiredPathKind.File);
+    internal void RequireFile(
+        string moduleName,
+        string description,
+        string path,
+        bool requiredOnRun = true) =>
+        RequirePath(moduleName, description, path, ModuleRequiredPathKind.File, requiredOnRun);
 
-    internal void RequireDirectory(string moduleName, string description, string path) =>
-        RequirePath(moduleName, description, path, ModuleRequiredPathKind.Directory);
+    internal void RequireDirectory(
+        string moduleName,
+        string description,
+        string path,
+        bool requiredOnRun = true) =>
+        RequirePath(moduleName, description, path, ModuleRequiredPathKind.Directory, requiredOnRun);
 
     internal Task ValidateRepositoryPreflightAsync(
         IModuleRepositoryStateStore stateStore,
@@ -153,21 +163,31 @@ internal sealed class ModuleApplicationRegistry(
         string moduleName,
         string description,
         string path,
-        ModuleRequiredPathKind kind)
+        ModuleRequiredPathKind kind,
+        bool requiredOnRun)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(description);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var key = $"{moduleName}\n{description}\n{kind}\n{fullPath}";
-        if (_requiredPathKeys.Add(key))
+        if (_requiredPathIndices.TryGetValue(key, out var index))
         {
-            _requiredPaths.Add(new ModuleRequiredPath(
-                moduleName,
-                description,
-                fullPath,
-                kind));
+            if (requiredOnRun && !_requiredPaths[index].RequiredOnRun)
+            {
+                _requiredPaths[index] = _requiredPaths[index] with { RequiredOnRun = true };
+            }
+
+            return;
         }
+
+        _requiredPathIndices.Add(key, _requiredPaths.Count);
+        _requiredPaths.Add(new ModuleRequiredPath(
+            moduleName,
+            description,
+            fullPath,
+            kind,
+            requiredOnRun));
     }
 
     private static string? GetConfiguredValue(string? value) =>

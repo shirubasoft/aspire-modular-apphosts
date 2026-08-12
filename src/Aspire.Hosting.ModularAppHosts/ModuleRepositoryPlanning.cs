@@ -17,7 +17,8 @@ internal sealed class ModuleRepositoryRequirement
         string repositoryPath,
         string? revision,
         bool updateOnInitialize,
-        string stepKey)
+        string stepKey,
+        bool requiredOnRun = true)
     {
         AddModule(moduleName);
         Repository = repository;
@@ -26,6 +27,7 @@ internal sealed class ModuleRepositoryRequirement
         Revision = NormalizeRevision(revision);
         UpdateOnInitialize = Revision is null && updateOnInitialize;
         StepKey = stepKey;
+        RequiredOnRun = requiredOnRun;
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
@@ -49,11 +51,15 @@ internal sealed class ModuleRepositoryRequirement
 
     public string ConfigurationFingerprint { get; }
 
+    public bool RequiredOnRun { get; private set; }
+
     internal void AddModule(string moduleName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         _moduleNames.Add(moduleName.Trim());
     }
+
+    internal void RequireOnRun() => RequiredOnRun = true;
 
     internal void EnsureCompatible(
         string normalizedRepository,
@@ -128,7 +134,8 @@ internal sealed class ModuleRepositoryPlanRegistry
         string moduleName,
         string repository,
         string? revision,
-        bool updateOnInitialize)
+        bool updateOnInitialize,
+        bool requiredOnRun = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         var repositoryPath = RepositoryIdentity.GetSiblingPath(
@@ -141,7 +148,8 @@ internal sealed class ModuleRepositoryPlanRegistry
             repository,
             repositoryPath,
             revision,
-            updateOnInitialize);
+            updateOnInitialize,
+            requiredOnRun);
     }
 
     public ModuleRepositoryPlanRegistration Register(
@@ -149,7 +157,8 @@ internal sealed class ModuleRepositoryPlanRegistry
         string repository,
         string repositoryPath,
         string? revision,
-        bool updateOnInitialize)
+        bool updateOnInitialize,
+        bool requiredOnRun = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
@@ -168,6 +177,11 @@ internal sealed class ModuleRepositoryPlanRegistry
         {
             existing.EnsureCompatible(normalizedRepository, revision, updateOnInitialize);
             existing.AddModule(moduleName);
+            if (requiredOnRun)
+            {
+                existing.RequireOnRun();
+            }
+
             return new ModuleRepositoryPlanRegistration(existing, IsNew: false);
         }
 
@@ -182,7 +196,8 @@ internal sealed class ModuleRepositoryPlanRegistry
             fullRepositoryPath,
             revision,
             updateOnInitialize,
-            stepKey);
+            stepKey,
+            requiredOnRun);
         _requirements.Add(fullRepositoryPath, requirement);
         return new ModuleRepositoryPlanRegistration(requirement, IsNew: true);
     }

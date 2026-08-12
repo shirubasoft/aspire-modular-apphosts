@@ -112,6 +112,111 @@ public sealed class ModuleImageBuildRecipeTests
     }
 
     [Fact]
+    public async Task Missing_separate_source_reuses_an_explicit_local_image()
+    {
+        var options = CreateOptions();
+        options.ImageTag = "production";
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations((ModuleImageSourceState?)null)
+        {
+            ImageExists = true
+        };
+
+        var prepared = await PrepareAsync(
+            CreateRecipe(options: options, allowsUnavailableSource: true),
+            operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Reused, prepared.Disposition);
+        Assert.Equal("registry.example.test/acme/orders-api:production", prepared.CanonicalImageReference);
+        Assert.False(prepared.SourceState.IsAvailable);
+        Assert.Equal(1, operations.ImageExistsCount);
+        Assert.Equal(0, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+        Assert.Equal([(prepared.CanonicalImageReference, prepared.LocalImageReference)], operations.Tags);
+    }
+
+    [Fact]
+    public async Task Missing_separate_source_pulls_an_explicit_image_without_building()
+    {
+        var options = CreateOptions();
+        options.ImageTag = "production";
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations((ModuleImageSourceState?)null)
+        {
+            PullSucceeds = true
+        };
+
+        var prepared = await PrepareAsync(
+            CreateRecipe(options: options, allowsUnavailableSource: true),
+            operations);
+
+        Assert.Equal(ModuleImagePreparationDisposition.Pulled, prepared.Disposition);
+        Assert.False(prepared.SourceState.IsAvailable);
+        Assert.Equal(1, operations.ImageExistsCount);
+        Assert.Equal(1, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+        Assert.Equal([(prepared.CanonicalImageReference, prepared.LocalImageReference)], operations.Tags);
+    }
+
+    [Fact]
+    public async Task Failed_pull_with_missing_managed_source_reports_initialize_recovery()
+    {
+        var options = CreateOptions();
+        options.ImageTag = "missing";
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations((ModuleImageSourceState?)null);
+        var recipe = CreateRecipe(
+            options: options,
+            allowsUnavailableSource: true,
+            initializerOwned: true,
+            appHostDirectory: "/work/apphost");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PrepareAsync(recipe, operations));
+
+        Assert.Contains(recipe.RepositoryPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            ModuleRepositoryPreflight.CreateInitializeCommand(recipe.AppHostDirectory),
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal(1, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+        Assert.Empty(operations.Tags);
+    }
+
+    [Fact]
+    public async Task Missing_source_without_the_pull_shortcut_fails_before_image_operations()
+    {
+        var options = CreateOptions();
+        options.ImageTag = "production";
+        var operations = new FakeOperations((ModuleImageSourceState?)null);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PrepareAsync(CreateRecipe(options: options), operations));
+
+        Assert.Contains("Provide the checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, operations.ImageExistsCount);
+        Assert.Equal(0, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+    }
+
+    [Fact]
+    public async Task Missing_source_cannot_use_pull_before_build_without_an_explicit_tag()
+    {
+        var options = CreateOptions();
+        options.PullBeforeBuild = true;
+        var operations = new FakeOperations((ModuleImageSourceState?)null);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            PrepareAsync(CreateRecipe(options: options), operations));
+
+        Assert.Contains("Provide the checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, operations.ImageExistsCount);
+        Assert.Equal(0, operations.PullCount);
+        Assert.Equal(0, operations.BuildCount);
+    }
+
+    [Fact]
     public async Task Failed_pull_falls_back_to_build_and_retags_legacy_output_then_run_alias()
     {
         var options = CreateOptions();
@@ -482,7 +587,10 @@ public sealed class ModuleImageBuildRecipeTests
         string imageName = "acme/orders-api",
         ModuleImageCommandOptions? options = null,
         bool refreshCleanCheckout = false,
-        string? revision = null) =>
+        string? revision = null,
+        bool allowsUnavailableSource = false,
+        bool initializerOwned = false,
+        string? appHostDirectory = null) =>
         new(
             new ModuleImageRecipeIdentity("orders", "orders-api"),
             new ModuleImageRepositorySettings(
@@ -493,7 +601,10 @@ public sealed class ModuleImageBuildRecipeTests
                 refreshCleanCheckout,
                 "git",
                 "gh",
-                TimeSpan.FromMinutes(2)),
+                TimeSpan.FromMinutes(2),
+                AppHostDirectory: appHostDirectory,
+                InitializerOwned: initializerOwned,
+                AllowsUnavailableSource: allowsUnavailableSource),
             new ModuleImageCommandSettings(
                 options ?? CreateOptions(imageName),
                 TimeSpan.FromMinutes(15),
@@ -519,13 +630,13 @@ public sealed class ModuleImageBuildRecipeTests
 
     private sealed class FakeOperations : IModuleImageRecipeOperations
     {
-        private readonly Queue<ModuleImageSourceState> _sourceStates;
-        private ModuleImageSourceState _lastSourceState;
+        private readonly Queue<ModuleImageSourceState?> _sourceStates;
+        private ModuleImageSourceState? _lastSourceState;
 
-        public FakeOperations(params ModuleImageSourceState[] sourceStates)
+        public FakeOperations(params ModuleImageSourceState?[] sourceStates)
         {
             Assert.NotEmpty(sourceStates);
-            _sourceStates = new Queue<ModuleImageSourceState>(sourceStates);
+            _sourceStates = new Queue<ModuleImageSourceState?>(sourceStates);
             _lastSourceState = sourceStates[^1];
         }
 
@@ -561,7 +672,7 @@ public sealed class ModuleImageBuildRecipeTests
             return Task.FromResult("test-runtime");
         }
 
-        public Task<ModuleImageSourceState> CaptureSourceStateAsync(
+        public Task<ModuleImageSourceState?> TryCaptureSourceStateAsync(
             ModuleImageBuildRecipe recipe,
             CancellationToken cancellationToken)
         {

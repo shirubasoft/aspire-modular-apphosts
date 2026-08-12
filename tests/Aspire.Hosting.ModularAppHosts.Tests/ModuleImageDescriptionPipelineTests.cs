@@ -43,6 +43,62 @@ public sealed class ModuleImageDescriptionPipelineTests
     }
 
     [Fact]
+    public async Task Describes_explicit_tag_without_the_separate_build_checkout()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var missingRepository = Path.Combine(workspace.Path, "missing-build-repository");
+        var resource = new ContainerResource("orders-api");
+        resource.Annotations.Add(new ContainerImageAnnotation
+        {
+            Registry = "registry.example.test",
+            Image = "acme/orders-api",
+            Tag = ModuleImageBuildRecipe.LocalRunTag
+        });
+        resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
+            "orders",
+            "orders-api",
+            workspace.Path,
+            imported: true));
+        var options = new ModuleImageCommandOptions("acme/orders-api", "docker", "build")
+        {
+            ImageRegistry = "registry.example.test",
+            ImageTag = "production",
+            PullBeforeBuild = true,
+            BuildRepository = "https://example.test/acme/orders-images.git"
+        };
+        var recipe = new ModuleImageBuildRecipe(
+            new ModuleImageRecipeIdentity("orders", "orders-api"),
+            new ModuleImageRepositorySettings(
+                missingRepository,
+                missingRepository,
+                options.BuildRepository,
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2),
+                AppHostDirectory: workspace.Path,
+                InitializerOwned: true,
+                AllowsUnavailableSource: true),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
+        resource.Annotations.Add(new ModuleImagePublisherAnnotation(ModuleResourceKind.Container, recipe));
+
+        var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
+            [resource],
+            ModuleImageSelection.All,
+            TestContext.Current.CancellationToken);
+
+        var image = Assert.Single(document.Images);
+        Assert.Equal("registry.example.test/acme/orders-api:production", image.Reference);
+        Assert.Equal(image.Reference, image.PullReference);
+        Assert.Equal(missingRepository, image.Build!.WorkingDirectory);
+        Assert.False(Directory.Exists(missingRepository));
+    }
+
+    [Fact]
     public async Task Describes_effective_configured_images_for_all_module_publisher_kinds()
     {
         using var repository = TemporaryDirectory.Create();
@@ -162,7 +218,7 @@ public sealed class ModuleImageDescriptionPipelineTests
                 recipe.LocalImageReference,
                 sourceState,
                 ModuleImagePreparationDisposition.Built)),
-            (_, _) => Task.FromResult(sourceState)));
+            (_, _) => Task.FromResult<ModuleImageSourceState?>(sourceState)));
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "api",
@@ -322,7 +378,7 @@ public sealed class ModuleImageDescriptionPipelineTests
                     publisher.Recipe.LocalImageReference,
                     sourceState,
                     ModuleImagePreparationDisposition.Built)),
-                (_, _) => Task.FromResult(sourceState)));
+                (_, _) => Task.FromResult<ModuleImageSourceState?>(sourceState)));
         }
     }
 

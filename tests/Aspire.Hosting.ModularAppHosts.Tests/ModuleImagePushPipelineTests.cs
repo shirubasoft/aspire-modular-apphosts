@@ -239,6 +239,33 @@ public sealed class ModuleImagePushPipelineTests
         Assert.Equal("registry.example.test/acme/orders-api:pull-request-orders", alias);
     }
 
+    [Fact]
+    public async Task Unavailable_source_never_publishes_a_mutable_branch_alias()
+    {
+        var resource = await CreateBranchAliasResourceAsync(
+            branchImageTag: null,
+            repositoryDirty: false,
+            detachedBranchAlias: "pull-request/orders",
+            sourceAvailable: false);
+        var reference = "registry.example.test/acme/orders-api:candidate";
+        var resolved = new ModuleEffectiveImage(
+            "orders-api:candidate",
+            reference,
+            reference,
+            ModuleImagePushTargetKind.ContainerRuntime,
+            null,
+            "orders-api",
+            "candidate",
+            null,
+            new ModuleRemoteImage(
+                "registry.example.test",
+                "acme/orders-api",
+                "candidate",
+                reference));
+
+        Assert.Null(ModuleImagePushPipeline.GetBranchAliasReference(resource, resolved));
+    }
+
     [Theory]
     [InlineData(true, "feature-orders", "candidate")]
     [InlineData(false, null, "candidate")]
@@ -288,7 +315,8 @@ public sealed class ModuleImagePushPipelineTests
     private static async Task<ContainerResource> CreateBranchAliasResourceAsync(
         string? branchImageTag,
         bool repositoryDirty,
-        string? detachedBranchAlias = null)
+        string? detachedBranchAlias = null,
+        bool sourceAvailable = true)
     {
         var resource = new ContainerResource("orders-api");
         var options = new ModuleImageCommandOptions("orders-api", "docker", "build")
@@ -315,7 +343,8 @@ public sealed class ModuleImagePushPipelineTests
             branchImageTag,
             "abcdef012345",
             repositoryDirty,
-            repositoryDirty ? "DIRTY" : "CLEAN");
+            repositoryDirty ? "DIRTY" : "CLEAN",
+            sourceAvailable);
         var plan = ModuleImageExecutionPlan.Create(recipe, sourceState);
         var prepared = new ModulePreparedImage(
             plan.CanonicalImageReference,
