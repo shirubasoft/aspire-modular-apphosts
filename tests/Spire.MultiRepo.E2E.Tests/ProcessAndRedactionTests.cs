@@ -104,27 +104,23 @@ public sealed class ProcessAndRedactionTests
     {
         if (OperatingSystem.IsWindows())
         {
-            var arguments = new List<string> { "/d", "/s", "/c", "ping -n 30 127.0.0.1 > nul" };
-            if (diagnosticArgument is not null)
-            {
-                arguments.Add(diagnosticArgument);
-            }
+            var command = diagnosticArgument is null
+                ? "ping -n 30 127.0.0.1 > nul"
+                : $"ping -n 30 127.0.0.1 > nul & rem {diagnosticArgument}";
 
             return new SupportProgram.ProcessInvocation(
                 "cmd.exe",
-                arguments,
+                ["/d", "/s", "/c", command],
                 Directory.GetCurrentDirectory());
         }
 
-        var shellArguments = new List<string> { "-c", "sleep 30" };
-        if (diagnosticArgument is not null)
-        {
-            shellArguments.Add(diagnosticArgument);
-        }
+        var shellCommand = diagnosticArgument is null
+            ? "sleep 30"
+            : $"sleep 30 # {diagnosticArgument}";
 
         return new SupportProgram.ProcessInvocation(
             "/bin/sh",
-            shellArguments,
+            ["-c", shellCommand],
             Directory.GetCurrentDirectory());
     }
 
