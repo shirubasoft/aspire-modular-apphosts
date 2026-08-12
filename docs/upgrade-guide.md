@@ -62,6 +62,11 @@ is advertised only for GitHub HTTPS repositories that select it as the credentia
 `RefreshBuildRepositoriesOnRun` and `RefreshBuildRepositoryOnRun` are explicit opt-ins for
 fast-forwarding clean, unpinned image build repositories immediately before a resource starts.
 
+The library no longer rewrites command output, exception messages, repository origins, proxy logs,
+or saved diagnostics. Configure secret masking in the local runner or CI provider and avoid passing
+credentials in command-line arguments when an environment variable or credential provider is
+available.
+
 ## Update image publishing
 
 - Replace `ModuleContainerExportOptions` with `ModuleImageCommandOptions`. A project that uses

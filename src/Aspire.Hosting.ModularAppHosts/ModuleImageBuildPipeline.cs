@@ -77,7 +77,7 @@ internal static class ModuleImageBuildPipeline
         catch (Exception exception)
         {
             await task.FailAsync(
-                ModuleCliOutputRedactor.Redact(exception.Message),
+                exception.Message,
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }

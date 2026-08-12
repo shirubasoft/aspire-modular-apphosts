@@ -57,7 +57,7 @@ internal static partial class Program
         {
             await FailureBundle.WriteAsync(repositoryRoot, temporaryRoot, exception, CancellationToken.None)
                 .ConfigureAwait(false);
-            await Console.Error.WriteLineAsync(Redact(exception.ToString())).ConfigureAwait(false);
+            await Console.Error.WriteLineAsync(exception.ToString()).ConfigureAwait(false);
             return 1;
         }
         finally

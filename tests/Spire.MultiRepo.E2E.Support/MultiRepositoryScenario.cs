@@ -160,7 +160,7 @@ internal static partial class Program
             AssertNoRepositoryMutation(ReadGitProxyOperations());
             AssertConfiguredContainerRuntimeUsed(ReadRuntimeProxyOperations());
 
-            await WritePhaseAsync("Fail fast, initialize, and redact a credential-bearing remote")
+            await WritePhaseAsync("Fail fast and initialize a remote repository")
                 .ConfigureAwait(false);
             DeleteGitProxyLog();
             var remoteEnvironment = CreateAppHostEnvironment(
@@ -173,18 +173,17 @@ internal static partial class Program
                 .ConfigureAwait(false);
             var remoteCheckout = GetNewSiblingGitDirectory(remoteDirectoriesBefore);
             AssertInitializationLifecycle(remoteInitialization.CombinedOutput, remoteCheckout, "clone");
-            AssertRedacted(remoteInitialization.CombinedOutput);
-            AssertRepositoryStateIsCredentialFree();
+            AssertRepositoryStateUsesNormalizedOrigin();
             AssertEqual(
                 _latestRevision,
                 await GetRevisionAsync(remoteCheckout, cancellationToken).ConfigureAwait(false),
                 "The unpinned checkout did not start at the producer's latest revision.");
             AssertEqual(
-                Redact(_remoteRepository),
-                Redact(await RunGitOutputAsync(
+                _remoteRepository,
+                await RunGitOutputAsync(
                     remoteCheckout,
                     ["remote", "get-url", "origin"],
-                    cancellationToken).ConfigureAwait(false)),
+                    cancellationToken).ConfigureAwait(false),
                 "The unpinned checkout has the wrong normalized origin.");
 
             await WritePhaseAsync("Pick up a clean upstream change through initialize").ConfigureAwait(false);
@@ -332,10 +331,7 @@ internal static partial class Program
                 LatestMarker,
                 "Change marker after pinned revision",
                 cancellationToken).ConfigureAwait(false);
-            _remoteRepository =
-                $"https://{E2ERedactor.DummyUserName}:{E2ERedactor.DummyPassword}" +
-                "@example.invalid/modular/resource-build.git" +
-                $"?access_token={E2ERedactor.DummyQueryToken}#{E2ERedactor.DummyFragment}";
+            _remoteRepository = "https://example.invalid/modular/resource-build.git";
             _appHost = Path.Combine(
                 _consumerRepository,
                 "samples",
@@ -464,7 +460,7 @@ internal static partial class Program
                 environment,
                 cancellationToken).ConfigureAwait(false);
             EnsureSuccess(result, "aspire do initialize");
-            await Console.Out.WriteLineAsync(Redact(result.CombinedOutput).Trim()).ConfigureAwait(false);
+            await Console.Out.WriteLineAsync(result.CombinedOutput.Trim()).ConfigureAwait(false);
             return result;
         }
 
@@ -556,7 +552,7 @@ internal static partial class Program
             if (!result.IsSuccess)
             {
                 await Console.Error.WriteLineAsync(
-                    $"Emergency Aspire stop failed:{Environment.NewLine}{Redact(result.CombinedOutput)}")
+                    $"Emergency Aspire stop failed:{Environment.NewLine}{result.CombinedOutput}")
                     .ConfigureAwait(false);
             }
         }
@@ -730,7 +726,7 @@ internal static partial class Program
             return added[0];
         }
 
-        private void AssertRepositoryStateIsCredentialFree()
+        private void AssertRepositoryStateUsesNormalizedOrigin()
         {
             var appHostIdentity = Path.GetFullPath(_appHost);
             var appHostHash = Convert.ToHexString(
@@ -751,7 +747,10 @@ internal static partial class Program
                 state,
                 "modular-apphosts:repositories:",
                 "Initialization did not write a per-repository deployment-state section.");
-            AssertRedacted(state);
+            AssertContains(
+                state,
+                "example.invalid/modular/resource-build",
+                "Initialization state did not retain the normalized repository identity.");
         }
 
         private IReadOnlyList<GitProxyOperation> ReadGitProxyOperations()
@@ -894,18 +893,6 @@ internal static partial class Program
             }
         }
 
-        private static void AssertRedacted(string value)
-        {
-            foreach (var sensitiveValue in E2ERedactor.SensitiveValues)
-            {
-                if (value.Contains(sensitiveValue, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Initialization output exposed E2E credential marker '{sensitiveValue}'.");
-                }
-            }
-        }
-
         private static string FindHttpResourceUrl(string json)
         {
             using var document = JsonDocument.Parse(json);
@@ -959,7 +946,7 @@ internal static partial class Program
             {
                 throw new InvalidOperationException(
                     $"{operation} failed with exit code {result.ExitCode}:{Environment.NewLine}" +
-                    Redact(result.CombinedOutput));
+                    result.CombinedOutput);
             }
         }
 

@@ -70,8 +70,8 @@ public sealed class MultiRepositoryE2ETests
         Assert.True(
             result.ExitCode == 0,
             $"The isolated multi-repository scenario failed with exit code {result.ExitCode}." +
-            $"{Environment.NewLine}{E2ERedactor.Redact(result.StandardOutput)}" +
-            $"{Environment.NewLine}{E2ERedactor.Redact(result.StandardError)}");
+            $"{Environment.NewLine}{result.StandardOutput}" +
+            $"{Environment.NewLine}{result.StandardError}");
     }
 
     private static async Task VerifyAppHostAsync<TEntryPoint>()

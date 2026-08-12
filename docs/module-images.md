@@ -150,7 +150,7 @@ module.AddContainer("api", "ghcr.io/api", "1-0")
 
 In this example, `aspire do pull-api` executes `pull mycustomregistry.io/images:api-1-0` followed by `tag mycustomregistry.io/images:api-1-0 ghcr.io/api:1-0`. The explicit mapping takes precedence over `WithContainerRegistry`, remote push-name callbacks, and default registry targets for pull resolution. The mapping applies to pulls; `aspire do push` retains the resource's configured push target. The resource's local image must be tag-based because the pipeline retags the pulled image.
 
-Pull and re-tag lifecycle messages are reported once through the Aspire pipeline step. Sanitized
+Pull and re-tag lifecycle messages are reported once through the Aspire pipeline step. Unmodified
 container-runtime stdout and stderr stay in the pulled resource's log stream for dashboard and
 programmatic diagnostics.
 

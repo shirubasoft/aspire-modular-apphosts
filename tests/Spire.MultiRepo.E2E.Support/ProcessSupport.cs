@@ -23,7 +23,7 @@ internal static partial class Program
     {
         public bool IsSuccess => ExitCode == 0;
 
-        public string CombinedOutput => Redact($"{StandardOutput}{Environment.NewLine}{StandardError}");
+        public string CombinedOutput => $"{StandardOutput}{Environment.NewLine}{StandardError}";
     }
 
     internal sealed class ProcessExecutor(TimeSpan? processTimeout = null)
@@ -52,14 +52,14 @@ internal static partial class Program
                 var result = await command.ExecuteBufferedAsync(linked.Token).ConfigureAwait(false);
                 return new ProcessResult(
                     result.ExitCode,
-                    Redact(result.StandardOutput),
-                    Redact(result.StandardError));
+                    result.StandardOutput,
+                    result.StandardError);
             }
             catch (OperationCanceledException) when (
                 timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                var invocationDescription = Redact(
-                    $"{invocation.FileName} {string.Join(' ', invocation.Arguments)}");
+                var invocationDescription =
+                    $"{invocation.FileName} {string.Join(' ', invocation.Arguments)}";
                 throw new TimeoutException(
                     $"Process '{invocationDescription}' exceeded the {_processTimeout} E2E timeout.");
             }

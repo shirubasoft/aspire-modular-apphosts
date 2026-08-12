@@ -35,7 +35,7 @@ internal static partial class Program
             if (policy == GitProxyPolicy.ReadOnly && !ReadOnlyGitCommandPolicy.IsAllowed(args))
             {
                 await Console.Error.WriteLineAsync(
-                    Redact($"Git proxy denied unrecognized invocation: {string.Join(' ', args)}"))
+                    $"Git proxy denied unrecognized invocation: {string.Join(' ', args)}")
                     .ConfigureAwait(false);
                 return 97;
             }
@@ -48,7 +48,7 @@ internal static partial class Program
                 !string.IsNullOrWhiteSpace(sourceRepository) &&
                 args.Contains(remoteRepository, StringComparer.Ordinal))
             {
-                await Console.Out.WriteLineAsync(Redact($"Cloning {remoteRepository}")).ConfigureAwait(false);
+                await Console.Out.WriteLineAsync($"Cloning {remoteRepository}").ConfigureAwait(false);
                 var rewritten = args
                     .Select(argument => string.Equals(argument, remoteRepository, StringComparison.Ordinal)
                         ? sourceRepository
@@ -77,8 +77,8 @@ internal static partial class Program
                     ["-C", repositoryPath, "config", "--get", "remote.origin.url"],
                     cancellationToken).ConfigureAwait(false);
                 if (string.Equals(
-                    Redact(configuredOrigin.Output.Trim()),
-                    Redact(remoteRepository),
+                    configuredOrigin.Output.Trim(),
+                    remoteRepository,
                     StringComparison.Ordinal))
                 {
                     var setLocalExitCode = await RunSilentAsync(
@@ -127,7 +127,7 @@ internal static partial class Program
         {
             var logPath = Environment.GetEnvironmentVariable(LogEnvironmentVariable)
                 ?? throw new InvalidOperationException($"{LogEnvironmentVariable} is not configured.");
-            var line = Redact(JsonSerializer.Serialize(new GitProxyOperation(operation, args))) +
+            var line = JsonSerializer.Serialize(new GitProxyOperation(operation, args)) +
                 Environment.NewLine;
             await File.AppendAllTextAsync(logPath, line, cancellationToken).ConfigureAwait(false);
         }
@@ -165,7 +165,7 @@ internal static partial class Program
             var error = process.StandardError.ReadToEndAsync(cancellationToken);
             await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
             _ = await error.ConfigureAwait(false);
-            return (process.ExitCode, Redact(await output.ConfigureAwait(false)));
+            return (process.ExitCode, await output.ConfigureAwait(false));
         }
 
         private static ProcessStartInfo CreateStartInfo(

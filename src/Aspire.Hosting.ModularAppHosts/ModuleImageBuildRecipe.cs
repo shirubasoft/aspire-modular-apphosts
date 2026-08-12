@@ -637,10 +637,9 @@ internal static class ModuleImageRecipeEvaluator
 
     private static void LogRawOutput(ILogger resourceLogger, string output)
     {
-        var redacted = ModuleCliOutputRedactor.Redact(output);
-        if (!string.IsNullOrWhiteSpace(redacted))
+        if (!string.IsNullOrWhiteSpace(output))
         {
-            LogCommandOutput(resourceLogger, redacted, null);
+            LogCommandOutput(resourceLogger, output, null);
         }
     }
 
@@ -802,15 +801,15 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
                     })
                     .WithValidation(CommandResultValidation.None)
                     .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
-                        progress(ModuleCliOutputRedactor.Redact(line))))
+                        progress(line)))
                     .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
-                        progress(ModuleCliOutputRedactor.Redact(line))))
+                        progress(line)))
                     .ExecuteAsync(operationToken)
                     .ConfigureAwait(false);
                 if (result.ExitCode != 0)
                 {
                     throw new InvalidOperationException(
-                        $"Image build command '{ModuleCliOutputRedactor.Redact(recipe.Options.PublishCommand)}' failed " +
+                        $"Image build command '{recipe.Options.PublishCommand}' failed " +
                         $"for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' with exit code {result.ExitCode}.");
                 }
             },
@@ -857,7 +856,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
             throw new InvalidOperationException(
                 $"Unable to inspect image build repository '{recipe.RepositoryPath}' for module " +
                 $"'{recipe.ModuleName}' resource '{recipe.ResourceName}' with Git executable " +
-                $"'{ModuleCliOutputRedactor.Redact(recipe.GitExecutablePath)}'.");
+                $"'{recipe.GitExecutablePath}'.");
         }
 
         return result.StandardOutput;
@@ -998,7 +997,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         new(
             $"Unable to inspect image build repository '{recipe.RepositoryPath}' for module " +
             $"'{recipe.ModuleName}' resource '{recipe.ResourceName}' with Git executable " +
-            $"'{ModuleCliOutputRedactor.Redact(recipe.GitExecutablePath)}'.");
+            $"'{recipe.GitExecutablePath}'.");
 
     private static void AppendFingerprintValue(IncrementalHash hash, string value)
     {

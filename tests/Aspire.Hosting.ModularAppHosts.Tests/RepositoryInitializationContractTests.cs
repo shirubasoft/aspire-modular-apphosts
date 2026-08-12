@@ -346,7 +346,7 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
-    public async Task Repository_mismatch_errors_redact_remote_credentials_and_queries()
+    public async Task Repository_mismatch_errors_report_configured_origins_unchanged()
     {
         using var workspace = TemporaryDirectory.Create();
         var checkoutPath = Path.Combine(workspace.Path, "checkout");
@@ -364,13 +364,8 @@ public sealed class RepositoryInitializationContractTests
                 updateRepository: false,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains("[REDACTED]", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("actual-user", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("actual-password", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("actual-query", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("expected-user", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("expected-password", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("expected-query", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(actualRepository, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(expectedRepository, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -168,15 +168,14 @@ internal static class ContainerImageInspector
             var progressLock = new object();
             void ReportProgress(string line)
             {
-                var redacted = ModuleCliOutputRedactor.Redact(line);
-                if (string.IsNullOrWhiteSpace(redacted))
+                if (string.IsNullOrWhiteSpace(line))
                 {
                     return;
                 }
 
                 lock (progressLock)
                 {
-                    progress(redacted);
+                    progress(line);
                 }
             }
 

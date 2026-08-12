@@ -87,7 +87,7 @@ internal static class ModuleImagePushPipeline
         catch (Exception exception)
         {
             await task.FailAsync(
-                ModuleCliOutputRedactor.Redact(exception.Message),
+                exception.Message,
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -271,14 +271,14 @@ internal static class ModuleImagePushPipeline
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
                 LogContainerRuntimeOutput(
                     resourceLogger,
-                    ModuleCliOutputRedactor.Redact(runtime),
-                    ModuleCliOutputRedactor.Redact(line),
+                    runtime,
+                    line,
                     null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
                 LogContainerRuntimeOutput(
                     resourceLogger,
-                    ModuleCliOutputRedactor.Redact(runtime),
-                    ModuleCliOutputRedactor.Redact(line),
+                    runtime,
+                    line,
                     null)))
             .ExecuteAsync(cancellationToken)
             .ConfigureAwait(false);

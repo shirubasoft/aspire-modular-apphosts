@@ -70,7 +70,7 @@ public sealed class ReadOnlyGitCommandPolicyTests
         try
         {
             var exitCode = await SupportProgram.GitProxy.RunAsync(
-                ["unknown-command", E2ERedactor.DummyPassword],
+                ["unknown-command", "unexpected-argument"],
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(97, exitCode);
@@ -78,7 +78,7 @@ public sealed class ReadOnlyGitCommandPolicyTests
                 logPath,
                 TestContext.Current.CancellationToken));
             Assert.Contains("denied unrecognized invocation", error.ToString(), StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(E2ERedactor.DummyPassword, error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("unexpected-argument", error.ToString(), StringComparison.Ordinal);
         }
         finally
         {

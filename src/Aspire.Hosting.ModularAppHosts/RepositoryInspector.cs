@@ -345,7 +345,7 @@ internal static class RepositorySynchronizer
                 {
                     throw new InvalidOperationException(
                         $"Repository path '{repositoryPath}' already exists, but it is not a Git checkout of " +
-                        $"configured repository '{ModuleCliOutputRedactor.Redact(repository)}'. " +
+                        $"configured repository '{repository}'. " +
                         "Move that directory or correct the module configuration.");
                 }
 
@@ -529,7 +529,7 @@ internal static class RepositorySynchronizer
                 if (reportingTask is not null)
                 {
                     await reportingTask.FailAsync(
-                        ModuleCliOutputRedactor.Redact(exception.Message),
+                        exception.Message,
                         CancellationToken.None).ConfigureAwait(false);
                 }
 
@@ -644,8 +644,8 @@ internal static class RepositorySynchronizer
         {
             throw new InvalidOperationException(
                 $"Repository '{repositoryPath}' has origin " +
-                $"'{ModuleCliOutputRedactor.Redact(actualRepository ?? "(missing)")}', which does not match " +
-                $"configured repository '{ModuleCliOutputRedactor.Redact(expectedRepository)}'. " +
+                $"'{actualRepository ?? "(missing)"}', which does not match " +
+                $"configured repository '{expectedRepository}'. " +
                 "Move the checkout or correct the module configuration.");
         }
 

@@ -13,7 +13,7 @@ internal static partial class Program
             exception is IOException or UnauthorizedAccessException or OperationCanceledException)
         {
             await Console.Error.WriteLineAsync(
-                Redact($"Cleanup warning for '{path}': {exception.Message}")).ConfigureAwait(false);
+                $"Cleanup warning for '{path}': {exception.Message}").ConfigureAwait(false);
         }
     }
 }

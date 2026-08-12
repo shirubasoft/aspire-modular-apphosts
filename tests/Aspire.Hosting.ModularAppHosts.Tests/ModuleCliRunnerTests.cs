@@ -8,67 +8,6 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class ModuleCliRunnerTests
 {
-    [Theory]
-    [InlineData("passwd='secret value'", "passwd='[REDACTED]'")]
-    [InlineData("pwd = secret,keep", "pwd = [REDACTED],keep")]
-    [InlineData("passphrase: secret;keep", "passphrase: [REDACTED];keep")]
-    [InlineData("token=secret", "token=[REDACTED]")]
-    [InlineData("ACCESS-TOKEN: secret", "ACCESS-TOKEN: [REDACTED]")]
-    [InlineData("refresh_token=secret", "refresh_token=[REDACTED]")]
-    [InlineData("id-token=secret", "id-token=[REDACTED]")]
-    [InlineData("auth_token=secret", "auth_token=[REDACTED]")]
-    [InlineData("api-key=secret", "api-key=[REDACTED]")]
-    [InlineData("client_secret=secret", "client_secret=[REDACTED]")]
-    [InlineData("secret=secret", "secret=[REDACTED]")]
-    [InlineData("github_access_token=secret", "github_access_token=[REDACTED]")]
-    [InlineData("password: \"\"", "password: \"[REDACTED]\"")]
-    public void Redactor_masks_supported_credential_labels(string value, string expected)
-    {
-        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
-    }
-
-    [Theory]
-    [InlineData("Bearer abc.DEF-123_~=+/", "Bearer [REDACTED]")]
-    [InlineData("basic Zm9vOmJhcg==", "basic [REDACTED]")]
-    [InlineData("AUTHORIZATION : BASIC Zm9v", "AUTHORIZATION : BASIC [REDACTED]")]
-    public void Redactor_masks_supported_authorization_values(string value, string expected)
-    {
-        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
-    }
-
-    [Theory]
-    [InlineData(
-        "credential.https://github.com/.helper=!gh auth git-credential",
-        "credential.https://github.com/.helper=[REDACTED]")]
-    [InlineData("UNEXPECTED_BUILD_VALUE=opaque-value", "UNEXPECTED_BUILD_VALUE=[REDACTED]")]
-    [InlineData("CUSTOM_OUTPUT = 'opaque value'", "CUSTOM_OUTPUT = '[REDACTED]'")]
-    public void Redactor_masks_credential_helpers_and_arbitrary_environment_assignments(
-        string value,
-        string expected)
-    {
-        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
-    }
-
-    [Theory]
-    [InlineData("git+ssh://user@example.test/acme/repo.git", "git+ssh://[REDACTED]@example.test/acme/repo.git")]
-    [InlineData("https://example.test/acme/repo.git?token=secret", "https://example.test/acme/repo.git?[REDACTED]")]
-    [InlineData("https://example.test/acme/repo.git#secret", "https://example.test/acme/repo.git#[REDACTED]")]
-    [InlineData("https://example.test?token=secret#fragment", "https://example.test?[REDACTED]#[REDACTED]")]
-    [InlineData("prefix HTTP://user:secret@example.test suffix", "prefix HTTP://[REDACTED]@example.test suffix")]
-    public void Redactor_masks_supported_URI_shapes(string value, string expected)
-    {
-        Assert.Equal(expected, ModuleCliOutputRedactor.Redact(value));
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("ordinary output")]
-    [InlineData("ssh://example.test/acme/repo.git")]
-    public void Redactor_preserves_non_sensitive_output(string value)
-    {
-        Assert.Equal(value, ModuleCliOutputRedactor.Redact(value));
-    }
-
     [Fact]
     public async Task Runner_streams_and_captures_standard_output_and_error()
     {
@@ -96,78 +35,27 @@ public sealed class ModuleCliRunnerTests
     }
 
     [Fact]
-    public async Task Runner_redacts_sensitive_URI_components_from_streamed_and_captured_output()
+    public async Task Runner_streams_and_captures_output_without_transforming_it()
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
 
-        const string userName = "octocat";
-        const string password = "super-secret-password";
-        const string query = "access_token=secret-query-token";
-        const string fragment = "secret-fragment";
+        const string output = "https://user:password@example.test/acme/orders.git?token=value#fragment";
         var progress = new List<string>();
 
         var result = await ModuleCliRunner.RunAsync(
             "/bin/sh",
-            ["-c", $"printf '%s\\n' 'https://{userName}:{password}@example.test/acme/orders.git?{query}#{fragment}'"],
+            ["-c", $"printf '%s\\n' '{output}'"],
             Path.GetTempPath(),
             TimeSpan.FromSeconds(5),
-            "test redaction",
+            "test raw output",
             TestContext.Current.CancellationToken,
             progress.Add);
 
-        var progressLine = Assert.Single(progress);
-        Assert.Equal(
-            "https://[REDACTED]@example.test/acme/orders.git?[REDACTED]#[REDACTED]",
-            progressLine);
-        Assert.Contains(progressLine, result.StandardOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(userName, result.StandardOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(password, result.StandardOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(query, result.StandardOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(fragment, result.StandardOutput, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task Runner_redacts_labeled_credentials_and_authorization_values()
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        const string password = "password with spaces";
-        const string token = "token-value";
-        const string bearer = "header.payload.signature";
-        var progress = new List<string>();
-
-        var result = await ModuleCliRunner.RunAsync(
-            "/bin/sh",
-            [
-                "-c",
-                $"printf '%s\\n' 'password: \"{password}\"'; " +
-                $"printf '%s\\n' 'GITHUB_TOKEN={token}' >&2; " +
-                $"printf '%s\\n' 'Authorization: Bearer {bearer}' >&2"
-            ],
-            Path.GetTempPath(),
-            TimeSpan.FromSeconds(5),
-            "test credentials",
-            TestContext.Current.CancellationToken,
-            progress.Add);
-
-        Assert.Contains("password: \"[REDACTED]\"", result.StandardOutput, StringComparison.Ordinal);
-        Assert.Contains("GITHUB_TOKEN=[REDACTED]", result.StandardError, StringComparison.Ordinal);
-        Assert.Contains("Authorization: Bearer [REDACTED]", result.StandardError, StringComparison.Ordinal);
-        Assert.All(progress, line =>
-        {
-            Assert.DoesNotContain(password, line, StringComparison.Ordinal);
-            Assert.DoesNotContain(token, line, StringComparison.Ordinal);
-            Assert.DoesNotContain(bearer, line, StringComparison.Ordinal);
-        });
-        Assert.DoesNotContain(password, result.StandardOutput, StringComparison.Ordinal);
-        Assert.DoesNotContain(token, result.StandardError, StringComparison.Ordinal);
-        Assert.DoesNotContain(bearer, result.StandardError, StringComparison.Ordinal);
+        Assert.Equal(output, Assert.Single(progress));
+        Assert.Contains(output, result.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]

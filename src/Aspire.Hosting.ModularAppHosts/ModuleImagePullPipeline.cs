@@ -191,21 +191,21 @@ internal static class ModuleImagePullPipeline
             .WithStandardOutputPipe(PipeTarget.ToDelegate(line =>
                 LogContainerRuntimeOutput(
                     resourceLogger,
-                    ModuleCliOutputRedactor.Redact(runtime),
-                    ModuleCliOutputRedactor.Redact(line),
+                    runtime,
+                    line,
                     null)))
             .WithStandardErrorPipe(PipeTarget.ToDelegate(line =>
                 LogContainerRuntimeOutput(
                     resourceLogger,
-                    ModuleCliOutputRedactor.Redact(runtime),
-                    ModuleCliOutputRedactor.Redact(line),
+                    runtime,
+                    line,
                     null)))
             .ExecuteAsync(cancellationToken)
             .ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Container runtime '{ModuleCliOutputRedactor.Redact(runtime)}' failed with exit code {result.ExitCode}.");
+                $"Container runtime '{runtime}' failed with exit code {result.ExitCode}.");
         }
     }
 }

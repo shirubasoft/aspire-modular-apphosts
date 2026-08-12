@@ -20,7 +20,7 @@ internal static partial class Program
             {
                 throw new InvalidOperationException(
                     $"git ls-files for the E2E fixture failed with exit code {listedFiles.ExitCode}:" +
-                    $"{Environment.NewLine}{Redact(listedFiles.CombinedOutput)}");
+                    $"{Environment.NewLine}{listedFiles.CombinedOutput}");
             }
 
             foreach (var relativePath in listedFiles.StandardOutput.Split(

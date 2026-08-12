@@ -40,8 +40,7 @@ internal static partial class Program
                 $"{DateTimeOffset.UtcNow.UtcTicks:D19}-{Guid.NewGuid():N}.json");
             await File.WriteAllTextAsync(
                 logPath,
-                Redact(JsonSerializer.Serialize(
-                    new RuntimeProxyOperation(runtime, realExecutable, args))),
+                JsonSerializer.Serialize(new RuntimeProxyOperation(runtime, realExecutable, args)),
                 cancellationToken).ConfigureAwait(false);
 
             var startInfo = new ProcessStartInfo(realExecutable)

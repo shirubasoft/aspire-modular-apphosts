@@ -251,7 +251,7 @@ public sealed class ModuleImageBuildRecipeTests
     }
 
     [Fact]
-    public async Task Command_output_is_redacted_and_only_written_to_the_resource_logger()
+    public async Task Command_output_is_written_unchanged_only_to_the_resource_logger()
     {
         var operations = new FakeOperations(CleanMain, CleanMain);
         var lifecycleLogger = new RecordingLogger();
@@ -272,15 +272,12 @@ public sealed class ModuleImageBuildRecipeTests
             message => message.Contains("build output", StringComparison.Ordinal));
         Assert.Contains(
             resourceLogger.Messages,
-            message => message.Contains("[REDACTED]", StringComparison.Ordinal));
-        Assert.DoesNotContain(
-            resourceLogger.Messages,
             message => message.Contains("user:secret", StringComparison.Ordinal) ||
                 message.Contains("token=secret", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Pull_output_is_redacted_and_only_written_to_the_resource_logger()
+    public async Task Pull_output_is_written_unchanged_only_to_the_resource_logger()
     {
         var options = CreateOptions();
         options.PullBeforeBuild = true;
@@ -304,10 +301,6 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Contains(
             resourceLogger.Messages,
             message => message.Contains("pull output", StringComparison.Ordinal) &&
-                message.Contains("[REDACTED]", StringComparison.Ordinal));
-        Assert.DoesNotContain(
-            resourceLogger.Messages,
-            message => message.Contains("user:secret", StringComparison.Ordinal) ||
                 message.Contains("token=secret", StringComparison.Ordinal));
     }
 

@@ -15,7 +15,7 @@ container-runtime selection. Its components are separated by responsibility:
   allowlist during normal run.
 - `RuntimeProxy` proves the executable selected through Aspire's container runtime resolver.
 - `ProcessExecutor` uses CliWrap with bounded cancellation and process-tree termination.
-- `E2ERedactor`, `FailureBundle`, and cleanup/assertion components sanitize every emitted diagnostic.
+- `FailureBundle` and cleanup/assertion components retain complete diagnostics.
 
 Run the full Docker-backed suite from the repository root:
 
@@ -27,5 +27,5 @@ MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
 ```
 
 Use `ASPIRE_CONTAINER_RUNTIME=podman` for local Podman coverage. CI validates Docker end to end. On
-failure, the support executable writes a sanitized bundle under `artifacts/e2e/multi-repo-failure`;
+failure, the support executable writes a bundle under `artifacts/e2e/multi-repo-failure`;
 CI uploads that directory without retaining the temporary repositories.

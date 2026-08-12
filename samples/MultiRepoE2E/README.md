@@ -67,7 +67,7 @@ verifies all of these behaviors in one locally reproducible command:
 
 1. Both checked-in AppHosts start and become healthy using only their default configuration.
 2. `aspire start` fails fast before initialization with the exact `--apphost` recovery command.
-3. `aspire do initialize --apphost <path> --non-interactive` creates direct sibling checkouts and credential-free state.
+3. `aspire do initialize --apphost <path> --non-interactive` creates direct sibling checkouts and normalized state.
 4. Repeated initialization is idempotent.
 5. A configured local source plus a revision uses a detached initializer-owned sibling without moving
    the developer checkout.
@@ -76,7 +76,7 @@ verifies all of these behaviors in one locally reproducible command:
    shape is rejected and recorded.
 8. Opt-in runtime refresh fast-forwards a clean build checkout.
 9. A dirty checkout is preserved and rebuilt, including when runtime refresh is enabled.
-10. Repository lifecycle output is emitted and credential-bearing command output and state are redacted.
+10. Repository lifecycle and command output are emitted without project-owned filtering.
 11. The requested Docker or Podman executable is selected through Aspire's runtime resolver.
 
 The build command and Dockerfile are executed from the initialized build checkout. Each run waits for

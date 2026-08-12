@@ -6,32 +6,18 @@ using SupportProgram = Spire.MultiRepo.E2E.Support.Program;
 namespace Spire.MultiRepo.E2E.Tests;
 
 [Collection(MultiRepositoryE2ECollection.Name)]
-public sealed class ProcessAndRedactionTests
+public sealed class ProcessAndCleanupTests
 {
-    [Fact]
-    public void Redactor_removes_every_credential_marker()
-    {
-        var value = string.Join('/', E2ERedactor.SensitiveValues);
-
-        var redacted = E2ERedactor.Redact(value);
-
-        Assert.All(E2ERedactor.SensitiveValues, secret => Assert.DoesNotContain(secret, redacted));
-        Assert.Contains("[REDACTED]", redacted, StringComparison.Ordinal);
-    }
-
     [Fact]
     public async Task Process_executor_applies_its_bounded_timeout()
     {
         var executor = new SupportProgram.ProcessExecutor(TimeSpan.FromMilliseconds(100));
-        var invocation = CreateLongRunningInvocation(
-            $"https://runner:{E2ERedactor.DummyPassword}@example.test/repository.git");
+        var invocation = CreateLongRunningInvocation();
 
         var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
             executor.RunAsync(invocation, TestContext.Current.CancellationToken));
 
         Assert.Contains("exceeded", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("[REDACTED]", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(E2ERedactor.DummyPassword, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -77,11 +63,11 @@ public sealed class ProcessAndRedactionTests
     }
 
     [Fact]
-    public async Task Cleanup_reports_a_sanitized_warning()
+    public async Task Cleanup_reports_the_failed_path()
     {
         var path = Path.Combine(
             Path.GetTempPath(),
-            $"{E2ERedactor.DummyPassword}-{Guid.NewGuid():N}.txt");
+            $"multi-repo-cleanup-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(path, "not a directory", TestContext.Current.CancellationToken);
         var original = Console.Error;
         using var output = new StringWriter();
@@ -97,30 +83,22 @@ public sealed class ProcessAndRedactionTests
         }
 
         Assert.Contains("Cleanup warning", output.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(E2ERedactor.DummyPassword, output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(path, output.ToString(), StringComparison.Ordinal);
     }
 
-    private static SupportProgram.ProcessInvocation CreateLongRunningInvocation(string? diagnosticArgument = null)
+    private static SupportProgram.ProcessInvocation CreateLongRunningInvocation()
     {
         if (OperatingSystem.IsWindows())
         {
-            var command = diagnosticArgument is null
-                ? "ping -n 30 127.0.0.1 > nul"
-                : $"ping -n 30 127.0.0.1 > nul & rem {diagnosticArgument}";
-
             return new SupportProgram.ProcessInvocation(
                 "cmd.exe",
-                ["/d", "/s", "/c", command],
+                ["/d", "/s", "/c", "ping -n 30 127.0.0.1 > nul"],
                 Directory.GetCurrentDirectory());
         }
 
-        var shellCommand = diagnosticArgument is null
-            ? "sleep 30"
-            : $"sleep 30 # {diagnosticArgument}";
-
         return new SupportProgram.ProcessInvocation(
             "/bin/sh",
-            ["-c", shellCommand],
+            ["-c", "sleep 30"],
             Directory.GetCurrentDirectory());
     }
 

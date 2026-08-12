@@ -801,7 +801,7 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Pull_runtime_output_is_redacted_in_the_resource_log_and_stderr_is_informational()
+    public async Task Pull_runtime_output_is_unchanged_in_the_resource_log_and_stderr_is_informational()
     {
         using var runtime = new FakeContainerRuntimeEnvironment(FakeRuntimeMode.Success, configured: true);
         var builder = DistributedApplication.CreateBuilder();
@@ -839,14 +839,12 @@ public sealed class ModuleImageDeferredCoverageTests
         Assert.Contains(
             resourceLogger.Entries,
             entry => entry.Message.Contains("runtime stderr", StringComparison.Ordinal));
-        Assert.All(resourceLogger.Entries, entry =>
-        {
-            Assert.DoesNotContain("user:secret", entry.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("token=secret", entry.Message, StringComparison.Ordinal);
-        });
         Assert.Contains(
             resourceLogger.Entries,
-            entry => entry.Message.Contains("[REDACTED]", StringComparison.Ordinal));
+            entry => entry.Message.Contains("user:secret", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceLogger.Entries,
+            entry => entry.Message.Contains("token=secret", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -346,7 +346,7 @@ jobs:
           tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj
           --configuration Release
 
-      - name: Upload sanitized multi-repository failure diagnostics
+      - name: Upload multi-repository failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
         with:

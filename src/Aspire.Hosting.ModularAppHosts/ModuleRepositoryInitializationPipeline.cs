@@ -131,7 +131,7 @@ internal static class ModuleRepositoryInitializationPipeline
                 catch (Exception exception)
                 {
                     await task.FailAsync(
-                        ModuleCliOutputRedactor.Redact(exception.Message),
+                        exception.Message,
                         CancellationToken.None).ConfigureAwait(false);
                     throw;
                 }
@@ -289,7 +289,7 @@ internal static class ModuleRepositoryInitializationPipeline
             progress => LogInitializationProgress(
                 resourceLogger,
                 requirement.NormalizedRepository,
-                ModuleCliOutputRedactor.Redact(progress),
+                progress,
                 null),
             lifecycle =>
             {

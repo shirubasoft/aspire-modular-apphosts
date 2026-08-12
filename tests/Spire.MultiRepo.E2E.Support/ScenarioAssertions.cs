@@ -6,8 +6,6 @@ internal static partial class Program
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 
-    private static string Redact(string value) => E2ERedactor.Redact(value);
-
     private static string RemoveWhitespace(string value) =>
         new(value.Where(character => !char.IsWhiteSpace(character)).ToArray());
 
@@ -15,7 +13,7 @@ internal static partial class Program
     {
         if (!value.Contains(expected, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException($"{message}{Environment.NewLine}{Redact(value)}");
+            throw new InvalidOperationException($"{message}{Environment.NewLine}{value}");
         }
     }
 

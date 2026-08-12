@@ -18,7 +18,7 @@ internal static partial class Program
             Directory.CreateDirectory(outputDirectory);
             await File.WriteAllTextAsync(
                 Path.Combine(outputDirectory, "exception.txt"),
-                Redact(exception.ToString()),
+                exception.ToString(),
                 cancellationToken).ConfigureAwait(false);
 
             if (!Directory.Exists(temporaryRoot))
@@ -42,15 +42,15 @@ internal static partial class Program
                     var contents = await File.ReadAllTextAsync(source, cancellationToken).ConfigureAwait(false);
                     await File.WriteAllTextAsync(
                         Path.Combine(outputDirectory, safeName),
-                        Redact(contents),
+                        contents,
                         cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception diagnosticException) when (
                     diagnosticException is IOException or UnauthorizedAccessException)
                 {
                     await Console.Error.WriteLineAsync(
-                        Redact($"Unable to add '{relativePath}' to the failure bundle: " +
-                            diagnosticException.Message)).ConfigureAwait(false);
+                        $"Unable to add '{relativePath}' to the failure bundle: " +
+                            diagnosticException.Message).ConfigureAwait(false);
                 }
             }
         }
