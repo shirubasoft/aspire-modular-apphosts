@@ -286,6 +286,8 @@ internal static partial class Program
                         "pack",
                         Path.Combine(repositoryRoot, "src", "Aspire.Hosting.ModularAppHosts", "Aspire.Hosting.ModularAppHosts.csproj"),
                         "--configuration", "Release",
+                        "--no-build",
+                        "--no-restore",
                         "--output", _packageFeed,
                         $"-p:PackageVersion={PackageVersion}"
                     ],
@@ -299,6 +301,8 @@ internal static partial class Program
                         "pack",
                         Path.Combine(repositoryRoot, "samples", "MultiRepoE2E", "Spire.ModuleContract", "Spire.ModuleContract.csproj"),
                         "--configuration", "Release",
+                        "--no-build",
+                        "--no-restore",
                         "--output", _packageFeed,
                         $"-p:PackageVersion={PackageVersion}"
                     ],

@@ -58,8 +58,10 @@ internal static partial class Program
             catch (OperationCanceledException) when (
                 timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
+                var invocationDescription = Redact(
+                    $"{invocation.FileName} {string.Join(' ', invocation.Arguments)}");
                 throw new TimeoutException(
-                    $"Process '{invocation.FileName}' exceeded the {_processTimeout} E2E timeout.");
+                    $"Process '{invocationDescription}' exceeded the {_processTimeout} E2E timeout.");
             }
         }
     }

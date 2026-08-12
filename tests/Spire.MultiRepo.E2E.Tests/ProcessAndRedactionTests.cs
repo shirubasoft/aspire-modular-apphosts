@@ -23,12 +23,15 @@ public sealed class ProcessAndRedactionTests
     public async Task Process_executor_applies_its_bounded_timeout()
     {
         var executor = new SupportProgram.ProcessExecutor(TimeSpan.FromMilliseconds(100));
-        var invocation = CreateLongRunningInvocation();
+        var invocation = CreateLongRunningInvocation(
+            $"https://runner:{E2ERedactor.DummyPassword}@example.test/repository.git");
 
         var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
             executor.RunAsync(invocation, TestContext.Current.CancellationToken));
 
         Assert.Contains("exceeded", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(E2ERedactor.DummyPassword, exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -97,19 +100,31 @@ public sealed class ProcessAndRedactionTests
         Assert.DoesNotContain(E2ERedactor.DummyPassword, output.ToString(), StringComparison.Ordinal);
     }
 
-    private static SupportProgram.ProcessInvocation CreateLongRunningInvocation()
+    private static SupportProgram.ProcessInvocation CreateLongRunningInvocation(string? diagnosticArgument = null)
     {
         if (OperatingSystem.IsWindows())
         {
+            var arguments = new List<string> { "/d", "/s", "/c", "ping -n 30 127.0.0.1 > nul" };
+            if (diagnosticArgument is not null)
+            {
+                arguments.Add(diagnosticArgument);
+            }
+
             return new SupportProgram.ProcessInvocation(
                 "cmd.exe",
-                ["/d", "/s", "/c", "ping -n 30 127.0.0.1 > nul"],
+                arguments,
                 Directory.GetCurrentDirectory());
+        }
+
+        var shellArguments = new List<string> { "-c", "sleep 30" };
+        if (diagnosticArgument is not null)
+        {
+            shellArguments.Add(diagnosticArgument);
         }
 
         return new SupportProgram.ProcessInvocation(
             "/bin/sh",
-            ["-c", "sleep 30"],
+            shellArguments,
             Directory.GetCurrentDirectory());
     }
 
