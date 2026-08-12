@@ -9,7 +9,7 @@ Define an Aspire resource graph once and reuse it across AppHosts. A module can 
 | `Shirubasoft.Aspire.ModularAppHosts` | Defining, exporting, importing, and consuming modules in an AppHost. |
 | `Shirubasoft.Aspire.ModularAppHosts.Testing` | Running the same E2E tests against an AppHost or an Aspire-managed Docker Compose deployment. |
 | `Shirubasoft.Aspire.ModularAppHosts.Templates` | Scaffolding a runnable module contract with `dotnet new aspire-module`. |
-| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying workflow image manifests and dispatching cross-repository E2E workflows. |
+| `Shirubasoft.Aspire.ModularAppHosts.Tool` | Publishing/applying module image workflow documents and dispatching cross-repository E2E workflows. |
 
 Install the core package in AppHosts and shared module contracts:
 
@@ -83,7 +83,7 @@ Inside another module's `Define` method, `CatalogModule.Reference(module)` retur
 
 By default, local modules run as projects and imported modules run as containers. Module declaration is synchronous and performs no Git or image operations. Remote and pinned repositories are acquired from the AppHost directory with `aspire do initialize --apphost . --non-interactive`; normal run fails fast with the exact AppHost-aware recovery command when a sibling checkout, initialization state record, project, or build directory is missing. Use `UseLocalModuleProjects()` or `UseModuleContainers()` for AppHost-wide project-mode intent.
 
-Module image build commands can follow Aspire's Docker or Podman selection by using `ModuleContainerExportOptions.ContainerRuntimePlaceholder` as their publish command. The command resolves through Aspire's `IContainerRuntimeResolver` only when it runs, keeping AppHost declaration synchronous and consistent with Aspire's configured runtime. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build, so CI can delegate module-owned build commands to Aspire. A clean push publishes the canonical image plus a sanitized source-branch alias, allowing default-branch consumers to use a stable tag while workflow image manifests retain the exact canonical tag. Use Aspire's named resource steps, such as `aspire do pull-catalog-api`, for one resource; use the tool's `manifest publish --selector` option for validated multi-resource workflow selection. `aspire do describe-images --output-path artifacts` writes the effective run, pull, push, and build identities to `artifacts/module-images.json` without preparing images. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry while retaining its push behavior.
+Projects use Aspire's native container publisher through `ExportAsContainer(imageName)` by default. Advanced image commands can follow Aspire's Docker or Podman selection by using `ModuleImageCommandOptions.ContainerRuntimePlaceholder` with `ExportAsContainerWithCommand(...)` or `WithImagePublishCommand(...)`. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build. A clean advanced publisher pushes the canonical image plus a sanitized source-branch alias, while module image workflow documents retain the exact canonical tag. Use Aspire's named resource steps, such as `aspire do pull-catalog-api`, for one resource; use repeatable `images publish --module` and `--resource` options for validated workflow selection. `aspire do describe-images --output-path artifacts` writes the effective run, pull, push, and build identities to `artifacts/module-images.json` without preparing images. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry while retaining its push behavior.
 
 Initialization places remote checkouts in collision-resistant directories beside the AppHost Git root; pinned revisions receive distinct siblings that protect developer worktrees. Immediately before a published container starts, its Aspire resource callback inspects branch, commit, and dirty state, reuses or optionally pulls a clean canonical image, builds when needed, and retags the result to a deterministic `aspire-run` alias. Explicit-start resources remain lazy. Dirty source always rebuilds. Each publisher can select a separate `BuildRepository` and revision, and an explicit refresh option may fast-forward only clean unpinned build checkouts. The module guide documents the layout, configuration, and validation behavior.
 
@@ -110,19 +110,19 @@ Set an exported project's run mode to `Project` for local debugging while keepin
 ## Cross-repository E2E in three commands
 
 Pin the tool in both repos with a committed .NET tool manifest. Repo B publishes its selected
-module images and writes a strict workflow image manifest:
+module images and writes a strict module image workflow document:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest publish \
-  --apphost src/RepoB.AppHost --selector orders --tag "$GITHUB_SHA"
+dotnet tool run modular-apphosts -- images publish \
+  --apphost src/RepoB.AppHost --module orders --tag "$GITHUB_SHA"
 ```
 
-Repo A runs its ordinary E2E command with that manifest, using the same invocation locally and in
+Repo A runs its ordinary E2E command with that workflow document, using the same invocation locally and in
 GitHub Actions:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest apply \
-  --json "$IMAGE_MANIFEST" \
+dotnet tool run modular-apphosts -- images apply \
+  --json "$IMAGE_WORKFLOW" \
   -- \
   dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
 ```
@@ -133,7 +133,7 @@ returns its status:
 ```bash
 dotnet tool run modular-apphosts -- workflow dispatch \
   --repository your-org/repo-a --workflow external-e2e.yml \
-  --manifest module-image-manifest.json
+  --workflow-document module-image-workflow.json
 ```
 
 See the [tool reference](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/src/Aspire.Hosting.ModularAppHosts.Tool/README.md)
@@ -144,8 +144,8 @@ for pinned setup, tag precedence, complete workflow files, permissions, and trou
 
 - [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
-- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): workflow image manifest publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
-- [Upgrade guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/upgrading.md): migration steps for the namespace, synchronous contract, repository, image, and workflow API redesign.
+- [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): module image workflow document publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
+- [Upgrade guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/upgrade-guide.md): migration steps for the namespace, synchronous contract, repository, image, and workflow API redesign.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.

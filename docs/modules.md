@@ -206,7 +206,7 @@ module.AddResource<ProjectResource>("orders-api", context =>
 
 Repository-backed generic factories run while Aspire constructs the application model. They may compose paths from `context.RepositoryPath`, but they must not read repository content at declaration time. Missing checkout and file validation is deferred to normal-run preflight so `aspire do initialize` can construct the pipeline before the checkout exists.
 
-Use the specialized `AddProject` API when the project must be represented as a portable container image. These project declarations require the exact command that produces their image:
+Use the specialized `AddProject` API when the project must also have a portable container image. The simple overload delegates build and push behavior to Aspire:
 
 ```csharp
 module.AddContainer("orders-cache", "redis");
@@ -214,21 +214,11 @@ module.AddProject<Projects.Orders_Api>("orders-api")
     .ConfigureProject((context, project) => project
         .WaitFor(context.GetResource<ContainerResource>("orders-cache"))
         .WithHttpHealthCheck("/health"))
-    .ExportAsContainer(new ModuleContainerExportOptions(
-        imageName: "orders-api",
-        publishCommand: "dotnet",
-        publishArguments:
-        [
-            "publish",
-            "Orders.Api.csproj",
-            "-t:PublishContainer",
-            $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
-            $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"
-        ]));
+    .ExportAsContainer("orders-api");
 ```
 
-`ConfigureProject` applies when run-mode configuration selects the project for debugging. The existing
-`ExportAsContainer` callback applies to its container representation. Those callbacks and declared
+`ConfigureProject` applies when the project runs or when Aspire derives its container representation. The
+`ExportAsContainer` callback applies additional container-only configuration. Those callbacks and declared
 containers' `Configure` callbacks receive the materialization context, so they can call
 `GetResource<TResource>` for resources declared earlier in the same module. The context also reports the
 effective resource name, repository path, import state, and resolved image identity. This keeps resource
@@ -242,17 +232,7 @@ module.AddProject(
         "orders-api",
         "src/Orders.Api/Orders.Api.csproj",
         ModuleProjectPathBase.Repository)
-    .ExportAsContainer(new ModuleContainerExportOptions(
-        imageName: "orders-api",
-        publishCommand: "dotnet",
-        publishArguments:
-        [
-            "publish",
-            "Orders.Api.csproj",
-            "-t:PublishContainer",
-            $"-p:ContainerRepository={ModuleContainerExportOptions.ImageNamePlaceholder}",
-            $"-p:ContainerImageTag={ModuleContainerExportOptions.ImageTagPlaceholder}"
-        ]));
+    .ExportAsContainer("orders-api");
 ```
 
 Repository-relative paths are resolved only after the local source tree or imported checkout is selected. The two-argument `AddProject(name, projectPath)` overload remains relative to the defining AppHost, and generated `AddProject<TProject>` metadata follows that existing behavior.
@@ -274,14 +254,14 @@ Container-backed integrations can use the three-argument overload to publish a c
 module.AddResource<PostgresServerResource>(
     "postgres",
     context => context.ApplicationBuilder.AddPostgres(context.ResourceName),
-    new ModuleContainerExportOptions(
+    new ModuleImageCommandOptions(
         imageName: "example/orders-postgres",
         publishCommand: "docker",
         publishArguments:
         [
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             "."
         ])
     {
@@ -312,14 +292,14 @@ Declare how each module image is built. `ExportAsContainer` publishes a project 
 
 ```csharp
 module.AddContainer("orders-static", "orders-static")
-    .WithImagePublishCommand(new ModuleContainerExportOptions(
+    .WithImagePublishCommand(new ModuleImageCommandOptions(
         imageName: "orders-static",
-        publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+        publishCommand: ModuleImageCommandOptions.ContainerRuntimePlaceholder,
         publishArguments:
         [
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             "."
         ]));
 ```
@@ -335,11 +315,11 @@ In run mode, an Aspire `OnBeforeResourceStarted` callback invokes the configured
 - The resource starts only after image preparation succeeds.
 - Explicit-start resources remain lazy; starting one prepares only that resource's image.
 
-`ImageRegistry` explicitly separates a registry host such as `ghcr.io` from an `ImageName` repository path such as `example/orders-api`. Leave it unset for local or otherwise unqualified images. Publish arguments can use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}` constants on `ModuleContainerExportOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
+`ImageRegistry` explicitly separates a registry host such as `ghcr.io` from an `ImageName` repository path such as `example/orders-api`. Leave it unset for local or otherwise unqualified images. Publish arguments can use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}` constants on `ModuleImageCommandOptions`. The effective image reference is also available to the command as `ASPIRE_MODULE_IMAGE`.
 
 ### Push module images
 
-In publish mode, every project, declared container, or factory-created container that has an image publisher contributes a `build-<resource>` step to Aspire's `build` pipeline. The step executes the effective `ModuleContainerExportOptions` command and arguments in its resolved build working directory with `ASPIRE_MODULE_IMAGE` set. `PullBeforeBuild` first attempts to reuse or pull a clean image, dirty repositories always build, and `ProducedImageReference` is retagged after a successful command. Failures and cancellation stop the pipeline.
+In publish mode, every project, declared container, or factory-created container that has an image publisher contributes a `build-<resource>` step to Aspire's `build` pipeline. The step executes the effective `ModuleImageCommandOptions` command and arguments in its resolved build working directory with `ASPIRE_MODULE_IMAGE` set. `PullBeforeBuild` first attempts to reuse or pull a clean image, dirty repositories always build, and `ProducedImageReference` is retagged after a successful command. Failures and cancellation stop the pipeline.
 
 Build every publisher, or invoke one of Aspire's generated resource steps directly:
 
@@ -350,19 +330,19 @@ aspire do build-orders-api
 
 Every registry-backed module image also contributes a `push-<resource>` step. That push depends on its matching build step, so `aspire do push` builds a missing image from the module-owned command before pushing it. This keeps the build command in the module contract and the workflow focused on orchestration. An explicit `ImageRegistry` pushes the effective image reference directly. A resource associated with `AddContainerRegistry` through `WithContainerRegistry` uses Aspire's registry-aware image manager instead. Authenticate the selected container runtime to the destination registry before invoking the step.
 
-After pushing the effective image, a clean publisher also tags and pushes the same image with its sanitized source branch (`feature/orders` becomes `feature-orders`). This branch alias is published even when configuration or `manifest publish --tag` selects a separate canonical tag, so a default-branch consumer can follow a stable name while workflow image manifests remain pinned to the exact canonical image. Detached AppHost checkouts use `GITHUB_HEAD_REF` and then `GITHUB_REF_NAME`. Dirty repositories and detached managed revisions never update a mutable alias. If the canonical remote tag already equals the branch alias, the duplicate tag and push are skipped.
+After pushing the effective image, a clean publisher also tags and pushes the same image with its sanitized source branch (`feature/orders` becomes `feature-orders`). This branch alias is published even when configuration or `images publish --tag` selects a separate canonical tag, so a default-branch consumer can follow a stable name while module image workflow documents remain pinned to the exact canonical image. Detached AppHost checkouts use `GITHUB_HEAD_REF` and then `GITHUB_REF_NAME`. Dirty repositories and detached managed revisions never update a mutable alias. If the canonical remote tag already equals the branch alias, the duplicate tag and push are skipped.
 
 Remote identity resolution uses one precedence order for describe, pull, and push: an explicit pull mapping (pull only), a per-resource `WithContainerRegistry`, the qualified registry declared by the module, and finally a deployment or default registry. Registries with an endpoint participate in remote pull and push. Empty-endpoint registries, such as the local registry supplied by a Docker Compose environment, preserve the module-owned registry host.
 
-Project exports retain the `ImageRegistry` from `ModuleContainerExportOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
+Project exports retain the `ImageRegistry` from `ModuleImageCommandOptions` when they are represented as containers. When the destination is an Aspire registry resource instead, configure that registry and any remote-image options on the existing container-export callback:
 
 ```csharp
 #pragma warning disable ASPIRECOMPUTE003, ASPIREPIPELINES003
 var registry = builder.AddContainerRegistry("ghcr", "ghcr.io", "example/orders");
 
 module.AddProject("orders-api", projectPath)
-    .ExportAsContainer(
-        new ModuleContainerExportOptions(
+    .ExportAsContainerWithCommand(
+        new ModuleImageCommandOptions(
             "orders-api",
             "dotnet",
             "publish",
@@ -382,7 +362,8 @@ aspire do push-orders-api
 ```
 
 The standard aggregates retain Aspire's normal application-wide semantics. For validated module,
-resource, and mixed multi-resource selection, use `modular-apphosts manifest publish --selector`;
+resource, and mixed multi-resource selection, use repeatable `modular-apphosts images publish --module`
+and `--resource` options;
 the tool owns that argument contract and configures the separate `workflow-images` aggregate without
 changing the application manifest or the standard `push` aggregate.
 
@@ -425,7 +406,7 @@ Image publishers are declared as recipes while the AppHost model is built. The r
 Build commands that choose their own output tag can set `ProducedImageReference`. After the build command succeeds, the selected Docker or Podman runtime retags the result to the source-specific canonical reference and then to the stable local `aspire-run` alias used by the container. The value can be a fixed reference or use the image placeholders:
 
 ```csharp
-new ModuleContainerExportOptions("example/orders-database", "pwsh", "./build-image.ps1")
+new ModuleImageCommandOptions("example/orders-database", "pwsh", "./build-image.ps1")
 {
     ImageRegistry = "ghcr.io",
     ProducedImageReference = "orders-database:production",
@@ -443,14 +424,14 @@ The repository that defines a resource and the repository that builds its image 
 
 ```csharp
 module.AddContainer("orders-database", "example/orders-database")
-    .WithImagePublishCommand(new ModuleContainerExportOptions(
+    .WithImagePublishCommand(new ModuleImageCommandOptions(
         imageName: "example/orders-database",
-        publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+        publishCommand: ModuleImageCommandOptions.ContainerRuntimePlaceholder,
         publishArguments:
         [
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             "."
         ])
     {
@@ -551,7 +532,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 `ProjectMode` is honored only in Aspire run mode. Its `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Image, command, build-repository, and build-revision settings can override an already-declared publisher, but configuration cannot introduce a publisher that is absent from the module contract.
 
-A complete external image identity—registry, repository name, and exactly one tag or digest with `PublishImage: false`—removes that resource's source dependency. When every source-backed publisher is overridden and the module has no project or repository-backed factory, the imported module remains checkout-free. `manifest apply` configures this mode for workflow images.
+A complete external image identity—registry, repository name, and exactly one tag or digest with `PublishImage: false`—removes that resource's source dependency. When every source-backed publisher is overridden and the module has no project or repository-backed factory, the imported module remains checkout-free. `images apply` configures this mode for workflow images.
 
 Configured module, project, and container names are validated against exported definitions. A typo fails synchronously with the missing name and available names. Missing initialized repositories, initialization state records, project files, and build directories are aggregated by normal-run preflight into one actionable error.
 

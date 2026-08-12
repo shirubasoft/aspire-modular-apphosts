@@ -183,6 +183,20 @@ public static partial class DistributedApplicationModuleExtensions
     {
         var projectOptions = moduleOptions?.FindProject(project.Name);
         ValidatePublisherDigest(project.Name, project.IsExportedAsContainer, projectOptions);
+        if (project.Export.CommandOptions is null && !UsesExternalImage(projectOptions))
+        {
+            MaterializeNativeProjectResource(
+                builder,
+                module,
+                project,
+                resourceName,
+                projectOptions,
+                definitionRepository.RepositoryPath,
+                imported,
+                registry);
+            return;
+        }
+
         var runAsContainer = !builder.ExecutionContext.IsRunMode ||
             ResolveProjectMode(options, moduleOptions, projectOptions, imported) == ModuleProjectMode.Container;
         if (!runAsContainer)
@@ -206,7 +220,7 @@ public static partial class DistributedApplicationModuleExtensions
                 module,
                 project.Name,
                 ModuleResourceKind.Project,
-                project.Export.Options,
+                project.Export.CommandOptions!,
                 projectOptions,
                 definitionRepository,
                 registry,
@@ -217,9 +231,11 @@ public static partial class DistributedApplicationModuleExtensions
         var container = builder
             .AddContainer(
                 resourceName,
-                publisher?.Recipe.Options.ImageName ?? GetConfiguredValue(projectOptions?.ImageName) ?? project.Export.Options.ImageName,
+                publisher?.Recipe.Options.ImageName ?? GetConfiguredValue(projectOptions?.ImageName) ?? project.Export.ImageName,
                 publisher is null
-                    ? GetConfiguredValue(projectOptions?.ImageTag) ?? GetConfiguredValue(project.Export.Options.ImageTag) ?? "latest"
+                    ? GetConfiguredValue(projectOptions?.ImageTag) ??
+                        GetConfiguredValue(project.Export.CommandOptions?.ImageTag) ??
+                        "latest"
                     : ModuleImageBuildRecipe.LocalRunTag)
             .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
                 module.Name,
@@ -383,7 +399,7 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         string declaredResourceName,
         ModuleResourceKind resourceKind,
-        ModuleContainerExportOptions declared,
+        ModuleImageCommandOptions declared,
         DistributedApplicationModuleImageOptions? configured,
         ModuleRepositoryContext definitionRepository,
         ModuleApplicationRegistry registry,
@@ -411,7 +427,7 @@ public static partial class DistributedApplicationModuleExtensions
         var workingDirectory = PathSafety.GetContainedPath(
             buildRepository.RepositoryPath,
             workingDirectoryRelativePath,
-            nameof(ModuleContainerExportOptions.WorkingDirectory));
+            nameof(ModuleImageCommandOptions.WorkingDirectory));
         registry.RequireDirectory(
             module.Name,
             $"image build directory for resource '{declaredResourceName}'",
@@ -430,20 +446,21 @@ public static partial class DistributedApplicationModuleExtensions
         var refresh = configured?.RefreshBuildRepositoryOnRun ??
             options.RefreshBuildRepositoriesOnRun;
         var recipe = new ModuleImageBuildRecipe(
-            module.Name,
-            declaredResourceName,
-            effectiveOptions,
-            buildRepository.RepositoryPath,
-            workingDirectory,
-            buildRepository.Repository,
-            buildRepository.Revision,
-            refresh,
-            GetConfiguredValue(options.GitExecutablePath) ?? "git",
-            GetConfiguredValue(options.GitHubCliPath) ?? "gh",
-            options.RepositoryCommandTimeout,
-            options.ImageBuildTimeout,
-            options.ImageTransferTimeout,
-            GetDetachedAppHostBranchAlias(builder, buildRepository));
+            new ModuleImageRecipeIdentity(module.Name, declaredResourceName),
+            new ModuleImageRepositorySettings(
+                buildRepository.RepositoryPath,
+                workingDirectory,
+                buildRepository.Repository,
+                buildRepository.Revision,
+                refresh,
+                GetConfiguredValue(options.GitExecutablePath) ?? "git",
+                GetConfiguredValue(options.GitHubCliPath) ?? "gh",
+                options.RepositoryCommandTimeout,
+                GetDetachedAppHostBranchAlias(builder, buildRepository)),
+            new ModuleImageCommandSettings(
+                effectiveOptions,
+                options.ImageBuildTimeout,
+                options.ImageTransferTimeout));
         return new ModuleImagePublisherAnnotation(resourceKind, recipe);
     }
 
@@ -516,8 +533,6 @@ public static partial class DistributedApplicationModuleExtensions
         {
             container.OnBeforeResourceStarted(async (resource, @event, cancellationToken) =>
             {
-                var loggerFactory = @event.Services.GetRequiredService<ILoggerFactory>();
-                var lifecycleLogger = loggerFactory.CreateLogger("Aspire.Hosting.ModuleImagePreparation");
                 var resourceLogger = @event.Services
                     .GetRequiredService<ResourceLoggerService>()
                     .GetLogger(resource);
@@ -525,7 +540,7 @@ public static partial class DistributedApplicationModuleExtensions
                 {
                     await publisher.PrepareAsync(
                         @event.Services,
-                        lifecycleLogger,
+                        resourceLogger,
                         resourceLogger,
                         cancellationToken).ConfigureAwait(false);
                 }
@@ -534,19 +549,10 @@ public static partial class DistributedApplicationModuleExtensions
                     !cancellationToken.IsCancellationRequested)
                 {
                     LogImagePreparationFailed(
-                        lifecycleLogger,
+                        resourceLogger,
                         publisher.ModuleName,
                         publisher.ResourceName,
                         exception);
-                    if (!ReferenceEquals(lifecycleLogger, resourceLogger))
-                    {
-                        LogImagePreparationFailed(
-                            resourceLogger,
-                            publisher.ModuleName,
-                            publisher.ResourceName,
-                            exception);
-                    }
-
                     throw;
                 }
             });
@@ -603,8 +609,83 @@ public static partial class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
 
-    private static ModuleContainerExportOptions ApplyImageRecipeOptions(
-        ModuleContainerExportOptions declared,
+    private static void MaterializeNativeProjectResource(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        DistributedApplicationModuleProject project,
+        string resourceName,
+        DistributedApplicationModuleProjectOptions? options,
+        string repositoryPath,
+        bool imported,
+        ModuleApplicationRegistry registry)
+    {
+        var projectPath = PathSafety.GetContainedPath(
+            repositoryPath,
+            project.GetRepositoryRelativeProjectPath(),
+            nameof(project.ProjectPath));
+        registry.RequireFile(module.Name, $"project '{project.Name}'", projectPath);
+        var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
+        var imageName = GetConfiguredValue(options?.ImageName) ?? project.Export.ImageName;
+        var imageTag = workflow.ResolveTag(module.Name, project.Name) ??
+            GetConfiguredValue(options?.ImageTag) ??
+            "latest";
+        var imageRegistry = GetConfiguredValue(options?.ImageRegistry);
+        var resource = builder
+            .AddProject(resourceName, projectPath, projectOptions =>
+            {
+                if (options?.LaunchProfileName is not null)
+                {
+                    projectOptions.LaunchProfileName = options.LaunchProfileName;
+                }
+
+                if (options?.ExcludeLaunchProfile is { } excludeLaunchProfile)
+                {
+                    projectOptions.ExcludeLaunchProfile = excludeLaunchProfile;
+                }
+
+                if (options?.ExcludeKestrelEndpoints is { } excludeKestrelEndpoints)
+                {
+                    projectOptions.ExcludeKestrelEndpoints = excludeKestrelEndpoints;
+                }
+            })
+            .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
+                module.Name,
+                project.Name,
+                repositoryPath,
+                imported,
+                module.PackageId))
+            .WithAnnotation(new ModuleNativeImagePublisherAnnotation(
+                ModuleResourceKind.Project,
+                imageRegistry,
+                imageName,
+                imageTag));
+        var contextImage = new ModuleResourceImage(imageRegistry, imageName, imageTag);
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            module,
+            resourceName,
+            repositoryPath,
+            imported,
+            contextImage);
+        project.ConfigureProject?.Invoke(context, resource);
+        resource.PublishAsDockerFile(container =>
+        {
+            container.WithImage(imageName, imageTag);
+            ApplyImageRegistry(container, imageRegistry);
+            ApplyImagePullPolicy(container, options?.ImagePullPolicy);
+            container.WithImagePushOptions(pushContext =>
+            {
+                pushContext.Options.RemoteImageName = imageName;
+                pushContext.Options.RemoteImageTag = imageTag;
+            });
+            project.Export.ConfigureContainer?.Invoke(context, container);
+        });
+        registry.TrackResource(resource.Resource);
+        module.TrackMaterializedResource(builder, project.Name, resource.Resource);
+    }
+
+    private static ModuleImageCommandOptions ApplyImageRecipeOptions(
+        ModuleImageCommandOptions declared,
         DistributedApplicationModuleImageOptions? configured,
         string? workflowTag)
     {
@@ -616,7 +697,7 @@ public static partial class DistributedApplicationModuleExtensions
         var publishArguments = configured?.PublishArguments?.ToArray() ?? declared.PublishArguments.ToArray();
         ArgumentException.ThrowIfNullOrWhiteSpace(imageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(publishCommand);
-        return new ModuleContainerExportOptions(imageName, publishCommand, publishArguments)
+        return new ModuleImageCommandOptions(imageName, publishCommand, publishArguments)
         {
             ImageRegistry = imageRegistry,
             ProducedImageReference = configured?.ProducedImageReference ?? declared.ProducedImageReference,
@@ -704,7 +785,7 @@ public static partial class DistributedApplicationModuleExtensions
             if (runAsProject ||
                 (!UsesExternalImage(configured) &&
                  GetConfiguredValue(configured?.BuildRepository) is null &&
-                 GetConfiguredValue(project.Export.Options.BuildRepository) is null))
+                 GetConfiguredValue(project.Export.CommandOptions?.BuildRepository) is null))
             {
                 return true;
             }

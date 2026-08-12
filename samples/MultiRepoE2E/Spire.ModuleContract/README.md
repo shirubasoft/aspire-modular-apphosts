@@ -9,7 +9,7 @@ When the AppHost constructs its model, the module binds `SpireModuleOptions` fro
 build repositories are required and the build revision is optional. Run the initialization command
 reported by preflight before starting a configuration that needs a managed checkout. Image preparation
 uses Aspire's selected Docker or Podman runtime immediately before the container starts. When a
-workflow image manifest supplies the complete external image identity, the isolated CI consumer proves
+module image workflow document supplies the complete external image identity, the isolated CI consumer proves
 that neither declared repository nor its managed checkout location is touched.
 
 Reference the package from an AppHost and import its typed module:

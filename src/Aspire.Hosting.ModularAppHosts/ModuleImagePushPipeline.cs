@@ -9,6 +9,7 @@ using Aspire.Hosting.Publishing;
 using CliWrap;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using System.Net;
 using CliCommand = global::CliWrap.Cli;
@@ -72,9 +73,35 @@ internal static class ModuleImagePushPipeline
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()
             ?? throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a module image publisher.");
+        var task = await context.ReportingStep.CreateTaskAsync(
+            $"Push image for {resource.Name}",
+            context.CancellationToken).ConfigureAwait(false);
+        await using var configuredTask = task.ConfigureAwait(false);
+        try
+        {
+            await PushCoreAsync(resource, context, resourceLogger, publisher).ConfigureAwait(false);
+            await task.SucceedAsync(
+                $"Pushed image for {resource.Name}",
+                context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await task.FailAsync(
+                ModuleCliOutputRedactor.Redact(exception.Message),
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task PushCoreAsync(
+        IResource resource,
+        PipelineStepContext context,
+        ILogger resourceLogger,
+        ModuleImagePublisherAnnotation publisher)
+    {
         var preparedImage = await publisher.PrepareAsync(
             context.Services,
-            context.Logger,
+            NullLogger.Instance,
             resourceLogger,
             context.CancellationToken).ConfigureAwait(false);
         if (preparedImage.SourceState.IsDirty)
@@ -132,7 +159,6 @@ internal static class ModuleImagePushPipeline
             .GetRequiredService<IContainerRuntimeResolver>()
             .ResolveAsync(context.CancellationToken).ConfigureAwait(false);
         LogBranchAlias(context.Logger, branchAlias, resource.Name, null);
-        LogBranchAlias(resourceLogger, branchAlias, resource.Name, null);
         await ModuleOperationTimeout.RunAsync(
             token => runtime.TagImageAsync(resolved.Reference, branchAlias, token),
             transferTimeout,

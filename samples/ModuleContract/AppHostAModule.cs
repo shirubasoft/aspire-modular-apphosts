@@ -48,25 +48,7 @@ public static partial class AppHostAModule
                         .WithHttpEndpoint(name: "http")
                         .WithHttpHealthCheck("/health");
                 })
-                .ExportAsContainer(
-                    new ModuleContainerExportOptions(
-                        imageName: "modular-sample-api",
-                        publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
-                        publishArguments:
-                        [
-                            "build",
-                            "--tag",
-                            ModuleContainerExportOptions.ImageReferencePlaceholder,
-                            "."
-                        ]),
-                    (context, container) =>
-                    {
-                        var message = context.GetResource<ParameterResource>(MessageResourceName);
-                        container
-                            .WithEnvironment("MODULE_MESSAGE", message)
-                            .WithHttpEndpoint(targetPort: 8080, name: "http")
-                            .WithHttpHealthCheck("/health");
-                    });
+                .ExportAsContainer("modular-sample-api");
 
             module.AddResource<ProjectResource>(ProjectResourceName, context =>
                 context.ApplicationBuilder
@@ -100,14 +82,14 @@ public static partial class AppHostAModule
                 });
 
             module.AddContainer(GeneratedStaticResourceName, "modular-sample-static")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     imageName: "modular-sample-static",
-                    publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                    publishCommand: ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                     publishArguments:
                     [
                         "build",
                         "--tag",
-                        ModuleContainerExportOptions.ImageReferencePlaceholder,
+                        ModuleImageCommandOptions.ImageReferencePlaceholder,
                         "."
                     ]))
                 .Configure((_, container) => container

@@ -10,8 +10,8 @@ public sealed class ModuleImageWorkflowConfigurationTests
     [Fact]
     public void Manifest_projects_to_standard_configuration_keys()
     {
-        var document = new ModuleImageManifestDocument();
-        document.Images.Add(new ModuleImageManifestEntry
+        var document = new ModuleImageWorkflowDocument();
+        document.Images.Add(new ModuleImageWorkflowEntry
         {
             Module = "orders",
             Resource = "api",
@@ -40,8 +40,8 @@ public sealed class ModuleImageWorkflowConfigurationTests
     [InlineData("orders=shadow")]
     public void Manifest_rejects_names_that_can_escape_identity_or_configuration_segments(string module)
     {
-        var document = new ModuleImageManifestDocument();
-        document.Images.Add(new ModuleImageManifestEntry
+        var document = new ModuleImageWorkflowDocument();
+        document.Images.Add(new ModuleImageWorkflowEntry
         {
             Module = module,
             Resource = "api",
@@ -57,7 +57,7 @@ public sealed class ModuleImageWorkflowConfigurationTests
     }
 
     [Fact]
-    public void Description_selection_uses_the_shared_module_resource_and_identity_grammar()
+    public void Description_selection_uses_explicit_module_and_resource_names()
     {
         var descriptions = new[]
         {
@@ -66,12 +66,12 @@ public sealed class ModuleImageWorkflowConfigurationTests
             CreateDescription("catalog", "api", "catalog-api")
         };
 
-        Assert.Equal(2, new ModuleImageSelection(["orders"])
+        Assert.Equal(2, new ModuleImageSelection(["orders"], [])
             .ResolveDescriptions(descriptions, "test images").Count);
-        Assert.Equal("catalog-api", Assert.Single(new ModuleImageSelection(["catalog/api"])
+        Assert.Equal("catalog-api", Assert.Single(new ModuleImageSelection([], ["catalog-api"])
             .ResolveDescriptions(descriptions, "test images")).EffectiveResource);
-        Assert.Throws<InvalidOperationException>(() => new ModuleImageSelection(["api"])
-            .ResolveDescriptions(descriptions, "test images"));
+        Assert.Equal(2, new ModuleImageSelection([], ["api"])
+            .ResolveDescriptions(descriptions, "test images").Count);
     }
 
     [Fact]
@@ -80,7 +80,8 @@ public sealed class ModuleImageWorkflowConfigurationTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [$"{ModuleImageWorkflowConfiguration.SelectionConfigurationSectionName}:0"] = "orders/api",
+                [$"{ModuleImageWorkflowConfiguration.ModuleSelectionConfigurationSectionName}:0"] = "orders",
+                [$"{ModuleImageWorkflowConfiguration.ResourceSelectionConfigurationSectionName}:0"] = "api",
                 [$"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:{ModuleImageWorkflowConfiguration.TagConfigurationName}"] =
                     "global",
                 [$"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:{ModuleImageWorkflowConfiguration.ResourceTagsConfigurationName}"] =

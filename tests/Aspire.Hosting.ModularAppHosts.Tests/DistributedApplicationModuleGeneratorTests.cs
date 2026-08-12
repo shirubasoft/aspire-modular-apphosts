@@ -32,7 +32,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
                     module.AddResource<ContainerResource>(
                         "database",
                         context => throw new System.NotSupportedException(),
-                        new ModuleContainerExportOptions("database", "dotnet", "publish"));
+                        new ModuleImageCommandOptions("database", "dotnet", "publish"));
                 }
             }
 

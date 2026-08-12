@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
 
-internal static class ModuleImageManifestPipeline
+internal static class ModuleImageWorkflowPipeline
 {
     internal const string StepName = "workflow-images";
 
@@ -25,7 +25,7 @@ internal static class ModuleImageManifestPipeline
         LoggerMessage.Define<string>(
             LogLevel.Information,
             new EventId(2, nameof(LogOutput)),
-            "Wrote the workflow image manifest to {Path}.");
+            "Wrote the module image workflow document to {Path}.");
 
     public static void Configure(IDistributedApplicationBuilder builder)
     {
@@ -43,6 +43,9 @@ internal static class ModuleImageManifestPipeline
             var pushSteps = context.Steps
                 .Where(step =>
                     step.Resource is not null &&
+                    step.Resource.Annotations
+                        .OfType<DistributedApplicationModuleResourceAnnotation>()
+                        .Any() &&
                     step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
                 .ToArray();
             var selectedResources = workflow.Selection.ResolveResources(
@@ -58,7 +61,7 @@ internal static class ModuleImageManifestPipeline
         });
     }
 
-    internal static async Task<ModuleImageManifestDocument> CreateDocumentAsync(
+    internal static async Task<ModuleImageWorkflowDocument> CreateDocumentAsync(
         IEnumerable<IResource> resources,
         ModuleImageSelection selection,
         CancellationToken cancellationToken)
@@ -71,10 +74,11 @@ internal static class ModuleImageManifestPipeline
                 Module: resource.Annotations
                     .OfType<DistributedApplicationModuleResourceAnnotation>()
                     .LastOrDefault(),
-                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()))
+                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault(),
+                NativePublisher: resource.Annotations.OfType<ModuleNativeImagePublisherAnnotation>().LastOrDefault()))
             .Where(item =>
                 item.Module is not null &&
-                item.Publisher is not null &&
+                (item.Publisher is not null || item.NativePublisher is not null) &&
                 ModuleEffectiveImageResolver.HasPushTarget(item.Resource))
             .OrderBy(item => item.Module!.ModuleName, StringComparer.Ordinal)
             .ThenBy(item => item.Module!.ResourceName, StringComparer.Ordinal)
@@ -83,23 +87,22 @@ internal static class ModuleImageManifestPipeline
             images.Select(item => item.Resource),
             "workflow image publishers");
 
-        var document = new ModuleImageManifestDocument();
+        var document = new ModuleImageWorkflowDocument();
         foreach (var item in images.Where(item => selectedResources.Contains(item.Resource)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var usePreparedPublisherImage = item.Publisher!
-                .TryGetPreparedImage(out _);
+            var usePreparedPublisherImage = item.Publisher?.TryGetPreparedImage(out _) == true;
             var effective = await ModuleEffectiveImageResolver.ResolveAsync(
                 item.Resource,
                 cancellationToken,
                 usePreparedPublisherImage: usePreparedPublisherImage).ConfigureAwait(false);
             var remote = effective.PushImage ?? throw new InvalidOperationException(
                 $"Resource '{item.Resource.Name}' does not resolve to a complete remote image identity.");
-            document.Images.Add(new ModuleImageManifestEntry
+            document.Images.Add(new ModuleImageWorkflowEntry
             {
                 Module = item.Module!.ModuleName,
                 Resource = item.Module.ResourceName,
-                ResourceKind = item.Publisher!.ResourceKind,
+                ResourceKind = item.Publisher?.ResourceKind ?? item.NativePublisher!.ResourceKind,
                 Registry = remote.Registry,
                 Repository = remote.Repository,
                 Tag = remote.Tag
@@ -125,7 +128,7 @@ internal static class ModuleImageManifestPipeline
         }
 
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
-        var path = Path.Combine(output, ModuleImageManifestDocument.DefaultFileName);
+        var path = Path.Combine(output, ModuleImageWorkflowDocument.DefaultFileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);
         foreach (var image in document.Images)
         {

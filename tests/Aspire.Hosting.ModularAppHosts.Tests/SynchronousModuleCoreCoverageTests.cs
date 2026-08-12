@@ -148,9 +148,9 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder.ExportModule("split", definition =>
             {
                 definition.AddProject("first", firstProject)
-                    .ExportAsContainer("first", "dotnet", ["publish"]);
+                    .ExportAsContainerWithCommand(new ModuleImageCommandOptions("first", "dotnet", "publish"));
                 definition.AddProject("second", secondProject)
-                    .ExportAsContainer("second", "dotnet", ["publish"]);
+                    .ExportAsContainerWithCommand(new ModuleImageCommandOptions("second", "dotnet", "publish"));
             }));
 
         Assert.Contains("same Git repository", exception.Message, StringComparison.Ordinal);
@@ -162,7 +162,7 @@ public sealed class SynchronousModuleCoreCoverageTests
         using var appHost = TemporaryDirectory.Create();
         var projectPath = CreateProject(appHost.Path, "Orders.Api");
         var builder = CreateBuilder(appHost.Path);
-        var declaredOptions = new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+        var declaredOptions = new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
         {
             ImageRegistry = "registry.example",
             ProducedImageReference = "orders-api:legacy",
@@ -181,21 +181,20 @@ public sealed class SynchronousModuleCoreCoverageTests
             var project = definition.AddProject("api", projectPath);
             Assert.Equal("api", project.Project.Name);
             Assert.Throws<ArgumentNullException>(() => project.ConfigureProject(null!));
-            Assert.Throws<ArgumentNullException>(() =>
-                project.ExportAsContainer("api", "dotnet", null!));
-            Assert.Throws<ArgumentNullException>(() => project.ExportAsContainer(null!));
-            project.ExportAsContainer(declaredOptions);
+            Assert.Throws<ArgumentNullException>(() => project.ExportAsContainerWithCommand(null!));
+            Assert.Throws<ArgumentException>(() => project.ExportAsContainer(" "));
+            project.ExportAsContainerWithCommand(declaredOptions);
 
             var container = definition.AddContainer("worker", "worker");
             Assert.Equal("worker", container.Container.Name);
             Assert.Throws<ArgumentNullException>(() => container.Configure(null!));
             Assert.Throws<ArgumentNullException>(() => container.WithImagePublishCommand(null!));
             Assert.Throws<ArgumentException>(() => container.WithImagePublishCommand(
-                new ModuleContainerExportOptions("different", "docker", "build")));
+                new ModuleImageCommandOptions("different", "docker", "build")));
 
             var published = definition.AddContainer("published", "published", "candidate");
             published.Configure((_, _) => { });
-            published.WithImagePublishCommand(new ModuleContainerExportOptions(
+            published.WithImagePublishCommand(new ModuleImageCommandOptions(
                 "published",
                 "docker",
                 "build")
@@ -203,7 +202,7 @@ public sealed class SynchronousModuleCoreCoverageTests
                 ImageTag = "candidate"
             });
             Assert.Throws<InvalidOperationException>(() => published.WithImagePublishCommand(
-                new ModuleContainerExportOptions("published", "docker", "build")
+                new ModuleImageCommandOptions("published", "docker", "build")
                 {
                     ImageTag = "candidate"
                 }));
@@ -211,9 +210,9 @@ public sealed class SynchronousModuleCoreCoverageTests
             var registryPublished = definition.AddContainer(
                 "registry-published",
                 "example/registry-published");
-            registryPublished.WithImagePublishCommand(new ModuleContainerExportOptions(
+            registryPublished.WithImagePublishCommand(new ModuleImageCommandOptions(
                 "example/registry-published",
-                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 "build")
             {
                 ImageRegistry = "registry.example"
@@ -221,7 +220,7 @@ public sealed class SynchronousModuleCoreCoverageTests
         });
 
         var typed = Assert.IsType<DistributedApplicationModule>(module);
-        var copiedOptions = Assert.Single(typed.ProjectDefinitions).Export.Options;
+        var copiedOptions = Assert.Single(typed.ProjectDefinitions).Export.CommandOptions!;
         Assert.NotSame(declaredOptions, copiedOptions);
         Assert.Equal(declaredOptions.ImageName, copiedOptions.ImageName);
         Assert.Equal(declaredOptions.ImageRegistry, copiedOptions.ImageRegistry);
@@ -361,7 +360,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "api",
-            new ModuleContainerExportOptions("api", "docker", "build"),
+            new ModuleImageCommandOptions("api", "docker", "build"),
             configured: null,
             definitionRepository,
             registry,
@@ -372,7 +371,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "same",
-            new ModuleContainerExportOptions("same", "docker", "build")
+            new ModuleImageCommandOptions("same", "docker", "build")
             {
                 BuildRepository = "."
             },
@@ -386,7 +385,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "local",
-            new ModuleContainerExportOptions("local", "docker", "build")
+            new ModuleImageCommandOptions("local", "docker", "build")
             {
                 BuildRepository = otherRepository.Path
             },
@@ -402,7 +401,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "configured",
-            new ModuleContainerExportOptions("configured", "docker", "build")
+            new ModuleImageCommandOptions("configured", "docker", "build")
             {
                 BuildRepository = "https://github.com/example/ignored.git"
             },
@@ -425,7 +424,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "remote",
-            new ModuleContainerExportOptions("remote", "docker", "build")
+            new ModuleImageCommandOptions("remote", "docker", "build")
             {
                 BuildRepository = "https://github.com/example/build-inputs.git"
             },
@@ -442,7 +441,7 @@ public sealed class SynchronousModuleCoreCoverageTests
             builder,
             module,
             "pinned-local",
-            new ModuleContainerExportOptions("pinned-local", "docker", "build")
+            new ModuleImageCommandOptions("pinned-local", "docker", "build")
             {
                 BuildRepository = otherRepository.Path,
                 BuildRepositoryRevision = "v1"

@@ -220,7 +220,7 @@ public static partial class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(options, builder.Configuration);
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
-        ModuleImageManifestPipeline.Configure(builder);
+        ModuleImageWorkflowPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(_ => Options.Create(registry.Options));
         var validationStep = new PipelineStep
@@ -302,7 +302,7 @@ public static partial class DistributedApplicationModuleExtensions
         return values.Length == 0 ? "(none)" : string.Join(", ", values.Select(name => $"'{name}'"));
     }
 
-    private static IEnumerable<(string ResourceName, ModuleContainerExportOptions Options)> GetContainerPublishers(
+    private static IEnumerable<(string ResourceName, ModuleImageCommandOptions Options)> GetContainerPublishers(
         DistributedApplicationModule module)
     {
         foreach (var container in module.ContainerDefinitions)

@@ -26,16 +26,16 @@ public static partial class SpireModule
 
         module.WithRepository(options.DefinitionRepository);
         module.AddContainer(ApiResourceName, ImageName)
-            .WithImagePublishCommand(new ModuleContainerExportOptions(
+            .WithImagePublishCommand(new ModuleImageCommandOptions(
                 imageName: ImageName,
-                publishCommand: ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                publishCommand: ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 publishArguments:
                 [
                     "build",
                     "--file",
                     "Dockerfile",
                     "--tag",
-                    ModuleContainerExportOptions.ImageReferencePlaceholder,
+                    ModuleImageCommandOptions.ImageReferencePlaceholder,
                     "."
                 ])
             {

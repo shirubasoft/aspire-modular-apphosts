@@ -46,7 +46,8 @@ public sealed class SafeMaterializationDefaultsTests
         {
             definition.WithRepository(source.Path);
             definition.AddProject("orders-api", projectPath)
-                .ExportAsContainer("example/orders-api", "dotnet", ["publish"]);
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("example/orders-api", "dotnet", "publish"));
         });
 
         builder.ImportModule(module.Name);
@@ -55,6 +56,24 @@ public sealed class SafeMaterializationDefaultsTests
         Assert.Empty(builder.Resources.OfType<ProjectResource>());
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+    }
+
+    [Fact]
+    public void Native_exports_remain_project_resources_and_use_Aspire_container_publishing()
+    {
+        using var source = TemporaryDirectory.Create();
+        var projectPath = CreateProject(source.Path);
+        var builder = CreateBuilder(source.Path);
+        var module = builder.ExportModule("orders", definition =>
+            definition.AddProject("orders-api", projectPath)
+                .ExportAsContainer("example/orders-api"));
+
+        builder.AddModule(module);
+
+        var project = Assert.Single(builder.Resources.OfType<ProjectResource>());
+        Assert.Empty(builder.Resources.OfType<ContainerResource>());
+        Assert.Single(project.Annotations.OfType<ModuleNativeImagePublisherAnnotation>());
+        Assert.Empty(project.Annotations.OfType<ModuleImagePublisherAnnotation>());
     }
 
     [Fact]
@@ -161,10 +180,11 @@ public sealed class SafeMaterializationDefaultsTests
     {
         return builder.ExportModule("orders", definition =>
             definition.AddProject("orders-api", projectPath)
-                .ExportAsContainer(
-                    $"module-defaults-{Guid.NewGuid():N}",
-                    "dotnet",
-                    ["publish"]));
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions(
+                        $"module-defaults-{Guid.NewGuid():N}",
+                        "dotnet",
+                        "publish")));
     }
 
     private static string CreateProject(string directory)

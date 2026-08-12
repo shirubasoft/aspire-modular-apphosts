@@ -14,13 +14,13 @@ public sealed class WorkflowDocumentationTests
             repositoryRoot,
             "docs",
             "examples",
-            ModuleImageManifestDocument.DefaultFileName);
+            ModuleImageWorkflowDocument.DefaultFileName);
 
-        var manifest = await ModuleImageManifestDocument.LoadAsync(
+        var manifest = await ModuleImageWorkflowDocument.LoadAsync(
             examplePath,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ModuleImageManifestDocument.CurrentSchemaVersion, manifest.SchemaVersion);
+        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, manifest.SchemaVersion);
         Assert.Equal(2, manifest.Images.Count);
     }
 
@@ -30,7 +30,7 @@ public sealed class WorkflowDocumentationTests
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
             "docs",
-            "module-image-manifest.schema.json");
+            "module-image-workflow.schema.json");
         await using var stream = File.OpenRead(schemaPath);
         using var schema = await JsonDocument.ParseAsync(
             stream,
@@ -41,7 +41,7 @@ public sealed class WorkflowDocumentationTests
             .GetProperty("schemaVersion")
             .GetProperty("const")
             .GetInt32();
-        Assert.Equal(ModuleImageManifestDocument.CurrentSchemaVersion, schemaVersion);
+        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, schemaVersion);
     }
 
     [Theory]
@@ -79,7 +79,7 @@ public sealed class WorkflowDocumentationTests
             TestContext.Current.CancellationToken);
         workflow = workflow.ReplaceLineEndings("\n");
 
-        var applyIndex = workflow.IndexOf("manifest apply", StringComparison.Ordinal);
+        var applyIndex = workflow.IndexOf("images apply", StringComparison.Ordinal);
         var commandBoundaryIndex = workflow.IndexOf("\n          --\n", StringComparison.Ordinal);
         var testIndex = workflow.IndexOf("dotnet test", StringComparison.Ordinal);
         Assert.True(applyIndex >= 0);
@@ -99,8 +99,8 @@ public sealed class WorkflowDocumentationTests
             readmePath,
             TestContext.Current.CancellationToken);
 
-        Assert.Contains("manifest apply", readme, StringComparison.Ordinal);
-        Assert.Contains("--file artifacts/manual-workflow-image-manifest.json", readme, StringComparison.Ordinal);
+        Assert.Contains("images apply", readme, StringComparison.Ordinal);
+        Assert.Contains("--file artifacts/manual-module-image-workflow.json", readme, StringComparison.Ordinal);
         Assert.Contains("dotnet test", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("GITHUB_ENV", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("export Aspire__", readme, StringComparison.Ordinal);

@@ -32,12 +32,12 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
             "image-push-declared",
             $"{registryEndpoint}/image-push/declared",
             ImageTag)
-        .WithImagePublishCommand(new ModuleContainerExportOptions(
+        .WithImagePublishCommand(new ModuleImageCommandOptions(
             "image-push/declared",
-            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,
@@ -56,13 +56,13 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
     definition.AddProject(
             ProjectResourceName,
             Path.Combine(builder.AppHostDirectory, "ExportedProject", "ImagePush.ExportedProject.csproj"))
-        .ExportAsContainer(
-            new ModuleContainerExportOptions(
+        .ExportAsContainerWithCommand(
+            new ModuleImageCommandOptions(
                 ProjectResourceName,
-                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 "build",
                 "--tag",
-                ModuleContainerExportOptions.ImageReferencePlaceholder,
+                ModuleImageCommandOptions.ImageReferencePlaceholder,
                 ".")
             {
                 ImageTag = ImageTag,
@@ -79,12 +79,12 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
         context => context.ApplicationBuilder
             .AddContainer(context.ResourceName, "placeholder")
             .WithExplicitStart(),
-        new ModuleContainerExportOptions(
+        new ModuleImageCommandOptions(
             "image-push/factory",
-            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,
@@ -102,12 +102,12 @@ var extraModule = builder.ExportModule("image-push-extra", definition =>
             "image-push-extra",
             $"{registryEndpoint}/image-push/extra",
             ImageTag)
-        .WithImagePublishCommand(new ModuleContainerExportOptions(
+        .WithImagePublishCommand(new ModuleImageCommandOptions(
             "image-push/extra",
-            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             "build",
             "--tag",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
             ".")
         {
             ImageRegistry = registryEndpoint,

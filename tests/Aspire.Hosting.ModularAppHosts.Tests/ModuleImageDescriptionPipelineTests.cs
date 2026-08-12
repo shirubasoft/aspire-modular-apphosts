@@ -61,13 +61,13 @@ public sealed class ModuleImageDescriptionPipelineTests
             {
                 definition.WithRepository(repository.Path);
                 definition.AddProject("project", projectPath)
-                    .ExportAsContainer(new ModuleContainerExportOptions("old/project", "build-project", "publish")
+                    .ExportAsContainerWithCommand(new ModuleImageCommandOptions("old/project", "build-project", "publish")
                     {
                         ImageRegistry = "old.example.test",
                         ImageTag = "old"
                     });
                 definition.AddContainer("declared", "old.example.test/old/declared", "old")
-                    .WithImagePublishCommand(new ModuleContainerExportOptions(
+                    .WithImagePublishCommand(new ModuleImageCommandOptions(
                         "old/declared",
                         "build-declared",
                         "publish")
@@ -78,7 +78,7 @@ public sealed class ModuleImageDescriptionPipelineTests
                 definition.AddResource<ContainerResource>(
                     "factory",
                     context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                    new ModuleContainerExportOptions("old/factory", "build-factory", "publish")
+                    new ModuleImageCommandOptions("old/factory", "build-factory", "publish")
                     {
                         ImageRegistry = "old.example.test",
                         ImageTag = "old"
@@ -128,25 +128,26 @@ public sealed class ModuleImageDescriptionPipelineTests
             Image = "acme/api",
             Tag = "candidate"
         });
-        var options = new ModuleContainerExportOptions("acme/api", "docker", "build")
+        var options = new ModuleImageCommandOptions("acme/api", "docker", "build")
         {
             ImageRegistry = "registry.example.test",
             ImageTag = "candidate"
         };
         var recipe = new ModuleImageBuildRecipe(
-            "orders",
-            "api",
-            options,
-            "/work",
-            "/work",
-            "https://example.test/orders.git",
-            "main",
-            refreshCleanCheckout: false,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity("orders", "api"),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                "https://example.test/orders.git",
+                "main",
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
         var sourceState = new ModuleImageSourceState(
             "main",
             "abcdef012345",
@@ -170,7 +171,7 @@ public sealed class ModuleImageDescriptionPipelineTests
 
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             [resource],
-            new ModuleImageSelection(["api"]),
+            new ModuleImageSelection([], ["api"]),
             TestContext.Current.CancellationToken);
 
         var image = Assert.Single(document.Images);
@@ -200,7 +201,7 @@ public sealed class ModuleImageDescriptionPipelineTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ModuleImageDescriptionPipeline.CreateDocumentAsync(
                 [resource],
-                new ModuleImageSelection(["missing-api"]),
+                new ModuleImageSelection([], ["missing-api"]),
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("missing-api", exception.Message, StringComparison.Ordinal);

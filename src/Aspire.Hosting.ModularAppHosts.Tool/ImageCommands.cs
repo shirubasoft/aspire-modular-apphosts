@@ -4,7 +4,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace Shirubasoft.Aspire.ModularAppHosts.Tool;
 
-internal sealed class ManifestCommandService(
+internal sealed class ImageCommandService(
     IProcessRunner processRunner,
     IConfiguration configuration,
     ICoreService githubActions,
@@ -32,11 +32,11 @@ internal sealed class ManifestCommandService(
         }
 
         var document = file is not null
-            ? await ModuleImageManifestDocument.LoadAsync(
+            ? await ModuleImageWorkflowDocument.LoadAsync(
                 Path.GetFullPath(file, workingDirectory),
                 cancellationToken).ConfigureAwait(false)
-            : ModuleImageManifestDocument.Parse(json!);
-        new ManifestTagOverrides(tag, resourceTags).Apply(document);
+            : ModuleImageWorkflowDocument.Parse(json!);
+        new ImageTagOverrides(tag, resourceTags).Apply(document);
         var environment = ModuleImageWorkflowConfiguration.Create(document)
             .ToDictionary(
                 pair => pair.Key.Replace(":", "__", StringComparison.Ordinal),
@@ -55,7 +55,8 @@ internal sealed class ManifestCommandService(
 
     public async Task<int> PublishAsync(
         string appHost,
-        string[] selectors,
+        string[] modules,
+        string[] resources,
         bool all,
         string? tag,
         string resourceTags,
@@ -66,7 +67,7 @@ internal sealed class ManifestCommandService(
         string? temporaryPath = null;
         try
         {
-            ValidatePublishArguments(appHost, selectors, all, aspirePath);
+            ValidatePublishArguments(appHost, modules, resources, all, aspirePath);
             var appHostPath = Path.GetFullPath(appHost, workingDirectory);
             if (!File.Exists(appHostPath) && !Directory.Exists(appHostPath))
             {
@@ -74,15 +75,23 @@ internal sealed class ManifestCommandService(
             }
 
             temporaryPath = Path.Combine(Path.GetTempPath(), $"modular-apphosts-{Guid.NewGuid():N}");
-            var manifestPath = Path.Combine(temporaryPath, "manifest");
-            var overrides = new ManifestTagOverrides(tag, resourceTags);
+            var workflowPath = Path.Combine(temporaryPath, "workflow");
+            var overrides = new ImageTagOverrides(tag, resourceTags);
             var producerEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            var selectionPrefix = ModuleImageWorkflowConfiguration
-                .SelectionConfigurationSectionName
+            var moduleSelectionPrefix = ModuleImageWorkflowConfiguration
+                .ModuleSelectionConfigurationSectionName
                 .Replace(":", "__", StringComparison.Ordinal);
-            for (var index = 0; index < selectors.Length; index++)
+            for (var index = 0; index < modules.Length; index++)
             {
-                producerEnvironment[$"{selectionPrefix}__{index}"] = selectors[index];
+                producerEnvironment[$"{moduleSelectionPrefix}__{index}"] = modules[index];
+            }
+
+            var resourceSelectionPrefix = ModuleImageWorkflowConfiguration
+                .ResourceSelectionConfigurationSectionName
+                .Replace(":", "__", StringComparison.Ordinal);
+            for (var index = 0; index < resources.Length; index++)
+            {
+                producerEnvironment[$"{resourceSelectionPrefix}__{index}"] = resources[index];
             }
 
             var workflowPrefix = ModuleImageWorkflowConfiguration.ConfigurationSectionName
@@ -103,7 +112,7 @@ internal sealed class ManifestCommandService(
                 aspirePath,
                 appHostPath,
                 "workflow-images",
-                manifestPath,
+                workflowPath,
                 producerEnvironment,
                 cancellationToken).ConfigureAwait(false);
             if (!publish.IsSuccess)
@@ -112,17 +121,17 @@ internal sealed class ManifestCommandService(
                     .ConfigureAwait(false);
             }
 
-            var document = await ModuleImageManifestDocument.LoadAsync(
-                Path.Combine(manifestPath, ModuleImageManifestDocument.DefaultFileName),
+            var document = await ModuleImageWorkflowDocument.LoadAsync(
+                Path.Combine(workflowPath, ModuleImageWorkflowDocument.DefaultFileName),
                 cancellationToken).ConfigureAwait(false);
             var destination = Path.GetFullPath(
-                outputPath ?? "module-image-manifest.json",
+                outputPath ?? "module-image-workflow.json",
                 workingDirectory);
             await document.SaveAsync(destination, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(configuration["GITHUB_OUTPUT"]))
             {
-                await githubActions.SetOutputAsync("manifest", document.ToJson()).ConfigureAwait(false);
-                await githubActions.SetOutputAsync("manifest-path", destination).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("workflow-document", document.ToJson()).ConfigureAwait(false);
+                await githubActions.SetOutputAsync("workflow-document-path", destination).ConfigureAwait(false);
             }
 
             await output.WriteLineAsync(destination).ConfigureAwait(false);
@@ -195,7 +204,8 @@ internal sealed class ManifestCommandService(
 
     private static void ValidatePublishArguments(
         string appHost,
-        string[] selectors,
+        string[] modules,
+        string[] resources,
         bool all,
         string aspirePath)
     {
@@ -209,9 +219,10 @@ internal sealed class ManifestCommandService(
             throw new ToolUsageException("--aspire-path cannot be empty.");
         }
 
-        if (all == (selectors.Length > 0))
+        if (all == (modules.Length > 0 || resources.Length > 0))
         {
-            throw new ToolUsageException("Specify one or more --selector values or --all, but not both.");
+            throw new ToolUsageException(
+                "Specify one or more --module/--resource values or --all, but not both.");
         }
     }
 }

@@ -5,6 +5,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aspire.Hosting;
 
@@ -58,10 +59,27 @@ internal static class ModuleImageBuildPipeline
         var resourceLogger = context.Services
             .GetRequiredService<ResourceLoggerService>()
             .GetLogger(resource);
-        await publisher.PrepareAsync(
-            context.Services,
-            context.Logger,
-            resourceLogger,
+        var task = await context.ReportingStep.CreateTaskAsync(
+            $"Prepare image for {resource.Name}",
             context.CancellationToken).ConfigureAwait(false);
+        await using var configuredTask = task.ConfigureAwait(false);
+        try
+        {
+            var prepared = await publisher.PrepareAsync(
+                context.Services,
+                NullLogger.Instance,
+                resourceLogger,
+                context.CancellationToken).ConfigureAwait(false);
+            await task.SucceedAsync(
+                $"Prepared {prepared.CanonicalImageReference}",
+                context.CancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            await task.FailAsync(
+                ModuleCliOutputRedactor.Redact(exception.Message),
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 }

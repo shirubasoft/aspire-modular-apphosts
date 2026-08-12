@@ -125,7 +125,7 @@ public abstract class DistributedApplicationModuleImageOptions
 
     /// <summary>
     /// Gets or sets the Git repository containing this resource's image build inputs. This overrides the repository
-    /// declared by <see cref="ModuleContainerExportOptions.BuildRepository"/>.
+    /// declared by <see cref="ModuleImageCommandOptions.BuildRepository"/>.
     /// </summary>
     public string? BuildRepository { get; set; }
 

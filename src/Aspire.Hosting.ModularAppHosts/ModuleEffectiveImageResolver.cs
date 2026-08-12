@@ -5,9 +5,16 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
+
+internal sealed record ModuleNativeImagePublisherAnnotation(
+    ModuleResourceKind ResourceKind,
+    string? Registry,
+    string ImageName,
+    string ImageTag) : IResourceAnnotation;
 
 internal sealed class ModuleImagePublisherAnnotation(
     ModuleResourceKind resourceKind,
@@ -40,7 +47,7 @@ internal sealed class ModuleImagePublisherAnnotation(
 
     public ModuleImageBuildRecipe Recipe { get; } = recipe;
 
-    public ModuleContainerExportOptions Options => Recipe.Options;
+    public ModuleImageCommandOptions Options => Recipe.Options;
 
     public string WorkingDirectory => Recipe.WorkingDirectory;
 
@@ -58,6 +65,25 @@ internal sealed class ModuleImagePublisherAnnotation(
         ArgumentNullException.ThrowIfNull(lifecycleLogger);
         ArgumentNullException.ThrowIfNull(resourceLogger);
 
+        cancellationToken.ThrowIfCancellationRequested();
+        var operationToken = services.GetService<IHostApplicationLifetime>()?.ApplicationStopping ??
+            CancellationToken.None;
+        return PrepareAndWaitAsync(
+            services,
+            lifecycleLogger,
+            resourceLogger,
+            operationToken,
+            cancellationToken);
+    }
+
+    private Task<ModulePreparedImage> PrepareAndWaitAsync(
+        IServiceProvider services,
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        CancellationToken operationToken,
+        CancellationToken callerToken)
+    {
+        Task<ModulePreparedImage> sharedTask;
         lock (_preparationLock)
         {
             if (_preparationTask is null)
@@ -66,18 +92,22 @@ internal sealed class ModuleImagePublisherAnnotation(
                     services,
                     lifecycleLogger,
                     resourceLogger,
-                    cancellationToken);
+                    operationToken);
                 _preparationTask = preparationTask;
+                sharedTask = preparationTask;
                 _ = preparationTask.ContinueWith(
                     completed => ClearFailedPreparation(completed),
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
-                return preparationTask;
             }
-
-            return _preparationTask;
+            else
+            {
+                sharedTask = _preparationTask;
+            }
         }
+
+        return sharedTask.WaitAsync(callerToken);
     }
 
     internal Task<ModulePreparedImage> PrepareAsync(
@@ -85,16 +115,20 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(lifecycleLogger);
+        ArgumentNullException.ThrowIfNull(resourceLogger);
         if (_prepareAsync is null)
         {
             throw new InvalidOperationException(
                 "Aspire application services are required to prepare a module image with the default runtime operations.");
         }
 
-        return PrepareAsync(
+        cancellationToken.ThrowIfCancellationRequested();
+        return PrepareAndWaitAsync(
             EmptyServiceProvider.Instance,
             lifecycleLogger,
             resourceLogger,
+            CancellationToken.None,
             cancellationToken);
     }
 

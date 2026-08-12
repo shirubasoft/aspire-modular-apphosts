@@ -39,7 +39,7 @@ The package contract suite packs the core library, testing library, workflow too
 - `src/Aspire.Hosting.ModularAppHosts`: core module APIs.
 - `src/Aspire.Hosting.ModularAppHosts.Generators`: source generator packaged with the core library.
 - `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
-- `src/Aspire.Hosting.ModularAppHosts.Tool`: workflow image manifest publication/application and cross-repository dispatch CLI.
+- `src/Aspire.Hosting.ModularAppHosts.Tool`: module image workflow document publication/application and cross-repository dispatch CLI.
 - `tests`: unit, lifecycle, generator, and package contract tests.
 - `samples`: runnable modular AppHost and E2E examples.
 - `templates`: the packaged `dotnet new` item template for the first module contract.

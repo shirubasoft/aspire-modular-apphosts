@@ -22,7 +22,7 @@ public sealed class ModuleImagePullPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
@@ -53,7 +53,7 @@ public sealed class ModuleImagePullPipelineTests
                     "declared-static",
                     "registry.example.test/assets/declared-static",
                     "candidate")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "assets/declared-static",
                     "docker",
                     "build")
@@ -64,7 +64,7 @@ public sealed class ModuleImagePullPipelineTests
             definition.AddResource<ContainerResource>(
                 "factory-static",
                 context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                new ModuleContainerExportOptions("assets/factory-static", "docker", "build")
+                new ModuleImageCommandOptions("assets/factory-static", "docker", "build")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
@@ -95,8 +95,8 @@ public sealed class ModuleImagePullPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(
-                    new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                     {
                         ImageTag = "local"
                     },
@@ -126,7 +126,7 @@ public sealed class ModuleImagePullPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer("database", "registry.example.test/owner/database", "candidate")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "owner/database",
                     "docker",
                     "build")
@@ -402,7 +402,7 @@ public sealed class ModuleImagePullPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddContainer("postgres", "owner/database", "ci")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "owner/database",
                     "docker",
                     "build")

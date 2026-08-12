@@ -23,7 +23,7 @@ internal static class ModuleImageReference
             : (null, repository);
     }
 
-    public static string GetRepository(ModuleContainerExportOptions options)
+    public static string GetRepository(ModuleImageCommandOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         return string.IsNullOrWhiteSpace(options.ImageRegistry)
@@ -135,11 +135,10 @@ internal static class ModuleImageTag
 
 internal static class ContainerImageInspector
 {
-    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(5);
-
     public static async Task<bool> ExistsAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(containerRuntime);
@@ -148,6 +147,8 @@ internal static class ContainerImageInspector
         return await RunAsync(
             containerRuntime,
             ["image", "inspect", imageReference],
+            timeout,
+            $"Container image inspection '{imageReference}'",
             cancellationToken).ConfigureAwait(false) == 0;
     }
 
@@ -204,28 +205,30 @@ internal static class ContainerImageInspector
     private static async Task<int?> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
+        TimeSpan timeout,
+        string operation,
         CancellationToken cancellationToken)
     {
         try
         {
-            using var timeout = new CancellationTokenSource(CommandTimeout);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                timeout.Token);
-            var result = await CliCommand.Wrap(executable)
-                .WithArguments(arguments)
-                .WithValidation(CommandResultValidation.None)
-                .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
-                .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
-                .ExecuteAsync(linked.Token)
-                .ConfigureAwait(false);
+            var result = await ModuleOperationTimeout.RunAsync(
+                async token => await CliCommand.Wrap(executable)
+                        .WithArguments(arguments)
+                        .WithValidation(CommandResultValidation.None)
+                        .WithStandardOutputPipe(PipeTarget.ToStream(Stream.Null))
+                        .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
+                        .ExecuteAsync(token)
+                        .ConfigureAwait(false),
+                timeout,
+                operation,
+                cancellationToken).ConfigureAwait(false);
             return result.ExitCode;
         }
         catch (Exception exception) when (
             exception is InvalidOperationException
                 or System.ComponentModel.Win32Exception
                 or IOException
-                || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+                or TimeoutException)
         {
             return null;
         }

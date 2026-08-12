@@ -154,7 +154,7 @@ public sealed class ModuleImageDeferredCoverageTests
             "registry",
             "registry.example.test",
             "team");
-        var options = new ModuleContainerExportOptions("acme/api", "dotnet", "--version");
+        var options = new ModuleImageCommandOptions("acme/api", "dotnet", "--version");
         var recipe = CreateRecipe(options);
         var resource = builder
             .AddContainer("api", options.ImageName, ModuleImageBuildRecipe.LocalRunTag)
@@ -243,7 +243,7 @@ public sealed class ModuleImageDeferredCoverageTests
             NullLogger.Instance,
             TestContext.Current.CancellationToken);
 
-        var document = await ModuleImageManifestPipeline.CreateDocumentAsync(
+        var document = await ModuleImageWorkflowPipeline.CreateDocumentAsync(
             [resource],
             ModuleImageSelection.All,
             TestContext.Current.CancellationToken);
@@ -393,7 +393,7 @@ public sealed class ModuleImageDeferredCoverageTests
     {
         using var workingDirectory = TemporaryDirectory.Create();
         var recipe = CreateRecipe(
-            options: new ModuleContainerExportOptions("acme/api", "dotnet", "--version"),
+            options: new ModuleImageCommandOptions("acme/api", "dotnet", "--version"),
             repositoryPath: workingDirectory.Path,
             workingDirectory: workingDirectory.Path);
         var plan = new ModuleImageExecutionPlan(
@@ -417,9 +417,9 @@ public sealed class ModuleImageDeferredCoverageTests
     {
         using var workingDirectory = TemporaryDirectory.Create();
         var recipe = CreateRecipe(
-            options: new ModuleContainerExportOptions(
+            options: new ModuleImageCommandOptions(
                 "acme/api",
-                ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+                ModuleImageCommandOptions.ContainerRuntimePlaceholder,
                 "--version"),
             repositoryPath: workingDirectory.Path,
             workingDirectory: workingDirectory.Path);
@@ -444,7 +444,7 @@ public sealed class ModuleImageDeferredCoverageTests
     {
         using var workingDirectory = TemporaryDirectory.Create();
         var recipe = CreateRecipe(
-            options: new ModuleContainerExportOptions("acme/api", "dotnet", "missing-coverage-command"),
+            options: new ModuleImageCommandOptions("acme/api", "dotnet", "missing-coverage-command"),
             repositoryPath: workingDirectory.Path,
             workingDirectory: workingDirectory.Path);
         var invalidBuild = new ModuleImageExecutionPlan(
@@ -476,21 +476,22 @@ public sealed class ModuleImageDeferredCoverageTests
     public async Task Default_build_operation_converts_its_own_timeout_to_a_clear_error()
     {
         using var workingDirectory = TemporaryDirectory.Create();
-        var options = new ModuleContainerExportOptions("acme/api", "dotnet", "--info");
+        var options = new ModuleImageCommandOptions("acme/api", "dotnet", "--info");
         var recipe = new ModuleImageBuildRecipe(
-            "coverage",
-            "api",
-            options,
-            workingDirectory.Path,
-            workingDirectory.Path,
-            repository: null,
-            revision: null,
-            refreshCleanCheckout: false,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromTicks(1),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity("coverage", "api"),
+            new ModuleImageRepositorySettings(
+                workingDirectory.Path,
+                workingDirectory.Path,
+                Repository: null,
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromTicks(1),
+                TimeSpan.FromMinutes(10)));
         var plan = new ModuleImageExecutionPlan(
             "acme/api:test",
             ProducedImageReference: null,
@@ -536,7 +537,7 @@ public sealed class ModuleImageDeferredCoverageTests
             "registry",
             "registry.example.test",
             "team");
-        var recipe = CreateRecipe(new ModuleContainerExportOptions("acme/api", "dotnet", "--version"));
+        var recipe = CreateRecipe(new ModuleImageCommandOptions("acme/api", "dotnet", "--version"));
         var cleanDetachedSource = CleanSource with { Branch = null };
         var executionPlan = ModuleImageExecutionPlan.Create(recipe, cleanDetachedSource);
         var prepared = new ModulePreparedImage(
@@ -593,7 +594,7 @@ public sealed class ModuleImageDeferredCoverageTests
             "registry",
             "registry.example.test",
             "team");
-        var recipe = CreateRecipe(new ModuleContainerExportOptions("acme/api", "dotnet", "--version"));
+        var recipe = CreateRecipe(new ModuleImageCommandOptions("acme/api", "dotnet", "--version"));
         var dirtySource = CleanSource with { IsDirty = true, StatusFingerprint = "DIRTY" };
         var executionPlan = ModuleImageExecutionPlan.Create(recipe, dirtySource);
         var publisher = CreatePublisher(
@@ -673,7 +674,7 @@ public sealed class ModuleImageDeferredCoverageTests
     public async Task Push_step_reports_missing_remote_target_after_step_creation()
     {
         var builder = DistributedApplication.CreateBuilder();
-        var options = new ModuleContainerExportOptions("acme/api", "dotnet", "--version");
+        var options = new ModuleImageCommandOptions("acme/api", "dotnet", "--version");
         var recipe = CreateRecipe(options);
         var resource = builder
             .AddContainer("api", options.ImageName, ModuleImageBuildRecipe.LocalRunTag)
@@ -734,14 +735,14 @@ public sealed class ModuleImageDeferredCoverageTests
             TestContext.Current.CancellationToken);
         builder.Services.AddSingleton<IPipelineOutputService>(new FixedPipelineOutputService(output.Path));
         var pipeline = new CapturingPipeline();
-        ModuleImageManifestPipeline.Configure(new PipelineCapturingBuilder(builder, pipeline));
+        ModuleImageWorkflowPipeline.Configure(new PipelineCapturingBuilder(builder, pipeline));
         var step = Assert.Single(pipeline.Steps);
 
         await using var application = builder.Build();
         await ExecutePipelineStepAsync(application, step);
 
-        var path = Path.Combine(output.Path, ModuleImageManifestDocument.DefaultFileName);
-        var manifest = await ModuleImageManifestDocument.LoadAsync(
+        var path = Path.Combine(output.Path, ModuleImageWorkflowDocument.DefaultFileName);
+        var manifest = await ModuleImageWorkflowDocument.LoadAsync(
             path,
             TestContext.Current.CancellationToken);
         var image = Assert.Single(manifest.Images);
@@ -763,6 +764,7 @@ public sealed class ModuleImageDeferredCoverageTests
         var exists = await ContainerImageInspector.ExistsAsync(
             "docker",
             "acme/api:test",
+            TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken);
         var pulled = await ContainerImageInspector.PullAsync(
             "docker",
@@ -831,6 +833,7 @@ public sealed class ModuleImageDeferredCoverageTests
             ContainerImageInspector.ExistsAsync(
                 "docker",
                 " ",
+                TimeSpan.FromSeconds(30),
                 TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() =>
             ContainerImageInspector.PullAsync(
@@ -841,38 +844,39 @@ public sealed class ModuleImageDeferredCoverageTests
                 TestContext.Current.CancellationToken));
     }
 
-    private static ModuleContainerExportOptions CreateOptions() =>
+    private static ModuleImageCommandOptions CreateOptions() =>
         new(
             "acme/api",
             "dotnet",
             "publish",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
-            ModuleContainerExportOptions.ImageRepositoryPlaceholder,
-            ModuleContainerExportOptions.ImageTagPlaceholder)
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageRepositoryPlaceholder,
+            ModuleImageCommandOptions.ImageTagPlaceholder)
         {
             ImageRegistry = "registry.example.test"
         };
 
     private static ModuleImageBuildRecipe CreateRecipe(
-        ModuleContainerExportOptions? options = null,
+        ModuleImageCommandOptions? options = null,
         bool refreshCleanCheckout = false,
         string repositoryPath = "/work/coverage",
         string workingDirectory = "/work/coverage",
         string? repository = "https://example.test/acme/coverage.git") =>
         new(
-            "coverage",
-            "api",
-            options ?? CreateOptions(),
-            repositoryPath,
-            workingDirectory,
-            repository,
-            revision: null,
-            refreshCleanCheckout,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity("coverage", "api"),
+            new ModuleImageRepositorySettings(
+                repositoryPath,
+                workingDirectory,
+                repository,
+                Revision: null,
+                refreshCleanCheckout,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options ?? CreateOptions(),
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
 
     private static ModuleImagePublisherAnnotation CreatePublisher(
         ModuleImageBuildRecipe recipe,
@@ -1016,6 +1020,7 @@ public sealed class ModuleImageDeferredCoverageTests
         public Task<bool> ImageExistsAsync(
             string containerRuntime,
             string imageReference,
+            TimeSpan timeout,
             CancellationToken cancellationToken)
         {
             ImageExistsCount++;

@@ -10,55 +10,67 @@ using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting;
 
+internal sealed record ModuleImageRecipeIdentity(
+    string ModuleName,
+    string ResourceName);
+
+internal sealed record ModuleImageRepositorySettings(
+    string RepositoryPath,
+    string WorkingDirectory,
+    string? Repository,
+    string? Revision,
+    bool RefreshCleanCheckout,
+    string GitExecutablePath,
+    string GitHubCliPath,
+    TimeSpan CommandTimeout,
+    string? DetachedBranchAlias = null);
+
+internal sealed record ModuleImageCommandSettings(
+    ModuleImageCommandOptions Options,
+    TimeSpan BuildTimeout,
+    TimeSpan TransferTimeout);
+
 internal sealed class ModuleImageBuildRecipe
 {
     internal const string LocalRunTag = "aspire-run";
 
     public ModuleImageBuildRecipe(
-        string moduleName,
-        string resourceName,
-        ModuleContainerExportOptions options,
-        string repositoryPath,
-        string workingDirectory,
-        string? repository,
-        string? revision,
-        bool refreshCleanCheckout,
-        string gitExecutablePath,
-        string githubCliPath,
-        TimeSpan repositoryCommandTimeout,
-        TimeSpan imageBuildTimeout,
-        TimeSpan imageTransferTimeout,
-        string? detachedBranchAlias = null)
+        ModuleImageRecipeIdentity identity,
+        ModuleImageRepositorySettings repository,
+        ModuleImageCommandSettings command)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.ImageName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.PublishCommand);
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(gitExecutablePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(githubCliPath);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(repositoryCommandTimeout, TimeSpan.Zero);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(imageBuildTimeout, TimeSpan.Zero);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(imageTransferTimeout, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.ModuleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.ResourceName);
+        ArgumentNullException.ThrowIfNull(command.Options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Options.ImageName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Options.PublishCommand);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository.RepositoryPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository.WorkingDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository.GitExecutablePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository.GitHubCliPath);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(repository.CommandTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(command.BuildTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(command.TransferTimeout, TimeSpan.Zero);
 
-        ModuleName = moduleName;
-        ResourceName = resourceName;
-        Options = DistributedApplicationModuleProjectBuilder.CopyOptions(options);
-        RepositoryPath = Path.GetFullPath(repositoryPath);
-        WorkingDirectory = Path.GetFullPath(workingDirectory);
-        Repository = string.IsNullOrWhiteSpace(repository) ? null : repository.Trim();
-        Revision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
-        RefreshCleanCheckout = refreshCleanCheckout;
-        GitExecutablePath = gitExecutablePath;
-        GitHubCliPath = githubCliPath;
-        RepositoryCommandTimeout = repositoryCommandTimeout;
-        ImageBuildTimeout = imageBuildTimeout;
-        ImageTransferTimeout = imageTransferTimeout;
-        DetachedBranchAlias = string.IsNullOrWhiteSpace(detachedBranchAlias)
+        ModuleName = identity.ModuleName;
+        ResourceName = identity.ResourceName;
+        Options = DistributedApplicationModuleProjectBuilder.CopyOptions(command.Options);
+        RepositoryPath = Path.GetFullPath(repository.RepositoryPath);
+        WorkingDirectory = Path.GetFullPath(repository.WorkingDirectory);
+        Repository = string.IsNullOrWhiteSpace(repository.Repository) ? null : repository.Repository.Trim();
+        Revision = string.IsNullOrWhiteSpace(repository.Revision) ? null : repository.Revision.Trim();
+        RefreshCleanCheckout = repository.RefreshCleanCheckout;
+        GitExecutablePath = repository.GitExecutablePath;
+        GitHubCliPath = repository.GitHubCliPath;
+        RepositoryCommandTimeout = repository.CommandTimeout;
+        ImageBuildTimeout = command.BuildTimeout;
+        ImageTransferTimeout = command.TransferTimeout;
+        DetachedBranchAlias = string.IsNullOrWhiteSpace(repository.DetachedBranchAlias)
             ? null
-            : detachedBranchAlias.Trim();
+            : repository.DetachedBranchAlias.Trim();
 
         var imageRepository = ModuleImageReference.GetRepository(Options);
         LocalImageReference = $"{imageRepository}:{LocalRunTag}";
@@ -68,7 +80,7 @@ internal sealed class ModuleImageBuildRecipe
 
     public string ResourceName { get; }
 
-    public ModuleContainerExportOptions Options { get; }
+    public ModuleImageCommandOptions Options { get; }
 
     public string RepositoryPath { get; }
 
@@ -164,18 +176,18 @@ internal sealed record ModuleImageExecutionPlan(
 
     private static string ResolveValue(
         string value,
-        ModuleContainerExportOptions options,
+        ModuleImageCommandOptions options,
         string imageRepository,
         string imageTag,
         string canonicalImageReference)
     {
         ArgumentNullException.ThrowIfNull(value);
         return value
-            .Replace(ModuleContainerExportOptions.ImageReferencePlaceholder, canonicalImageReference, StringComparison.Ordinal)
-            .Replace(ModuleContainerExportOptions.ImageRepositoryPlaceholder, imageRepository, StringComparison.Ordinal)
-            .Replace(ModuleContainerExportOptions.ImageRegistryPlaceholder, options.ImageRegistry ?? string.Empty, StringComparison.Ordinal)
-            .Replace(ModuleContainerExportOptions.ImageNamePlaceholder, options.ImageName, StringComparison.Ordinal)
-            .Replace(ModuleContainerExportOptions.ImageTagPlaceholder, imageTag, StringComparison.Ordinal);
+            .Replace(ModuleImageCommandOptions.ImageReferencePlaceholder, canonicalImageReference, StringComparison.Ordinal)
+            .Replace(ModuleImageCommandOptions.ImageRepositoryPlaceholder, imageRepository, StringComparison.Ordinal)
+            .Replace(ModuleImageCommandOptions.ImageRegistryPlaceholder, options.ImageRegistry ?? string.Empty, StringComparison.Ordinal)
+            .Replace(ModuleImageCommandOptions.ImageNamePlaceholder, options.ImageName, StringComparison.Ordinal)
+            .Replace(ModuleImageCommandOptions.ImageTagPlaceholder, imageTag, StringComparison.Ordinal);
     }
 }
 
@@ -199,6 +211,7 @@ internal interface IModuleImageRecipeOperations
     Task<bool> ImageExistsAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         CancellationToken cancellationToken);
 
     Task<bool> PullImageAsync(
@@ -372,6 +385,7 @@ internal static class ModuleImageRecipeEvaluator
         else if (await operations.ImageExistsAsync(
                 containerRuntime,
                 plan.CanonicalImageReference,
+                recipe.ImageTransferTimeout,
                 cancellationToken).ConfigureAwait(false))
         {
             LogBoth(
@@ -636,10 +650,6 @@ internal static class ModuleImageRecipeEvaluator
         Action<ILogger> log)
     {
         log(lifecycleLogger);
-        if (!ReferenceEquals(lifecycleLogger, resourceLogger))
-        {
-            log(resourceLogger);
-        }
     }
 
     private static string GetDispositionName(ModuleImagePreparationDisposition disposition) =>
@@ -750,8 +760,9 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
     public Task<bool> ImageExistsAsync(
         string containerRuntime,
         string imageReference,
+        TimeSpan timeout,
         CancellationToken cancellationToken) =>
-        ContainerImageInspector.ExistsAsync(containerRuntime, imageReference, cancellationToken);
+        ContainerImageInspector.ExistsAsync(containerRuntime, imageReference, timeout, cancellationToken);
 
     public Task<bool> PullImageAsync(
         string containerRuntime,
@@ -997,7 +1008,7 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
 
     private static string ResolveContainerRuntimePlaceholder(string value, string containerRuntime) =>
         value.Replace(
-            ModuleContainerExportOptions.ContainerRuntimePlaceholder,
+            ModuleImageCommandOptions.ContainerRuntimePlaceholder,
             containerRuntime,
             StringComparison.Ordinal);
 }

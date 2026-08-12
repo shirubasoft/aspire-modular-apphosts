@@ -79,7 +79,7 @@ public sealed class SynchronousModuleMaterializationTests
         {
             definition.WithRepository("https://example.test/acme/orders.git");
             definition.AddContainer("orders-api", "orders-api")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "orders-api",
                     "publisher-that-must-not-run",
                     "build"));
@@ -134,10 +134,10 @@ public sealed class SynchronousModuleMaterializationTests
         {
             definition.WithRepository(appHost.Path);
             definition.AddContainer("orders-api", "orders-api")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "orders-api",
-                    ModuleContainerExportOptions.ContainerRuntimePlaceholder,
-                    ModuleContainerExportOptions.ImageReferencePlaceholder));
+                    ModuleImageCommandOptions.ContainerRuntimePlaceholder,
+                    ModuleImageCommandOptions.ImageReferencePlaceholder));
         });
 
         builder.AddModule(module);
@@ -148,7 +148,7 @@ public sealed class SynchronousModuleMaterializationTests
         var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
         Assert.False(publisher.TryGetPreparedImage(out _));
         Assert.Equal("orders-api:aspire-run", publisher.Recipe.LocalImageReference);
-        Assert.Equal(ModuleContainerExportOptions.ContainerRuntimePlaceholder, publisher.Options.PublishCommand);
+        Assert.Equal(ModuleImageCommandOptions.ContainerRuntimePlaceholder, publisher.Options.PublishCommand);
         Assert.Single(builder.Resources);
     }
 
@@ -166,7 +166,7 @@ public sealed class SynchronousModuleMaterializationTests
         {
             definition.WithRepository(appHost.Path);
             definition.AddProject("orders-api", projectPath)
-                .ExportAsContainer(new ModuleContainerExportOptions(
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions(
                     "orders-api",
                     "dotnet",
                     "publish"));
@@ -197,7 +197,7 @@ public sealed class SynchronousModuleMaterializationTests
         {
             definition.WithRepository(appHost.Path);
             definition.AddProject("orders-api", projectPath)
-                .ExportAsContainer(new ModuleContainerExportOptions(
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions(
                     "orders-api",
                     "dotnet",
                     "publish"));
@@ -227,7 +227,7 @@ public sealed class SynchronousModuleMaterializationTests
         {
             definition.WithRepository(appHost.Path);
             definition.AddProject("project", projectPath)
-                .ExportAsContainer(
+                .ExportAsContainerWithCommand(
                     Publisher("project"),
                     (_, container) => OverrideImage(container));
             definition.AddContainer("declared", "acme/declared", "candidate")
@@ -359,7 +359,7 @@ public sealed class SynchronousModuleMaterializationTests
             {
                 case "project":
                     definition.AddProject(resourceKind, projectPath)
-                        .ExportAsContainer(Publisher(resourceKind));
+                        .ExportAsContainerWithCommand(Publisher(resourceKind));
                     break;
                 case "declared":
                     definition.AddContainer(resourceKind, $"acme/{resourceKind}", "candidate")
@@ -401,7 +401,7 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.Contains("context.Image", exception.Message, StringComparison.Ordinal);
     }
 
-    private static ModuleContainerExportOptions Publisher(string resource) =>
+    private static ModuleImageCommandOptions Publisher(string resource) =>
         new($"acme/{resource}", "publisher", "build")
         {
             ImageRegistry = "registry.example.test",

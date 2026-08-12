@@ -15,8 +15,8 @@ The contract declares:
 It also provides two AppHosts for the cross-repository workflow:
 
 - `Spire.Producer.AppHost` represents Repo B, builds the module image, and exposes its remote
-  registry identity to `modular-apphosts manifest publish`.
-- `Spire.Consumer.AppHost` represents Repo A. A workflow image manifest makes it pull the producer's
+  registry identity to `modular-apphosts images publish`.
+- `Spire.Consumer.AppHost` represents Repo A. A module image workflow document makes it pull the producer's
   image even when the producer build repository is unavailable.
 
 [`ResourceBuildRepository`](ResourceBuildRepository) is source material for the independent
@@ -87,12 +87,12 @@ checkout's independent producer origin, checks the expected Docker image and pro
 
 A separate CI job starts an ordinary local registry service and uses only the packed tool's commands:
 
-1. `manifest publish` runs the producer AppHost pipeline and writes its fully qualified tagged
+1. `images publish` runs the producer AppHost pipeline and writes its fully qualified tagged
    reference plus GitHub step outputs.
-2. `manifest apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
+2. `images apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
    the consumer AppHost with deliberately missing definition and build repositories plus missing
    initialization siblings. They verify `/marker.txt` from the image that Repo B published and prove
-   that complete manifest identities do not prepare or clone source checkouts.
+   that complete workflow-document identities do not prepare or clone source checkouts.
 
 ## Run the maintainer validation
 
@@ -120,34 +120,34 @@ docker run --detach --rm \
   registry:2
 ```
 
-Restore the sample, then run the tool project directly to publish the producer image and manifest:
+Restore the sample, then run the tool project directly to publish the producer image and workflow document:
 
 ```bash
 dotnet restore samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
 dotnet run \
   --project src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj \
-  -- manifest publish \
+  -- images publish \
   --apphost samples/MultiRepoE2E/Spire.Producer.AppHost \
   --all \
   --tag manual-e2e \
-  --output artifacts/manual-workflow-image-manifest.json
+  --output artifacts/manual-module-image-workflow.json
 ```
 
-Run the consumer test through `manifest apply`. This is the same command shape used in CI; no shell
+Run the consumer test through `images apply`. This is the same command shape used in CI; no shell
 environment setup is required:
 
 ```bash
 dotnet run \
   --project src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj \
-  -- manifest apply \
-  --file artifacts/manual-workflow-image-manifest.json \
+  -- images apply \
+  --file artifacts/manual-module-image-workflow.json \
   -- \
   dotnet test \
   samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj \
   --configuration Release
 ```
 
-Inspect `artifacts/manual-workflow-image-manifest.json` to see the exact contract passed between
+Inspect `artifacts/manual-module-image-workflow.json` to see the exact contract passed between
 the two AppHosts. Stop the registry when finished:
 
 ```bash

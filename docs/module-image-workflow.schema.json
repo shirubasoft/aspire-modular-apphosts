@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-image-manifest.schema.json",
-  "title": "Aspire modular AppHost workflow image manifest",
+  "$id": "https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-image-workflow.schema.json",
+  "title": "Aspire modular AppHost module image workflow document",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "images"],

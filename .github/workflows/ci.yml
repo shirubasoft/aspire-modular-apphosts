@@ -304,19 +304,19 @@ jobs:
           --version 0.0.0-workflow-e2e
           Shirubasoft.Aspire.ModularAppHosts.Tool
 
-      - name: Publish Repo B images and emit the manifest
+      - name: Publish Repo B images and emit the workflow document
         id: publish-images
         run: >-
-          artifacts/workflow-tool/modular-apphosts manifest publish
+          artifacts/workflow-tool/modular-apphosts images publish
           --apphost samples/MultiRepoE2E/Spire.Producer.AppHost
-          --selector multi-repo-resource-build/multi-repo-api
+          --resource multi-repo-api
           --tag workflow-e2e
-          --output artifacts/workflow-image-manifest.json
+          --output artifacts/module-image-workflow.json
 
       - name: Run Repo A E2E tests against the overridden image
         run: >-
-          artifacts/workflow-tool/modular-apphosts manifest apply
-          --file artifacts/workflow-image-manifest.json
+          artifacts/workflow-tool/modular-apphosts images apply
+          --file artifacts/module-image-workflow.json
           --
           dotnet test samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj
           --configuration Release

@@ -4,13 +4,15 @@ using System.Text.Json;
 
 namespace Aspire.Hosting;
 
-/// <summary>Projects a workflow image manifest into standard modular AppHost configuration.</summary>
+/// <summary>Projects a module image workflow document into standard modular AppHost configuration.</summary>
 public static class ModuleImageWorkflowConfiguration
 {
-    /// <summary>
-    /// Configuration section containing the effective resource names selected for a workflow image publish.
-    /// </summary>
-    public const string SelectionConfigurationSectionName =
+    /// <summary>Configuration section containing module names selected for a workflow image publish.</summary>
+    public const string ModuleSelectionConfigurationSectionName =
+        "Aspire:ModularAppHosts:Workflow:Modules";
+
+    /// <summary>Configuration section containing resource names selected for a workflow image publish.</summary>
+    public const string ResourceSelectionConfigurationSectionName =
         "Aspire:ModularAppHosts:Workflow:Resources";
 
     /// <summary>The configuration section used by the workflow image pipeline.</summary>
@@ -25,8 +27,11 @@ public static class ModuleImageWorkflowConfiguration
     internal static ModuleImageWorkflowOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var selectors = configuration
-            .GetSection(SelectionConfigurationSectionName)
+        var modules = configuration
+            .GetSection(ModuleSelectionConfigurationSectionName)
+            .Get<string[]>() ?? [];
+        var resources = configuration
+            .GetSection(ResourceSelectionConfigurationSectionName)
             .Get<string[]>() ?? [];
         var globalTag = GetConfiguredValue(
             configuration[ConfigurationPath.Combine(ConfigurationSectionName, TagConfigurationName)]);
@@ -55,13 +60,15 @@ public static class ModuleImageWorkflowConfiguration
         }
 
         return new ModuleImageWorkflowOptions(
-            selectors.Length == 0 ? ModuleImageSelection.All : new ModuleImageSelection(selectors),
+            modules.Length == 0 && resources.Length == 0
+                ? ModuleImageSelection.All
+                : new ModuleImageSelection(modules, resources),
             globalTag,
             normalizedTags);
     }
 
     /// <summary>Creates the configuration overrides represented by <paramref name="document"/>.</summary>
-    public static IReadOnlyDictionary<string, string> Create(ModuleImageManifestDocument document)
+    public static IReadOnlyDictionary<string, string> Create(ModuleImageWorkflowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Validate();

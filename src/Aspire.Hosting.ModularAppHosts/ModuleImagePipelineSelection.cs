@@ -4,41 +4,30 @@ namespace Aspire.Hosting;
 
 internal enum ModuleImageSelectorKind
 {
-    Auto,
     Resource,
-    Module,
-    Identity
+    Module
 }
 
 internal sealed record ModuleImageSelector(
     ModuleImageSelectorKind Kind,
-    string Name,
-    string? Module = null,
-    string? Resource = null)
-{
-    public string DisplayName => Kind switch
-    {
-        ModuleImageSelectorKind.Module => $"module:{Name}",
-        ModuleImageSelectorKind.Resource => $"resource:{Name}",
-        _ => Name
-    };
-}
+    string Name);
 
 /// <summary>Parses and resolves module image selectors consistently across AppHost pipelines and tools.</summary>
 public sealed class ModuleImageSelection
 {
-    private const string ModulePrefix = "module:";
-    private const string ResourcePrefix = "resource:";
-
     /// <summary>Gets a selection that includes every available image.</summary>
-    public static ModuleImageSelection All { get; } = new([]);
+    public static ModuleImageSelection All { get; } = new([], []);
 
-    /// <summary>Creates a selection from module, resource, or <c>module/resource</c> selectors.</summary>
-    public ModuleImageSelection(IEnumerable<string> selectors)
+    /// <summary>Creates a selection from explicit module and resource names.</summary>
+    public ModuleImageSelection(
+        IEnumerable<string> modules,
+        IEnumerable<string> resources)
     {
-        ArgumentNullException.ThrowIfNull(selectors);
-        Selectors = selectors
-            .Select(ParseSelector)
+        ArgumentNullException.ThrowIfNull(modules);
+        ArgumentNullException.ThrowIfNull(resources);
+        Selectors = modules
+            .Select(name => CreateSelector(ModuleImageSelectorKind.Module, name))
+            .Concat(resources.Select(name => CreateSelector(ModuleImageSelectorKind.Resource, name)))
             .Distinct()
             .ToArray();
     }
@@ -50,7 +39,7 @@ public sealed class ModuleImageSelection
 
     internal bool Includes(string resourceName) =>
         !IsScoped || Selectors.Any(selector =>
-            selector.Kind is ModuleImageSelectorKind.Auto or ModuleImageSelectorKind.Resource &&
+            selector.Kind == ModuleImageSelectorKind.Resource &&
             string.Equals(selector.Name, resourceName, StringComparison.OrdinalIgnoreCase));
 
     internal bool Includes(string moduleName, string declaredResourceName, string effectiveResourceName) =>
@@ -58,14 +47,9 @@ public sealed class ModuleImageSelection
         {
             ModuleImageSelectorKind.Module =>
                 string.Equals(selector.Name, moduleName, StringComparison.OrdinalIgnoreCase),
-            ModuleImageSelectorKind.Identity =>
-                string.Equals(selector.Module, moduleName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(selector.Resource, declaredResourceName, StringComparison.OrdinalIgnoreCase),
             ModuleImageSelectorKind.Resource =>
                 NameMatches(declaredResourceName, effectiveResourceName, selector.Name),
-            _ =>
-                string.Equals(selector.Name, moduleName, StringComparison.OrdinalIgnoreCase) ||
-                NameMatches(declaredResourceName, effectiveResourceName, selector.Name)
+            _ => throw new InvalidOperationException($"Unsupported image selector kind '{selector.Kind}'.")
         });
 
     /// <summary>Resolves selectors against structured image descriptions.</summary>
@@ -118,44 +102,19 @@ public sealed class ModuleImageSelection
         var unknown = new List<string>();
         foreach (var selector in Selectors)
         {
-            var moduleMatches = available.Where(candidate =>
-                string.Equals(candidate.Module, selector.Name, StringComparison.OrdinalIgnoreCase)).ToArray();
-            var resourceMatches = available.Where(candidate =>
-                NameMatches(candidate.DeclaredResource, candidate.EffectiveResource, selector.Name)).ToArray();
-            SelectionCandidate<T>[] matches;
-            switch (selector.Kind)
+            var matches = selector.Kind switch
             {
-                case ModuleImageSelectorKind.Module:
-                    matches = moduleMatches;
-                    break;
-                case ModuleImageSelectorKind.Resource:
-                    matches = resourceMatches;
-                    break;
-                case ModuleImageSelectorKind.Identity:
-                    matches = available.Where(candidate =>
-                        string.Equals(candidate.Module, selector.Module, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(candidate.DeclaredResource, selector.Resource, StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-                    break;
-                default:
-                    if (moduleMatches.Length > 0 && resourceMatches.Length > 0)
-                    {
-                        throw CreateAmbiguousException(selector.Name, moduleMatches, resourceMatches);
-                    }
-
-                    if (resourceMatches.Select(candidate => candidate.Identity)
-                        .Distinct(StringComparer.OrdinalIgnoreCase).Skip(1).Any())
-                    {
-                        throw CreateAmbiguousException(selector.Name, [], resourceMatches);
-                    }
-
-                    matches = moduleMatches.Length > 0 ? moduleMatches : resourceMatches;
-                    break;
-            }
+                ModuleImageSelectorKind.Module => available.Where(candidate =>
+                    string.Equals(candidate.Module, selector.Name, StringComparison.OrdinalIgnoreCase)).ToArray(),
+                ModuleImageSelectorKind.Resource => available.Where(candidate =>
+                    NameMatches(candidate.DeclaredResource, candidate.EffectiveResource, selector.Name)).ToArray(),
+                _ => throw new InvalidOperationException($"Unsupported image selector kind '{selector.Kind}'.")
+            };
 
             if (matches.Length == 0)
             {
-                unknown.Add(selector.DisplayName);
+                var selectorKind = selector.Kind == ModuleImageSelectorKind.Module ? "module" : "resource";
+                unknown.Add($"{selectorKind} '{selector.Name}'");
                 continue;
             }
 
@@ -215,46 +174,12 @@ public sealed class ModuleImageSelection
         resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()?.ResourceName ??
         resource.Name;
 
-    private static ModuleImageSelector ParseSelector(string selector)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(selector);
-        if (selector.StartsWith(ModulePrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return CreateSelector(ModuleImageSelectorKind.Module, selector, ModulePrefix.Length);
-        }
-
-        if (selector.StartsWith(ResourcePrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return CreateSelector(ModuleImageSelectorKind.Resource, selector, ResourcePrefix.Length);
-        }
-
-        var separator = selector.IndexOf('/', StringComparison.Ordinal);
-        if (separator > 0 && separator < selector.Length - 1 &&
-            selector.IndexOf('/', separator + 1) < 0)
-        {
-            return new ModuleImageSelector(
-                ModuleImageSelectorKind.Identity,
-                selector,
-                selector[..separator],
-                selector[(separator + 1)..]);
-        }
-
-        return new ModuleImageSelector(ModuleImageSelectorKind.Auto, selector);
-    }
-
     private static ModuleImageSelector CreateSelector(
         ModuleImageSelectorKind kind,
-        string selector,
-        int prefixLength)
+        string name)
     {
-        var name = selector[prefixLength..];
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            throw new InvalidOperationException(
-                $"Image selector '{selector}' must include a name after the prefix.");
-        }
-
-        return new ModuleImageSelector(kind, name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new ModuleImageSelector(kind, name.Trim());
     }
 
     private static bool NameMatches(
@@ -273,21 +198,6 @@ public sealed class ModuleImageSelection
         return materialized.Length == 0 ? "none" : string.Join(", ", materialized);
     }
 
-    private static InvalidOperationException CreateAmbiguousException<T>(
-        string selector,
-        IEnumerable<SelectionCandidate<T>> moduleMatches,
-        IEnumerable<SelectionCandidate<T>> resourceMatches)
-        where T : notnull
-    {
-        var identities = moduleMatches.Concat(resourceMatches)
-            .Select(candidate => candidate.Identity)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase);
-        return new InvalidOperationException(
-            $"Image selector '{selector}' is ambiguous. Use module:{selector}, resource:{selector}, " +
-            $"or one of: {string.Join(", ", identities)}.");
-    }
-
     private sealed record SelectionCandidate<T>(
         T Value,
         string? Module,
@@ -295,8 +205,6 @@ public sealed class ModuleImageSelection
         string EffectiveResource)
         where T : notnull
     {
-        public string Identity => Module is null ? DeclaredResource : $"{Module}/{DeclaredResource}";
-
         public IEnumerable<string> Names =>
             new[] { DeclaredResource, EffectiveResource }
                 .Distinct(StringComparer.OrdinalIgnoreCase);

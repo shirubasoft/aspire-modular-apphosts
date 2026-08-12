@@ -22,7 +22,7 @@ public sealed class ExternalImageTests
             ModuleResourceKind.Container);
         Assert.SkipUnless(
             !string.IsNullOrWhiteSpace(configuration[$"{imageConfigurationKey}:ImageName"]),
-            "Run through modular-apphosts manifest apply with a workflow image manifest.");
+            "Run through modular-apphosts images apply with a module image workflow document.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
         timeout.CancelAfter(TestTimeout);

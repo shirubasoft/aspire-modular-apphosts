@@ -25,7 +25,7 @@ public sealed class ModuleImageBuildPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("project", projectPath)
-                .ExportAsContainer(Publisher("project"));
+                .ExportAsContainerWithCommand(Publisher("project"));
             definition.AddContainer("declared", "registry.example.test/acme/declared", "ci")
                 .WithImagePublishCommand(Publisher("declared"));
             definition.AddResource<ContainerResource>(
@@ -83,7 +83,7 @@ public sealed class ModuleImageBuildPipelineTests
         }
     }
 
-    private static ModuleContainerExportOptions Publisher(string resource) =>
+    private static ModuleImageCommandOptions Publisher(string resource) =>
         new($"acme/{resource}", $"build-{resource}", "publish", "{image}")
         {
             ImageRegistry = "registry.example.test",
@@ -94,7 +94,7 @@ public sealed class ModuleImageBuildPipelineTests
         ContainerResource Resource,
         PipelineStepContext Context,
         DistributedApplication Application)> CreateContextAsync(
-        ModuleContainerExportOptions options,
+        ModuleImageCommandOptions options,
         Func<
             ModuleImageBuildRecipe,
             Microsoft.Extensions.Logging.ILogger,
@@ -133,24 +133,25 @@ public sealed class ModuleImageBuildPipelineTests
     }
 
     private static ModuleImageBuildRecipe CreateRecipe(
-        ModuleContainerExportOptions options,
+        ModuleImageCommandOptions options,
         string resourceName) =>
         new(
-            "images",
-            resourceName,
-            options,
-            "/work",
-            "/work",
-            "https://example.test/images.git",
-            revision: null,
-            refreshCleanCheckout: false,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity("images", resourceName),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                "https://example.test/images.git",
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
 
-    private static ModulePreparedImage CreatePreparedImage(ModuleContainerExportOptions options)
+    private static ModulePreparedImage CreatePreparedImage(ModuleImageCommandOptions options)
     {
         var sourceState = new ModuleImageSourceState(
             "main",

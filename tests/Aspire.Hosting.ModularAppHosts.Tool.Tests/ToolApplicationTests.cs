@@ -37,7 +37,7 @@ public sealed class ToolApplicationTests
                 "--repository", "acme/repo-a",
                 "--workflow", "external-e2e.yml",
                 "--ref", "main",
-                "--manifest", manifestPath,
+                "--workflow-document", manifestPath,
                 "--input", "repo-a-ref=candidate"
             ],
             runner,
@@ -66,8 +66,8 @@ public sealed class ToolApplicationTests
                     dispatch.Arguments);
                 using var payload = JsonDocument.Parse(Assert.IsType<string>(dispatch.StandardInput));
                 Assert.Equal("candidate", payload.RootElement.GetProperty("repo-a-ref").GetString());
-                var manifest = ModuleImageManifestDocument.Parse(
-                    payload.RootElement.GetProperty("image-manifest").GetString()!);
+                var manifest = ModuleImageWorkflowDocument.Parse(
+                    payload.RootElement.GetProperty("image-workflow").GetString()!);
                 Assert.Equal(3, manifest.Images.Count);
             },
             watch =>
@@ -110,7 +110,7 @@ public sealed class ToolApplicationTests
                 "workflow", "dispatch",
                 "--repository", "acme/repo-a",
                 "--workflow", "external-e2e.yml",
-                "--manifest", manifestPath
+                "--workflow-document", manifestPath
             ],
             runner);
 
@@ -138,7 +138,7 @@ public sealed class ToolApplicationTests
                 "workflow", "dispatch",
                 "--repository", "acme/repo-a",
                 "--workflow", "external-e2e.yml",
-                "--manifest", manifestPath
+                "--workflow-document", manifestPath
             ],
             runner);
 
@@ -160,8 +160,8 @@ public sealed class ToolApplicationTests
                 "workflow", "dispatch",
                 "--repository", "acme/repo-a",
                 "--workflow", "external-e2e.yml",
-                "--manifest", manifestPath,
-                "--input", $"extra={new string('x', ModuleImageManifestDocument.MaximumJsonLength)}"
+                "--workflow-document", manifestPath,
+                "--input", $"extra={new string('x', ModuleImageWorkflowDocument.MaximumJsonLength)}"
             ]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
@@ -180,7 +180,7 @@ public sealed class ToolApplicationTests
         var (exitCode, _, error, runner) = await RunAsync(
             directory,
             [
-                "manifest", "apply",
+                "images", "apply",
                 "--json", document.ToJson(),
                 "--tag", "global",
                 "--resource-tags", "{\"orders/api\":\"specific\"}",
@@ -223,7 +223,7 @@ public sealed class ToolApplicationTests
     public async Task Apply_requires_exactly_one_manifest_source(params string[] sourceArguments)
     {
         using var directory = TestDirectory.Create();
-        var args = new List<string> { "manifest", "apply" };
+        var args = new List<string> { "images", "apply" };
         args.AddRange(sourceArguments);
         args.AddRange(["--", "test-command"]);
 
@@ -240,7 +240,7 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "apply", "--json", CreateManifest().ToJson()]);
+            ["images", "apply", "--json", CreateManifest().ToJson()]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
         Assert.Contains("command", error, StringComparison.OrdinalIgnoreCase);
@@ -253,7 +253,7 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, runner) = await RunAsync(
             directory,
-            ["manifest", "apply", "--json", CreateManifest().ToJson(), "test-command"]);
+            ["images", "apply", "--json", CreateManifest().ToJson(), "test-command"]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
         Assert.Contains("after '--'", error, StringComparison.Ordinal);
@@ -271,7 +271,7 @@ public sealed class ToolApplicationTests
         var (exitCode, _, error, _) = await RunAsync(
             directory,
             [
-                "manifest", "apply",
+                "images", "apply",
                 "--json", CreateManifest().ToJson(),
                 "--resource-tags", resourceTags,
                 "--", "test-command"
@@ -288,7 +288,7 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "apply", "--file", "missing.json", "--", "test-command"]);
+            ["images", "apply", "--file", "missing.json", "--", "test-command"]);
 
         Assert.Equal(ToolExitCode.Failure, exitCode);
         Assert.Contains("missing.json", error, StringComparison.Ordinal);
@@ -304,7 +304,7 @@ public sealed class ToolApplicationTests
         var (exitCode, _, error, _) = await RunAsync(
             directory,
             [
-                "manifest", "apply",
+                "images", "apply",
                 "--json", CreateManifest().ToJson(),
                 "--", "test-command", "--failing-option"
             ],
@@ -325,7 +325,7 @@ public sealed class ToolApplicationTests
         var (failedExit, _, failedError, _) = await RunAsync(
             directory,
             [
-                "manifest", "apply",
+                "images", "apply",
                 "--json", CreateManifest().ToJson(),
                 "--", "missing-command"
             ],
@@ -342,7 +342,7 @@ public sealed class ToolApplicationTests
         var (cancelledExit, _, _, _) = await RunAsync(
             directory,
             [
-                "manifest", "apply",
+                "images", "apply",
                 "--json", CreateManifest().ToJson(),
                 "--", "test-command"
             ],
@@ -358,10 +358,10 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, runner) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", directory.Path]);
+            ["images", "publish", "--apphost", directory.Path]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
-        Assert.Contains("--selector", error, StringComparison.Ordinal);
+        Assert.Contains("--module/--resource", error, StringComparison.Ordinal);
         Assert.Empty(runner.Invocations);
     }
 
@@ -373,7 +373,7 @@ public sealed class ToolApplicationTests
         var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
         {
             var outputPath = GetOption(invocation.Arguments, "--output-path");
-            var document = new ModuleImageManifestDocument();
+            var document = new ModuleImageWorkflowDocument();
             document.Images.Add(CreateManifestImage(
                 "orders",
                 "worker",
@@ -385,7 +385,7 @@ public sealed class ToolApplicationTests
                 ModuleResourceKind.Project,
                 "api-tag-dirty"));
             await document.SaveAsync(
-                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                Path.Combine(outputPath!, ModuleImageWorkflowDocument.DefaultFileName),
                 cancellationToken);
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
@@ -394,9 +394,10 @@ public sealed class ToolApplicationTests
         var (exitCode, output, error, _) = await RunAsync(
             directory,
             [
-                "manifest", "publish",
+                "images", "publish",
                 "--apphost", directory.Path,
-                "--selector", "orders",
+                "--module", "orders",
+                "--resource", "worker",
                 "--tag", "global",
                 "--resource-tags", "{\"orders/api\":\"api-tag\"}",
                 "--output", destination,
@@ -412,13 +413,15 @@ public sealed class ToolApplicationTests
         AssertProducerInvocation(invocation, "workflow-images");
         Assert.Equal("custom-aspire", invocation.FileName);
         Assert.Equal("orders", invocation.EnvironmentVariables![
+            "Aspire__ModularAppHosts__Workflow__Modules__0"]);
+        Assert.Equal("worker", invocation.EnvironmentVariables[
             "Aspire__ModularAppHosts__Workflow__Resources__0"]);
         Assert.Equal("global", invocation.EnvironmentVariables[
             "Aspire__ModularAppHosts__Workflow__Tag"]);
         Assert.Equal("{\"orders/api\":\"api-tag\"}", invocation.EnvironmentVariables[
             "Aspire__ModularAppHosts__Workflow__ResourceTags"]);
 
-        var written = await ModuleImageManifestDocument.LoadAsync(
+        var written = await ModuleImageWorkflowDocument.LoadAsync(
             destination,
             TestContext.Current.CancellationToken);
         Assert.Equal("global-dirty", written.Images.Single(image => image.Resource == "worker").Tag);
@@ -429,8 +432,8 @@ public sealed class ToolApplicationTests
                 call => Assert.IsType<string>(call.GetArguments()[0]),
                 call => Assert.IsType<string>(call.GetArguments()[1]),
                 StringComparer.Ordinal);
-        Assert.Equal(destination, outputs["manifest-path"]);
-        var outputManifest = ModuleImageManifestDocument.Parse(outputs["manifest"]);
+        Assert.Equal(destination, outputs["workflow-document-path"]);
+        var outputManifest = ModuleImageWorkflowDocument.Parse(outputs["workflow-document"]);
         Assert.Equal("api-tag-dirty", outputManifest.Images.Single(image => image.Resource == "api").Tag);
     }
 
@@ -461,14 +464,14 @@ public sealed class ToolApplicationTests
         {
             var outputPath = GetOption(invocation.Arguments, "--output-path");
             await CreateManifest().SaveAsync(
-                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                Path.Combine(outputPath!, ModuleImageWorkflowDocument.DefaultFileName),
                 cancellationToken);
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", appHostDirectory, "--all"],
+            ["images", "publish", "--apphost", appHostDirectory, "--all"],
             runner);
 
         Assert.Equal(ToolExitCode.Success, exitCode);
@@ -489,7 +492,7 @@ public sealed class ToolApplicationTests
             Task.FromResult(new ProcessExecutionResult(17, string.Empty, "failed")));
         var (failedExit, _, failedError, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", directory.Path, "--all"],
+            ["images", "publish", "--apphost", directory.Path, "--all"],
             failedRunner);
 
         Assert.Equal(ToolExitCode.Failure, failedExit);
@@ -503,46 +506,46 @@ public sealed class ToolApplicationTests
                     : new CancellationToken(canceled: true)));
         var (cancelledExit, _, _, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", directory.Path, "--all"],
+            ["images", "publish", "--apphost", directory.Path, "--all"],
             cancelledRunner);
         Assert.Equal(ToolExitCode.Interrupted, cancelledExit);
     }
 
     [Fact]
-    public async Task Publish_accepts_declared_module_resource_identity_selectors()
+    public async Task Publish_accepts_repeatable_module_and_resource_options()
     {
         using var directory = TestDirectory.Create();
         var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
         {
             var outputPath = GetOption(invocation.Arguments, "--output-path");
-            var document = new ModuleImageManifestDocument();
+            var document = new ModuleImageWorkflowDocument();
             document.Images.Add(CreateManifestImage(
                 "orders",
                 "api",
                 ModuleResourceKind.Project));
             await document.SaveAsync(
-                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                Path.Combine(outputPath!, ModuleImageWorkflowDocument.DefaultFileName),
                 cancellationToken);
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", directory.Path, "--selector", "orders/api"],
+            ["images", "publish", "--apphost", directory.Path, "--module", "orders", "--resource", "api"],
             runner);
 
         Assert.Equal(ToolExitCode.Success, exitCode);
         Assert.Empty(error);
         var invocation = Assert.Single(runner.Invocations);
         Assert.DoesNotContain("--", invocation.Arguments);
-        Assert.Equal(
-            "orders/api",
-            invocation.EnvironmentVariables![
-                "Aspire__ModularAppHosts__Workflow__Resources__0"]);
+        Assert.Equal("orders", invocation.EnvironmentVariables![
+            "Aspire__ModularAppHosts__Workflow__Modules__0"]);
+        Assert.Equal("api", invocation.EnvironmentVariables[
+            "Aspire__ModularAppHosts__Workflow__Resources__0"]);
     }
 
     [Fact]
-    public async Task Publish_delegates_ambiguous_selector_validation_to_the_single_apphost_invocation()
+    public async Task Publish_delegates_unknown_resource_validation_to_the_single_apphost_invocation()
     {
         using var directory = TestDirectory.Create();
         var runner = new FakeProcessRunner((_, _) =>
@@ -550,7 +553,7 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--apphost", directory.Path, "--selector", "api"],
+            ["images", "publish", "--apphost", directory.Path, "--resource", "api"],
             runner);
 
         Assert.Equal(ToolExitCode.Failure, exitCode);
@@ -568,7 +571,7 @@ public sealed class ToolApplicationTests
 
         var (exitCode, _, error, _) = await RunAsync(
             directory,
-            ["manifest", "publish", "--all"]);
+            ["images", "publish", "--all"]);
 
         Assert.Equal(ToolExitCode.Usage, exitCode);
         Assert.Contains("--apphost", error, StringComparison.Ordinal);
@@ -640,16 +643,16 @@ public sealed class ToolApplicationTests
         return (exitCode, output.ToString(), error.ToString(), runner);
     }
 
-    private static ModuleImageManifestDocument CreateManifest()
+    private static ModuleImageWorkflowDocument CreateManifest()
     {
-        var document = new ModuleImageManifestDocument();
+        var document = new ModuleImageWorkflowDocument();
         document.Images.Add(CreateManifestImage("orders", "worker", ModuleResourceKind.Container));
         document.Images.Add(CreateManifestImage("orders", "api", ModuleResourceKind.Project));
         document.Images.Add(CreateManifestImage("catalog", "api", ModuleResourceKind.Project));
         return document;
     }
 
-    private static ModuleImageManifestEntry CreateManifestImage(
+    private static ModuleImageWorkflowEntry CreateManifestImage(
         string module,
         string resource,
         ModuleResourceKind kind,

@@ -7,8 +7,43 @@ using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
-public sealed class ModuleImageManifestPipelineTests
+public sealed class ModuleImageWorkflowPipelineTests
 {
+    [Fact]
+    public async Task Includes_Aspire_native_project_publishers()
+    {
+        using var repository = TemporaryDirectory.Create();
+        var projectPath = Path.Combine(repository.Path, "Orders.Api.csproj");
+        File.WriteAllText(
+            projectPath,
+            "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = ["--publisher", "manifest"],
+            DisableDashboard = true,
+            ProjectDirectory = repository.Path
+        });
+        var registry = builder.AddContainerRegistry("registry", "registry.example.test", "team");
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddProject("api", projectPath)
+                .ExportAsContainer(
+                    "services/orders",
+                    (_, container) => container.WithContainerRegistry(registry));
+        });
+        builder.AddModule(module);
+
+        var document = await ModuleImageWorkflowPipeline.CreateDocumentAsync(
+            builder.Resources,
+            new ModuleImageSelection(["orders"], []),
+            TestContext.Current.CancellationToken);
+
+        var image = Assert.Single(document.Images);
+        Assert.Equal(ModuleResourceKind.Project, image.ResourceKind);
+        Assert.Equal("registry.example.test/team/services/orders:latest", image.Reference);
+    }
+
     [Fact]
     public async Task Uses_structured_remote_registry_identity_and_declared_resource_alias()
     {
@@ -22,9 +57,9 @@ public sealed class ModuleImageManifestPipelineTests
             .Resource;
         await AddPublisherAsync(container, "orders", "api");
 
-        var document = await ModuleImageManifestPipeline.CreateDocumentAsync(
+        var document = await ModuleImageWorkflowPipeline.CreateDocumentAsync(
             builder.Resources,
-            new ModuleImageSelection(["api"]),
+            new ModuleImageSelection([], ["api"]),
             TestContext.Current.CancellationToken);
 
         var image = Assert.Single(document.Images);
@@ -49,9 +84,9 @@ public sealed class ModuleImageManifestPipelineTests
         await AddPublisherAsync(resource, "orders", "api");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            ModuleImageManifestPipeline.CreateDocumentAsync(
+            ModuleImageWorkflowPipeline.CreateDocumentAsync(
                 [resource],
-                new ModuleImageSelection(["missing"]),
+                new ModuleImageSelection([], ["missing"]),
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
@@ -63,25 +98,26 @@ public sealed class ModuleImageManifestPipelineTests
         string module,
         string declaredResource)
     {
-        var options = new ModuleContainerExportOptions("local/api", "docker", "build")
+        var options = new ModuleImageCommandOptions("local/api", "docker", "build")
         {
             ImageRegistry = "registry.example.test",
             ImageTag = "local"
         };
         var recipe = new ModuleImageBuildRecipe(
-            module,
-            declaredResource,
-            options,
-            "/work",
-            "/work",
-            repository: null,
-            revision: null,
-            refreshCleanCheckout: false,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity(module, declaredResource),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                Repository: null,
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
         resource.Annotations.Add(new ModuleImagePublisherAnnotation(
             ModuleResourceKind.Project,
             recipe));

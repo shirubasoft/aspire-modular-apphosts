@@ -21,7 +21,7 @@ public sealed class ModuleImagePushPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
@@ -71,7 +71,7 @@ public sealed class ModuleImagePushPipelineTests
                     "declared-static",
                     "registry.example.test/assets/declared-static",
                     "candidate")
-                .WithImagePublishCommand(new ModuleContainerExportOptions(
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
                     "assets/declared-static",
                     "docker",
                     "build")
@@ -82,7 +82,7 @@ public sealed class ModuleImagePushPipelineTests
             definition.AddResource<ContainerResource>(
                 "factory-static",
                 context => context.ApplicationBuilder.AddContainer(context.ResourceName, "placeholder"),
-                new ModuleContainerExportOptions("assets/factory-static", "docker", "build")
+                new ModuleImageCommandOptions("assets/factory-static", "docker", "build")
                 {
                     ImageRegistry = "registry.example.test",
                     ImageTag = "candidate"
@@ -113,8 +113,8 @@ public sealed class ModuleImagePushPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(
-                    new ModuleContainerExportOptions("orders-api", "dotnet", "publish")
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("orders-api", "dotnet", "publish")
                     {
                         ImageTag = "local"
                     },
@@ -161,8 +161,8 @@ public sealed class ModuleImagePushPipelineTests
         {
             definition.WithRepository(repository.Path);
             definition.AddProject("orders-api", GetProjectPath(repository.Path))
-                .ExportAsContainer(
-                    new ModuleContainerExportOptions("services/orders", "dotnet", "publish")
+                .ExportAsContainerWithCommand(
+                    new ModuleImageCommandOptions("services/orders", "dotnet", "publish")
                     {
                         ImageTag = "candidate"
                     },
@@ -291,25 +291,26 @@ public sealed class ModuleImagePushPipelineTests
         string? detachedBranchAlias = null)
     {
         var resource = new ContainerResource("orders-api");
-        var options = new ModuleContainerExportOptions("orders-api", "docker", "build")
+        var options = new ModuleImageCommandOptions("orders-api", "docker", "build")
         {
             ImageTag = "candidate"
         };
         var recipe = new ModuleImageBuildRecipe(
-            "orders",
-            "api",
-            options,
-            "/work",
-            "/work",
-            "https://example.test/orders.git",
-            revision: null,
-            refreshCleanCheckout: false,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10),
-            detachedBranchAlias);
+            new ModuleImageRecipeIdentity("orders", "api"),
+            new ModuleImageRepositorySettings(
+                "/work",
+                "/work",
+                "https://example.test/orders.git",
+                Revision: null,
+                RefreshCleanCheckout: false,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2),
+                detachedBranchAlias),
+            new ModuleImageCommandSettings(
+                options,
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
         var sourceState = new ModuleImageSourceState(
             branchImageTag,
             "abcdef012345",

@@ -40,12 +40,12 @@ public sealed class ModuleImageBuildRecipeTests
     public void Execution_plan_resolves_runtime_source_identity_and_publish_placeholders()
     {
         var options = CreateOptions("acme/orders-api");
-        var recipe = CreateRecipe(options: new ModuleContainerExportOptions(
+        var recipe = CreateRecipe(options: new ModuleImageCommandOptions(
             options.ImageName,
             options.PublishCommand,
             "publish",
-            ModuleContainerExportOptions.ImageReferencePlaceholder,
-            ModuleContainerExportOptions.ImageTagPlaceholder)
+            ModuleImageCommandOptions.ImageReferencePlaceholder,
+            ModuleImageCommandOptions.ImageTagPlaceholder)
         {
             ImageRegistry = options.ImageRegistry,
             ProducedImageReference = "legacy/orders-api:{image-tag}"
@@ -86,6 +86,7 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Equal(0, operations.PullCount);
         Assert.Equal(0, operations.BuildCount);
         Assert.Equal(1, operations.ResolveRuntimeCount);
+        Assert.Equal(TimeSpan.FromMinutes(10), operations.ImageExistsTimeout);
         Assert.All(operations.UsedRuntimes, runtime => Assert.Equal("test-runtime", runtime));
     }
 
@@ -106,6 +107,7 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Equal(0, operations.BuildCount);
         Assert.Single(operations.Tags);
         Assert.Equal(1, operations.ResolveRuntimeCount);
+        Assert.Equal(TimeSpan.FromMinutes(10), operations.PullTimeout);
         Assert.All(operations.UsedRuntimes, runtime => Assert.Equal("test-runtime", runtime));
     }
 
@@ -163,7 +165,7 @@ public sealed class ModuleImageBuildRecipeTests
         var options = CreateOptions();
         options.ImageTag = "candidate";
         options.ProducedImageReference = "registry.example.test/acme/orders-api:candidate";
-        var recipe = CreateRecipe(options: new ModuleContainerExportOptions(
+        var recipe = CreateRecipe(options: new ModuleImageCommandOptions(
             options.ImageName,
             options.PublishCommand,
             "registry.example.test/acme/orders-api:candidate")
@@ -364,7 +366,6 @@ public sealed class ModuleImageBuildRecipeTests
             NullLogger.Instance,
             TestContext.Current.CancellationToken);
 
-        Assert.Same(first, second);
         Assert.Equal(1, calls);
         Assert.False(first.IsCompleted);
 
@@ -374,6 +375,73 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Same(prepared, await second);
         Assert.True(publisher.TryGetPreparedImage(out var cached));
         Assert.Same(prepared, cached);
+    }
+
+    [Fact]
+    public async Task Publisher_annotation_caller_cancellation_does_not_cancel_shared_preparation()
+    {
+        var recipe = CreateRecipe();
+        var completion = new TaskCompletionSource<ModulePreparedImage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        var publisher = new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, operationToken) =>
+            {
+                Assert.False(operationToken.CanBeCanceled);
+                calls++;
+                return completion.Task;
+            });
+        using var callerCancellation = new CancellationTokenSource();
+
+        var canceledWait = publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            callerCancellation.Token);
+        var successfulWait = publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+        await callerCancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledWait);
+        Assert.False(successfulWait.IsCompleted);
+        var prepared = CreatePreparedImage(recipe, CleanMain);
+        completion.SetResult(prepared);
+
+        Assert.Same(prepared, await successfulWait);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Publisher_annotation_retries_after_a_canceled_shared_preparation()
+    {
+        var recipe = CreateRecipe();
+        var prepared = CreatePreparedImage(recipe, CleanMain);
+        var calls = 0;
+        var publisher = new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, _) =>
+            {
+                calls++;
+                return calls == 1
+                    ? Task.FromCanceled<ModulePreparedImage>(new CancellationToken(canceled: true))
+                    : Task.FromResult(prepared);
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken));
+        var retried = await publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, calls);
+        Assert.Same(prepared, retried);
     }
 
     [Fact]
@@ -419,26 +487,27 @@ public sealed class ModuleImageBuildRecipeTests
 
     private static ModuleImageBuildRecipe CreateRecipe(
         string imageName = "acme/orders-api",
-        ModuleContainerExportOptions? options = null,
+        ModuleImageCommandOptions? options = null,
         bool refreshCleanCheckout = false,
         string? revision = null) =>
         new(
-            "orders",
-            "orders-api",
-            options ?? CreateOptions(imageName),
-            "/work/orders",
-            "/work/orders/src",
-            "https://example.test/acme/orders.git",
-            revision,
-            refreshCleanCheckout,
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2),
-            TimeSpan.FromMinutes(15),
-            TimeSpan.FromMinutes(10));
+            new ModuleImageRecipeIdentity("orders", "orders-api"),
+            new ModuleImageRepositorySettings(
+                "/work/orders",
+                "/work/orders/src",
+                "https://example.test/acme/orders.git",
+                revision,
+                refreshCleanCheckout,
+                "git",
+                "gh",
+                TimeSpan.FromMinutes(2)),
+            new ModuleImageCommandSettings(
+                options ?? CreateOptions(imageName),
+                TimeSpan.FromMinutes(15),
+                TimeSpan.FromMinutes(10)));
 
-    private static ModuleContainerExportOptions CreateOptions(string imageName = "acme/orders-api") =>
-        new(imageName, "build-image", "publish", ModuleContainerExportOptions.ImageReferencePlaceholder)
+    private static ModuleImageCommandOptions CreateOptions(string imageName = "acme/orders-api") =>
+        new(imageName, "build-image", "publish", ModuleImageCommandOptions.ImageReferencePlaceholder)
         {
             ImageRegistry = "registry.example.test"
         };
@@ -485,6 +554,10 @@ public sealed class ModuleImageBuildRecipeTests
 
         public int ResolveRuntimeCount { get; private set; }
 
+        public TimeSpan? ImageExistsTimeout { get; private set; }
+
+        public TimeSpan? PullTimeout { get; private set; }
+
         public List<(string Source, string Target)> Tags { get; } = [];
 
         public List<string> UsedRuntimes { get; } = [];
@@ -528,9 +601,11 @@ public sealed class ModuleImageBuildRecipeTests
         public Task<bool> ImageExistsAsync(
             string containerRuntime,
             string imageReference,
+            TimeSpan timeout,
             CancellationToken cancellationToken)
         {
             ImageExistsCount++;
+            ImageExistsTimeout = timeout;
             UsedRuntimes.Add(containerRuntime);
             return Task.FromResult(ImageExists);
         }
@@ -543,6 +618,7 @@ public sealed class ModuleImageBuildRecipeTests
             CancellationToken cancellationToken)
         {
             PullCount++;
+            PullTimeout = timeout;
             UsedRuntimes.Add(containerRuntime);
             progress("pull output with https://user:secret@example.test/path?token=secret");
             return Task.FromResult(PullSucceeds);

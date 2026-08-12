@@ -7,7 +7,7 @@ following changes in every module contract and AppHost.
 ## Use the Aspire namespace
 
 Replace `using Aspire.Hosting.ModularAppHosts;` with `using Aspire.Hosting;`. Public module,
-configuration, image, manifest, and generator attribute types now extend Aspire's existing namespace.
+configuration, image workflow, and generator attribute types now extend Aspire's existing namespace.
 Application-model resource types remain in `Aspire.Hosting.ApplicationModel`.
 
 In projects that reference `Shirubasoft.Aspire.ModularAppHosts.Testing`, replace the same old namespace
@@ -55,12 +55,17 @@ fast-forwarding clean, unpinned image build repositories immediately before a re
 
 ## Update image publishing
 
+- Replace `ModuleContainerExportOptions` with `ModuleImageCommandOptions`. A project that uses
+  Aspire's standard publisher should replace the old command-oriented `ExportAsContainer(...)`
+  call with `ExportAsContainer(imageName)`; keep arbitrary commands only through
+  `ExportAsContainerWithCommand(new ModuleImageCommandOptions(...))`.
 - Delete the global/module `PublishImages` options and calls to `BuildModuleImages()`. Declare
-  publishers on their resources with `ExportAsContainer(...)`, `WithImagePublishCommand(...)`, or
+  native project publishers with `ExportAsContainer(imageName)`, advanced project commands with
+  `ExportAsContainerWithCommand(...)`, containers with `WithImagePublishCommand(...)`, or
   the image-publishing `AddResource(...)` overload. Set `PublishImage: false` only for a complete
   external-image override.
 - Delete uses of the removed `ContainerRuntimeResolver`. Put
-  `ModuleContainerExportOptions.ContainerRuntimePlaceholder` in the publish command or arguments;
+  `ModuleImageCommandOptions.ContainerRuntimePlaceholder` in the publish command or arguments;
   it resolves through Aspire's `IContainerRuntimeResolver` when the command runs.
 - Keep registry and repository separate: set `ImageRegistry` to a host such as `ghcr.io` and
   `ImageName` to a repository such as `example/orders-api`.
@@ -88,16 +93,23 @@ aspire do pull-orders-api
 For validated module/resource selection across several images, use the tool-owned interface:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest publish \
+dotnet tool run modular-apphosts -- images publish \
   --apphost src/RepoB.AppHost \
-  --selector orders \
-  --selector catalog/api \
+  --module orders \
+  --resource api \
   --tag "$GITHUB_SHA"
 ```
 
-The resulting workflow image manifest is a cross-repository contract, not an Aspire application
+The resulting module image workflow document is a cross-repository contract, not an Aspire application
 manifest. A scoped workflow publish no longer changes which resources appear in a later Aspire
 application manifest.
+
+Replace `ModuleImageManifestDocument` and `ModuleImageManifestEntry` with
+`ModuleImageWorkflowDocument` and `ModuleImageWorkflowEntry`. Rename tool invocations from
+`modular-apphosts manifest publish/apply` to `modular-apphosts images publish/apply`; the default
+file is now `module-image-workflow.json`. Replace `--selector` with repeatable `--module` and
+`--resource` options. Workflow dispatch now accepts `--workflow-document` and
+`--workflow-document-input` (default input: `image-workflow`).
 
 ## Validate the migration
 

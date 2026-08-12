@@ -61,7 +61,8 @@ internal static class ModuleImageDescriptionPipeline
             .Select(resource => (
                 Resource: resource,
                 Module: resource.Annotations.OfType<DistributedApplicationModuleResourceAnnotation>().LastOrDefault(),
-                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()))
+                Publisher: resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault(),
+                NativePublisher: resource.Annotations.OfType<ModuleNativeImagePublisherAnnotation>().LastOrDefault()))
             .Where(item =>
                 item.Module is not null &&
                 item.Resource.Annotations.OfType<ContainerImageAnnotation>().Any())
@@ -98,6 +99,7 @@ internal static class ModuleImageDescriptionPipeline
             cancellationToken.ThrowIfCancellationRequested();
             var module = item.Module!;
             var publisher = item.Publisher;
+            var nativePublisher = item.NativePublisher;
             ModuleImageExecutionPlan? executionPlan = null;
             if (publisher is not null)
             {
@@ -117,14 +119,14 @@ internal static class ModuleImageDescriptionPipeline
                 Module = module.ModuleName,
                 Resource = module.ResourceName,
                 EffectiveResource = item.Resource.Name,
-                ResourceKind = publisher?.ResourceKind ?? ModuleResourceKind.Container,
+                ResourceKind = publisher?.ResourceKind ?? nativePublisher?.ResourceKind ?? ModuleResourceKind.Container,
                 Registry = effective.Registry,
                 Repository = effective.Repository,
                 Tag = effective.Tag,
                 Digest = effective.Digest,
                 Reference = effective.Reference,
                 PullReference = effective.PullReference,
-                Push = publisher is null || effective.PushImage is null
+                Push = publisher is null && nativePublisher is null || effective.PushImage is null
                     ? null
                     : new ModuleImagePushDescription
                     {

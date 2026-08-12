@@ -8,12 +8,12 @@ internal sealed record ResourceTagOverride(string Module, string Resource, strin
     public string Identity => $"{Module}/{Resource}";
 }
 
-internal sealed class ManifestTagOverrides
+internal sealed class ImageTagOverrides
 {
     private readonly Dictionary<string, ResourceTagOverride> _resources =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public ManifestTagOverrides(string? globalTag, string resourceTags)
+    public ImageTagOverrides(string? globalTag, string resourceTags)
     {
         ArgumentNullException.ThrowIfNull(resourceTags);
         GlobalTag = string.IsNullOrWhiteSpace(globalTag) ? null : globalTag;
@@ -41,7 +41,7 @@ internal sealed class ManifestTagOverrides
 
     public bool HasResourceOverrides => _resources.Count > 0;
 
-    public void Apply(ModuleImageManifestDocument document)
+    public void Apply(ModuleImageWorkflowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         document.Validate();

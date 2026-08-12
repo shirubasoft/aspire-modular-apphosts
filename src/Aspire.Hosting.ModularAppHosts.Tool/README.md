@@ -1,17 +1,17 @@
 # Shirubasoft.Aspire.ModularAppHosts.Tool
 
 `modular-apphosts` publishes module images from one repository, transfers their exact registry
-identities in a versioned workflow image manifest, applies those identities to another AppHost, and can dispatch
+identities in a versioned module image workflow document, applies those identities to another AppHost, and can dispatch
 and wait for the receiving repository's GitHub Actions workflow. Workflow YAML needs no custom
 orchestration script.
 
-The workflow image manifest is the tool's cross-repository contract. It is distinct from Aspire's
+The module image workflow document is the tool's cross-repository contract. It is distinct from Aspire's
 application manifest and includes module/source identities that the standard manifest does not model.
 
 ## Requirements
 
 - .NET 10 SDK to install the tool.
-- Aspire CLI 13.4.6 or later for `manifest publish`.
+- Aspire CLI 13.4.6 or later for `images publish`.
 - GitHub CLI 2.87.0 or later for `workflow dispatch`.
 - A container registry login that is already available to the selected container runtime.
 - The same released version of this tool and `Shirubasoft.Aspire.ModularAppHosts` in both repos.
@@ -30,40 +30,39 @@ CI can then run `dotnet tool restore` and invoke commands with
 ## Repo B: publish images
 
 ```bash
-dotnet tool run modular-apphosts -- manifest publish \
+dotnet tool run modular-apphosts -- images publish \
   --apphost src/RepoB.AppHost \
-  --selector orders \
-  --selector catalog/api \
+  --module orders \
+  --resource api \
   --tag "$GITHUB_SHA" \
   --resource-tags '{"orders/worker":"worker-candidate"}' \
-  --output module-image-manifest.json
+  --output module-image-workflow.json
 ```
 
 Exactly one selection mode is required:
 
-- Repeat `--selector` for an unambiguous module/resource name, an explicit `module:<name>` or
-  `resource:<name>`, or one `<module>/<resource>` identity.
+- Repeat `--module` and `--resource` for explicit module and declared/effective resource names.
 - Use `--all` to publish every image exposed by the AppHost.
 
 `--tag` applies first. Values in the `--resource-tags` JSON object win for their declared
 `module/resource`. The command runs Aspire's `describe-images` and `workflow-images` pipelines; use
 `--aspire-path` only when the Aspire executable is not named `aspire`.
 
-The manifest is saved to `--output`, or `module-image-manifest.json` by default. Inside GitHub
+The module image workflow document is saved to `--output`, or `module-image-workflow.json` by default. Inside GitHub
 Actions, the command automatically writes these step outputs when `GITHUB_OUTPUT` is configured:
 
 | Output | Value |
 | --- | --- |
-| `manifest` | Compact manifest JSON for a reusable workflow input. |
-| `manifest-path` | Absolute path to the saved manifest for dispatch. |
+| `workflow-document` | Compact document JSON for a reusable workflow input. |
+| `workflow-document-path` | Absolute path to the saved document for dispatch. |
 
 ## Repo A: apply images
 
 Run the AppHost or E2E command through `apply`. The invocation is identical locally and in CI:
 
 ```bash
-dotnet tool run modular-apphosts -- manifest apply \
-  --json "$IMAGE_MANIFEST" \
+dotnet tool run modular-apphosts -- images apply \
+  --json "$IMAGE_WORKFLOW" \
   --tag "$REPO_A_IMAGE_TAG" \
   --resource-tags "$REPO_A_RESOURCE_TAGS" \
   -- \
@@ -89,13 +88,13 @@ dotnet tool run modular-apphosts -- workflow dispatch \
   --repository your-org/repo-a \
   --workflow external-e2e.yml \
   --ref main \
-  --manifest module-image-manifest.json \
+  --workflow-document module-image-workflow.json \
   --input repo-a-ref=main \
   --input image-tag="$REPO_A_IMAGE_TAG" \
   --input resource-tags="$REPO_A_RESOURCE_TAGS"
 ```
 
-The command validates the manifest and the complete GitHub input payload, sends the inputs to
+The command validates the module image workflow document and the complete GitHub input payload, sends the inputs to
 `gh workflow run --json` over standard input, extracts the exact created run ID from the returned
 URL, and streams `gh run watch --compact --exit-status`. Authentication belongs to GitHub CLI; set
 `GH_TOKEN` or use an existing `gh auth` session.
@@ -106,9 +105,9 @@ Options:
 | --- | --- |
 | `--repository` | Required `[HOST/]OWNER/REPO` target. |
 | `--workflow` | Required workflow file name, ID, or workflow name. |
-| `--manifest` | Required manifest file. |
+| `--workflow-document` | Required module image workflow document file. |
 | `--ref` | Branch or tag containing the target workflow; defaults to the target's default branch. |
-| `--manifest-input` | Workflow input receiving the manifest; defaults to `image-manifest`. |
+| `--workflow-document-input` | Workflow input receiving the document; defaults to `image-workflow`. |
 | `--input` | Additional `<name>=<value>` input; repeat as needed. |
 | `--gh-path` | GitHub CLI executable; defaults to configured `GitHubCliPath`, then `gh`. |
 
@@ -116,9 +115,9 @@ When `GITHUB_OUTPUT` is configured, dispatch emits `run-id` and `run-url`. Its f
 the exit code from `gh run watch --exit-status`, so the calling job represents the external run's
 outcome without polling or selecting a potentially unrelated latest run.
 
-## Manifest contract
+## Module image workflow document contract
 
-The manifest is strict JSON. Unknown fields are rejected, identities are case-insensitively unique,
+The document is strict JSON. Unknown fields are rejected, identities are case-insensitively unique,
 and each image contains exactly one tag or supported SHA-256 digest:
 
 ```json
@@ -138,7 +137,7 @@ and each image contains exactly one tag or supported SHA-256 digest:
 }
 ```
 
-The total compact manifest and the complete dispatch input payload are each limited to 65,535
+The total compact workflow document and the complete dispatch input payload are each limited to 65,535
 characters. Module/resource names cannot contain identity or configuration separators.
 
 ## Configuration and exit codes
@@ -151,16 +150,16 @@ The tool reads runner configuration through .NET `IConfiguration`. Set
 | --- | --- |
 | `0` | Command or watched external workflow succeeded. |
 | `1` | Aspire, GitHub CLI, registry, file, or watched workflow failure. |
-| `2` | Invalid command input, manifest, selector, tag map, or payload. |
+| `2` | Invalid command input, workflow document, selection, tag map, or payload. |
 | `130` | The tool was interrupted. |
 
-The command launched by `manifest apply` and GitHub CLI may define additional exit statuses that the
+The command launched by `images apply` and GitHub CLI may define additional exit statuses that the
 tool returns unchanged.
 
 ## Security notes
 
 - Do not push images from untrusted fork pull requests with a privileged registry token.
-- Repo A needs package read access to every image in the manifest; Repo B needs write access.
+- Repo A needs package read access to every image in the workflow document; Repo B needs write access.
 - A repository's built-in `GITHUB_TOKEN` normally cannot dispatch another repository. Provide a
   suitable token through `GH_TOKEN` without placing it in command arguments.
 - `gh run watch` cannot use fine-grained personal access tokens because Checks read permission is

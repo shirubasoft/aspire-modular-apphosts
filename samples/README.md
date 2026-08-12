@@ -53,7 +53,7 @@ representation receives the same value.
 - Aspire CLI 13.4.6 or later
 - A running Docker 28+ or Podman 5+ container runtime
 
-The sample publishers use `ModuleContainerExportOptions.ContainerRuntimePlaceholder`, which resolves
+The sample publishers use `ModuleImageCommandOptions.ContainerRuntimePlaceholder`, which resolves
 through Aspire's `IContainerRuntimeResolver`. The build therefore follows the same configured Docker
 or Podman runtime as the AppHost.
 
@@ -120,5 +120,5 @@ the [sample README](ImagePushE2E/README.md) for commands.
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
 sample API from a contract package while its image build inputs live in a separately initialized
 local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
-and a second local-registry producer-to-consumer workflow image manifest handoff; it does not depend
+and a second local-registry producer-to-consumer module image workflow document handoff; it does not depend
 on an external `Shirubasoft/spire` checkout.

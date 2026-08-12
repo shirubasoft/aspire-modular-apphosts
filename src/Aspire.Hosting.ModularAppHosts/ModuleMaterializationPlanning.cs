@@ -93,7 +93,7 @@ internal static class ModuleMaterializationPlanning
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         string resourceName,
-        ModuleContainerExportOptions declared,
+        ModuleImageCommandOptions declared,
         DistributedApplicationModuleImageOptions? configured,
         ModuleRepositoryContext definitionRepository,
         ModuleApplicationRegistry registry,

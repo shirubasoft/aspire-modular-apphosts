@@ -6,7 +6,7 @@
     <PackageId>Shirubasoft.Aspire.ModularAppHosts.Tool</PackageId>
     <Title>Shirubasoft Aspire Modular AppHosts Tool</Title>
     <Authors>Shirubasoft</Authors>
-    <Description>Workflow image manifest tooling for Aspire modular AppHosts.</Description>
+    <Description>Module image workflow document tooling for Aspire modular AppHosts.</Description>
     <PackageTags>aspire;apphost;modules;containers;dotnet-tool;github-actions</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/Shirubasoft/aspire-modular-apphosts</PackageProjectUrl>

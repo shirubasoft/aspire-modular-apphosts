@@ -279,7 +279,8 @@ internal sealed class DistributedApplicationModuleProject(
 }
 
 internal sealed record ModuleContainerExport(
-    ModuleContainerExportOptions Options,
+    string ImageName,
+    ModuleImageCommandOptions? CommandOptions,
     Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer);
 
 internal sealed class DistributedApplicationModuleContainer(
@@ -297,9 +298,9 @@ internal sealed class DistributedApplicationModuleContainer(
 
     internal Action<IDistributedApplicationModuleResourceContext, IResourceBuilder<ContainerResource>>? ConfigureContainer { get; set; }
 
-    internal ModuleContainerExportOptions? ImagePublishOptions { get; private set; }
+    internal ModuleImageCommandOptions? ImagePublishOptions { get; private set; }
 
-    internal void SetImagePublishOptions(ModuleContainerExportOptions options)
+    internal void SetImagePublishOptions(ModuleImageCommandOptions options)
     {
         if (ImagePublishOptions is not null)
         {
@@ -313,7 +314,7 @@ internal sealed class DistributedApplicationModuleContainer(
 
 internal interface IDistributedApplicationModuleFactoryResource : IDistributedApplicationModuleResource
 {
-    ModuleContainerExportOptions? ImagePublishOptions { get; }
+    ModuleImageCommandOptions? ImagePublishOptions { get; }
 
     IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
@@ -323,7 +324,7 @@ internal interface IDistributedApplicationModuleFactoryResource : IDistributedAp
 internal sealed class DistributedApplicationModuleResource<TResource>(
     string name,
     Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory,
-    ModuleContainerExportOptions? imagePublishOptions)
+    ModuleImageCommandOptions? imagePublishOptions)
     : IDistributedApplicationModuleFactoryResource
     where TResource : IResource
 {
@@ -331,7 +332,7 @@ internal sealed class DistributedApplicationModuleResource<TResource>(
 
     public Type ResourceType => typeof(TResource);
 
-    public ModuleContainerExportOptions? ImagePublishOptions { get; } = imagePublishOptions;
+    public ModuleImageCommandOptions? ImagePublishOptions { get; } = imagePublishOptions;
 
     public IResource Materialize(
         IDistributedApplicationModuleResourceContext context,
