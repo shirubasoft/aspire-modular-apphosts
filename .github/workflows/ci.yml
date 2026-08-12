@@ -215,6 +215,7 @@ jobs:
     timeout-minutes: 30
     env:
       ASPIRE_CONTAINER_RUNTIME: docker
+      MODULAR_SAMPLES_E2E: true
 
     steps:
       - name: Check out repository

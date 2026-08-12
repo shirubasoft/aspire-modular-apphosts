@@ -1,5 +1,6 @@
 using Aspire.Hosting;
 using Aspire.Hosting.Testing;
+using Microsoft.Extensions.Configuration;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Xunit;
@@ -14,6 +15,15 @@ public sealed class ModularAppHostTests
     [Fact]
     public async Task Both_AppHosts_apply_module_callbacks_and_run_the_exported_resources()
     {
+        var configuration = new ConfigurationBuilder()
+            .AddEnvironmentVariables()
+            .Build();
+        Assert.SkipUnless(
+            string.Equals(
+                configuration["MODULAR_SAMPLES_E2E"],
+                bool.TrueString,
+                StringComparison.OrdinalIgnoreCase),
+            "Set MODULAR_SAMPLES_E2E=true after confirming Docker or Podman is available.");
         await VerifyAppHostAsync<Projects.ModularSample_AppHostA>(hasGateway: false);
         await VerifyAppHostAsync<Projects.ModularSample_AppHostB>(hasGateway: true);
     }
