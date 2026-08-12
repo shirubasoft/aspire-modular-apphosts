@@ -158,25 +158,28 @@ public sealed class WorkflowDocumentationTests
     }
 
     [Fact]
-    public async Task Primary_guides_link_to_the_checked_in_upgrade_guide()
+    public async Task Current_documentation_does_not_publish_a_migration_guide()
     {
         var repositoryRoot = FindRepositoryRoot();
-        var upgradeGuide = Path.Combine(repositoryRoot, "docs", "upgrade-guide.md");
-        Assert.True(File.Exists(upgradeGuide));
+        Assert.False(File.Exists(Path.Combine(repositoryRoot, "docs", "upgrade-guide.md")));
 
-        var rootReadme = await File.ReadAllTextAsync(
+        string[] primaryGuides =
+        [
             Path.Combine(repositoryRoot, "README.md"),
-            TestContext.Current.CancellationToken);
-        var moduleGuide = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "CONTRIBUTING.md"),
             Path.Combine(repositoryRoot, "docs", "modules.md"),
-            TestContext.Current.CancellationToken);
-        var imageGuide = await File.ReadAllTextAsync(
-            Path.Combine(repositoryRoot, "docs", "module-images.md"),
-            TestContext.Current.CancellationToken);
+            Path.Combine(repositoryRoot, "docs", "module-images.md")
+        ];
 
-        Assert.Contains("docs/upgrade-guide.md", rootReadme, StringComparison.Ordinal);
-        Assert.Contains("(upgrade-guide.md)", moduleGuide, StringComparison.Ordinal);
-        Assert.Contains("(upgrade-guide.md)", imageGuide, StringComparison.Ordinal);
+        foreach (var path in primaryGuides)
+        {
+            var documentation = await File.ReadAllTextAsync(
+                path,
+                TestContext.Current.CancellationToken);
+            Assert.DoesNotContain("upgrade guide", documentation, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("migration guide", documentation, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("upgrade-guide.md", documentation, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static string FindRepositoryRoot()

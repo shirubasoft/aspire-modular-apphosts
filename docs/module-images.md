@@ -2,7 +2,6 @@
 
 This advanced guide covers module-owned image preparation and publication. Start with the
 [module guide](modules.md) for contract definition, imports, generated resources, and configuration.
-For removed image APIs and CLI names, follow the [upgrade guide](upgrade-guide.md).
 
 ## Declare module image publishers
 

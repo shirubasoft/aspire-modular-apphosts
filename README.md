@@ -161,7 +161,6 @@ for pinned setup, tag precedence, complete workflow files, permissions, and trou
 - [Module image workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-images.md): native and advanced image publishers, lifecycle, pipeline steps, and workflow documents.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
 - [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): module image workflow document publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
-- [Upgrade guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/upgrade-guide.md): migration steps for the namespace, synchronous contract, repository, image, and workflow API redesign.
 - [Two-AppHost sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples): one AppHost exports a mixed module and another imports it.
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.

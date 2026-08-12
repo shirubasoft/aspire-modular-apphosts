@@ -73,9 +73,10 @@ When squash-merging, ensure the resulting commit message still follows this conv
 ## Documentation
 
 Describe the current supported workflow and lead with the task a reader can perform. Keep prerequisites,
-security boundaries, and option constraints beside the command or API they govern. Release notes and
-upgrade guides own migration history, leaving reference guides focused on the current contract. Avoid
-comparisons with unrelated or unsupported concepts in reference guides.
+security boundaries, and option constraints beside the command or API they govern. Breaking-change
+history belongs in Conventional Commit messages and generated release notes, leaving reference guides
+focused on the current contract. Avoid comparisons with unrelated or unsupported concepts in reference
+guides.
 
 ## Releases
 

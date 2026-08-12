@@ -2,8 +2,6 @@
 
 `Shirubasoft.Aspire.ModularAppHosts` lets a shared C# contract describe an Aspire resource graph. Each receiving AppHost chooses whether to materialize that graph locally. Repository-backed modules can instead use a managed checkout. Consumers still reference the producer-owned C# contract assembly; the Git repository provides source and build context, not executable module-definition code.
 
-Migrating from the previous API surface? Follow the [upgrade guide](upgrade-guide.md).
-
 ## Define and materialize a module
 
 To scaffold the first contract into an existing project that references the core package, install the item-template package and choose the C# type name and stable module identity:
