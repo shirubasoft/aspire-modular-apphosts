@@ -338,10 +338,18 @@ jobs:
         run: dotnet tool restore
 
       - name: Validate initialization and runtime repository policies
+        env:
+          ASPIRE_CONTAINER_RUNTIME: docker
+          MULTI_REPO_E2E: true
         run: >-
-          dotnet run
-          --project samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj
+          dotnet test
+          tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj
           --configuration Release
-          --
-          --repository-root "${{ github.workspace }}"
-          --container-runtime docker
+
+      - name: Upload sanitized multi-repository failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: multi-repository-e2e-failure
+          path: artifacts/e2e/multi-repo-failure
+          if-no-files-found: ignore

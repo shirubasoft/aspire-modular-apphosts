@@ -4,9 +4,8 @@ This sample-only package demonstrates a producer-owned Aspire module contract. I
 definition repository, the stable `multi-repo-api` container, and its image build command while a
 separately configured build repository owns the Dockerfile and build inputs.
 
-When the AppHost constructs its model, the module binds `SpireModuleOptions` from its conventional
-`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` configuration section. The definition and
-build repositories are required and the build revision is optional. Run the initialization command
+The AppHost uses the standard module `Repository` setting and the `multi-repo-api` container's
+`BuildRepository` and optional `BuildRepositoryRevision` settings. Run the initialization command
 reported by preflight before starting a configuration that needs a managed checkout. Image preparation
 uses Aspire's selected Docker or Podman runtime immediately before the container starts. When a
 module image workflow document supplies the complete external image identity, the isolated CI consumer proves
@@ -20,4 +19,5 @@ using Spire.ModuleContract;
 var spire = builder.ImportSpireModule();
 ```
 
-The complete validation lives in the repository's `samples/MultiRepoE2E` directory.
+The runnable AppHosts live in `samples/MultiRepoE2E`; their lifecycle harness and assertions live in
+`tests/Spire.MultiRepo.E2E.Tests`.

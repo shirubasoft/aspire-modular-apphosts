@@ -41,9 +41,23 @@ The package contract suite packs the core library, testing library, workflow too
 - `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
 - `src/Aspire.Hosting.ModularAppHosts.Tool`: module image workflow document publication/application and cross-repository dispatch CLI.
 - `tests`: unit, lifecycle, generator, and package contract tests.
-- `samples`: runnable modular AppHost and E2E examples.
+- `tests/Spire.MultiRepo.E2E.Tests`: xUnit lifecycle tests and the isolated multi-repository scenario.
+- `tests/Spire.MultiRepo.E2E.Support`: tracked-fixture, process, Git, runtime, cleanup, and diagnostic support.
+- `samples`: runnable modular AppHosts and focused usage examples.
 - `templates`: the packaged `dotnet new` item template for the first module contract.
 - `docs`: user guides that are too detailed for the package README.
+
+Run the Docker-backed multi-repository suite with the same command as CI:
+
+```bash
+dotnet tool restore
+MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
+  dotnet test tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj \
+  --configuration Release
+```
+
+Podman is supported through Aspire's selected runtime and can be exercised by changing the runtime
+value to `podman`; the hosted CI suite currently validates Docker end to end.
 
 ## Commits and pull requests
 

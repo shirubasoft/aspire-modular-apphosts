@@ -9,7 +9,7 @@ The contract declares:
 
 - the `multi-repo-api` container and HTTP health check;
 - a Dockerfile build command that uses the standard `{container-runtime}` and `{image}` placeholders;
-- module-scoped `IOptions<SpireModuleOptions>` for the build repository and optional revision; and
+- standard module `Repository` and per-container `BuildRepository`/`BuildRepositoryRevision` settings; and
 - an `appsettings.json` default that uses the checked-in build fixture without environment variables.
 
 It also provides two AppHosts for the cross-repository workflow:
@@ -30,23 +30,24 @@ works with the ordinary Aspire command and Aspire's configured Docker or Podman 
 
 ```bash
 cd samples/MultiRepoE2E/Spire.Consumer.AppHost
-aspire run
+aspire
 ```
 
 ```bash
 cd samples/MultiRepoE2E/Spire.Producer.AppHost
-aspire run
+aspire
 ```
 
 For an independent checkout or pinned build, set `BuildRepository` and
 `BuildRepositoryRevision` under
-`Aspire:ModularAppHosts:Modules:multi-repo-resource-build` through JSON, command-line, or another
-standard .NET configuration provider. If that repository needs initialization, run the exact
-AppHost-aware command reported by preflight.
+`Aspire:ModularAppHosts:Modules:multi-repo-resource-build:Containers:multi-repo-api` through JSON,
+command-line, or another standard .NET configuration provider. Set the definition checkout with the
+module-level `Repository` option. If either repository needs initialization, run the exact AppHost-aware
+command reported by preflight.
 
 ## What CI proves
 
-The .NET E2E driver creates this layout outside the checked-out source tree:
+The xUnit E2E suite creates this layout outside the checked-out source tree:
 
 ```text
 <temporary-root>/
@@ -60,7 +61,7 @@ The .NET E2E driver creates this layout outside the checked-out source tree:
 Credential-free per-repository initialization sections are stored through Aspire's deployment-state
 API under `~/.aspire/deployments/<apphost-sha>/<environment>.json`.
 
-The driver packs the contract, removes its source and the build fixture from the isolated consumer,
+The suite packs the contract, removes its source and the build fixture from the isolated consumer,
 and creates independent local producer repositories. It then exercises the real Aspire CLI and
 verifies all of these behaviors in one locally reproducible command:
 
@@ -97,20 +98,20 @@ A separate CI job starts an ordinary local registry service and uses only the pa
 
 ## Run the maintainer validation
 
-Run the complete initialization scenario from the repository root. This is the same command CI uses;
-add `--keep-temporary` to preserve its isolated repositories for inspection after a successful run:
+Run the complete initialization scenario from the repository root. This is the exact test command CI
+uses:
 
 ```bash
 dotnet tool restore
-dotnet run \
-  --project samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj \
-  --configuration Release \
-  -- \
-  --repository-root . \
-  --container-runtime docker
+MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
+  dotnet test tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj \
+  --configuration Release
 ```
 
-Use `--container-runtime podman` to validate the same scenario with Podman.
+Set `ASPIRE_CONTAINER_RUNTIME=podman` to run the same suite with Podman. Docker is validated in CI;
+Podman selection is covered through Aspire's resolver and the runtime proxy but is not currently run
+end to end on a hosted runner. See the [test harness README](../../tests/Spire.MultiRepo.E2E.Tests/README.md)
+for fixture, proxy, cleanup, and failure-diagnostic details.
 
 To reproduce the image handoff from the repository root, start the same local registry used by CI:
 

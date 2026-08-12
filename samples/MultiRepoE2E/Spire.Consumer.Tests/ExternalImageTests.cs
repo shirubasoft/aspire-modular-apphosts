@@ -35,9 +35,10 @@ public sealed class ExternalImageTests
         await using var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.Spire_Consumer_AppHost>(
                 [
-                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:DefinitionRepository=" +
+                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:Repository=" +
                     unavailableDefinitionRepository,
-                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:BuildRepository=" +
+                    $"Aspire:ModularAppHosts:Modules:{SpireModule.Name}:Containers:" +
+                    $"{SpireModule.ApiResourceName}:BuildRepository=" +
                     unavailableBuildRepository
                 ],
                 timeout.Token);

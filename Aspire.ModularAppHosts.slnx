@@ -14,7 +14,6 @@
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.AppHost/Spire.Consumer.AppHost.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Consumer.Tests/Spire.Consumer.Tests.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
-    <Project Path="samples/MultiRepoE2E/Spire.MultiRepo.E2E.Driver/Spire.MultiRepo.E2E.Driver.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Producer.AppHost/Spire.Producer.AppHost.csproj" />
   </Folder>
   <Folder Name="/src/">
@@ -28,7 +27,8 @@
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tool.Tests/Aspire.Hosting.ModularAppHosts.Tool.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj" />
-    <Project Path="tests/Spire.MultiRepo.E2E.Driver.Tests/Spire.MultiRepo.E2E.Driver.Tests.csproj" />
+    <Project Path="tests/Spire.MultiRepo.E2E.Support/Spire.MultiRepo.E2E.Support.csproj" />
+    <Project Path="tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj" />
   </Folder>
   <Folder Name="/templates/">
     <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />

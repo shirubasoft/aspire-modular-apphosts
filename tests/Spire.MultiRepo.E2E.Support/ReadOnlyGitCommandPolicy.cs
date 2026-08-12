@@ -1,4 +1,4 @@
-namespace Spire.MultiRepo.E2E.Driver;
+namespace Spire.MultiRepo.E2E.Support;
 
 internal static class ReadOnlyGitCommandPolicy
 {
@@ -17,33 +17,6 @@ internal static class ReadOnlyGitCommandPolicy
         ["status", "--porcelain=v1", "--untracked-files=all"]
     ];
 
-    private static readonly HashSet<string> NetworkOrMutationOperations = new(StringComparer.Ordinal)
-    {
-        "add",
-        "am",
-        "apply",
-        "checkout",
-        "clean",
-        "clone",
-        "commit",
-        "fetch",
-        "merge",
-        "mv",
-        "pull",
-        "push",
-        "rebase",
-        "remote",
-        "reset",
-        "restore",
-        "revert",
-        "rm",
-        "stash",
-        "switch",
-        "tag",
-        "update-index",
-        "update-ref"
-    };
-
     public static bool IsAllowed(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
@@ -58,10 +31,6 @@ internal static class ReadOnlyGitCommandPolicy
             !command[1].StartsWith("-", StringComparison.Ordinal) &&
             command[1].EndsWith("^{commit}", StringComparison.Ordinal);
     }
-
-    public static bool IsNetworkOrMutation(string operation) =>
-        NetworkOrMutationOperations.Contains(operation) ||
-        string.Equals(operation, "submodule-update", StringComparison.Ordinal);
 
     public static string FindOperation(IReadOnlyList<string> arguments)
     {

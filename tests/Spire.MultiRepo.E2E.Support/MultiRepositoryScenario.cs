@@ -6,9 +6,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Spire.MultiRepo.E2E.Driver;
+namespace Spire.MultiRepo.E2E.Support;
 
-internal static class Program
+internal static partial class Program
 {
     private const string ModuleName = "multi-repo-resource-build";
     private const string ResourceName = "multi-repo-api";
@@ -19,77 +19,6 @@ internal static class Program
     private const string DirtyMarker = "multi-repo-resource-dirty-rebuild";
     private const string DirtyUpstreamMarker = "multi-repo-resource-dirty-upstream";
     private const string PackageVersion = "0.0.0-multi-repo-e2e";
-    private const string DummyUserName = "e2e-user";
-    private const string DummyPassword = "e2e-password";
-    private const string DummyQueryToken = "e2e-query-token";
-    private const string DummyFragment = "e2e-fragment";
-
-    public static async Task<int> Main(string[] args)
-    {
-        if (RuntimeProxy.IsInvocation())
-        {
-            return await RuntimeProxy.RunAsync(args, CancellationToken.None).ConfigureAwait(false);
-        }
-
-        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(GitProxy.LogEnvironmentVariable)))
-        {
-            return await GitProxy.RunAsync(args, CancellationToken.None).ConfigureAwait(false);
-        }
-
-        using var cancellationSource = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            cancellationSource.Cancel();
-        };
-
-        E2EOptions options;
-        try
-        {
-            options = E2EOptions.Parse(args);
-        }
-        catch (ArgumentException exception)
-        {
-            await Console.Error.WriteLineAsync(exception.Message).ConfigureAwait(false);
-            return 2;
-        }
-
-        var repositoryRoot = options.RepositoryRoot ?? FindRepositoryRoot(Directory.GetCurrentDirectory());
-        var temporaryRoot = Path.Combine(Path.GetTempPath(), $"modular-apphosts-e2e-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(temporaryRoot);
-        var succeeded = false;
-        try
-        {
-            var checkedInSamples = new CheckedInSampleScenario(repositoryRoot, options);
-            await checkedInSamples.RunAsync(cancellationSource.Token).ConfigureAwait(false);
-            var scenario = new MultiRepositoryScenario(repositoryRoot, temporaryRoot, options);
-            await scenario.RunAsync(cancellationSource.Token).ConfigureAwait(false);
-            succeeded = true;
-            await Console.Out.WriteLineAsync("Multi-repository initialization E2E passed.").ConfigureAwait(false);
-            return 0;
-        }
-        catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
-        {
-            await Console.Error.WriteLineAsync("Multi-repository initialization E2E was cancelled.").ConfigureAwait(false);
-            return 130;
-        }
-        catch (Exception exception)
-        {
-            await Console.Error.WriteLineAsync(Redact(exception.ToString())).ConfigureAwait(false);
-            return 1;
-        }
-        finally
-        {
-            if (succeeded && !options.KeepTemporary)
-            {
-                TryDeleteDirectory(temporaryRoot);
-            }
-            else
-            {
-                await Console.Error.WriteLineAsync($"E2E workspace: {temporaryRoot}").ConfigureAwait(false);
-            }
-        }
-    }
 
     private static string FindRepositoryRoot(string startDirectory)
     {
@@ -109,20 +38,6 @@ internal static class Program
         throw new InvalidOperationException(
             $"Unable to find the aspire-modular-apphosts repository above '{startDirectory}'. " +
             "Pass --repository-root explicitly.");
-    }
-
-    private static void TryDeleteDirectory(string path)
-    {
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
     }
 
     private static async Task WaitForExitAndKillAsync(
@@ -148,170 +63,6 @@ internal static class Program
         }
         catch (InvalidOperationException)
         {
-        }
-    }
-
-    private sealed class CheckedInSampleScenario(string repositoryRoot, E2EOptions options)
-    {
-        private readonly ProcessExecutor _process = new();
-        private readonly AspireCommand _aspire = AspireCommand.Create(options.AspirePath);
-
-        public async Task RunAsync(CancellationToken cancellationToken)
-        {
-            await Console.Out.WriteLineAsync(
-                "[multi-repo-e2e] Run the checked-in consumer and producer with their default configuration")
-                .ConfigureAwait(false);
-            await RunAppHostAsync("Spire.Consumer.AppHost", cancellationToken).ConfigureAwait(false);
-            await RunAppHostAsync("Spire.Producer.AppHost", cancellationToken).ConfigureAwait(false);
-        }
-
-        private async Task RunAppHostAsync(string appHostName, CancellationToken cancellationToken)
-        {
-            var appHostDirectory = Path.Combine(repositoryRoot, "samples", "MultiRepoE2E", appHostName);
-            var appHost = Path.Combine(appHostDirectory, $"{appHostName}.csproj");
-            var environment = string.IsNullOrWhiteSpace(options.ContainerRuntime)
-                ? null
-                : new Dictionary<string, string?>(StringComparer.Ordinal)
-                {
-                    ["ASPIRE_CONTAINER_RUNTIME"] = options.ContainerRuntime
-                };
-            var started = false;
-            try
-            {
-                var start = await RunAspireAsync(
-                    [
-                        "start",
-                        "--apphost", appHost,
-                        "--isolated",
-                        "--format", "Json",
-                        "--non-interactive"
-                    ],
-                    appHostDirectory,
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(start, $"aspire start in {appHostName}");
-                started = true;
-
-                var wait = await RunAspireAsync(
-                    [
-                        "wait", ResourceName,
-                        "--apphost", appHost,
-                        "--timeout", "180",
-                        "--non-interactive"
-                    ],
-                    appHostDirectory,
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(wait, $"aspire wait {ResourceName} in {appHostName}");
-
-                var describe = await RunAspireAsync(
-                    [
-                        "describe", ResourceName,
-                        "--apphost", appHost,
-                        "--format", "Json",
-                        "--non-interactive"
-                    ],
-                    appHostDirectory,
-                    environment,
-                    cancellationToken).ConfigureAwait(false);
-                EnsureSuccess(describe, $"aspire describe {ResourceName} in {appHostName}");
-                var resourceUrl = FindHttpResourceUrl(describe.StandardOutput);
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-                var marker = await client.GetStringAsync(
-                    new Uri(new Uri(resourceUrl.TrimEnd('/') + "/"), "marker.txt"),
-                    cancellationToken).ConfigureAwait(false);
-                AssertEqual(
-                    PinnedMarker,
-                    marker.Trim(),
-                    $"The checked-in {appHostName} started the wrong image.");
-            }
-            finally
-            {
-                if (started)
-                {
-                    var stop = await RunAspireAsync(
-                        ["stop", "--apphost", appHost, "--non-interactive"],
-                        appHostDirectory,
-                        environment,
-                        cancellationToken).ConfigureAwait(false);
-                    if (!stop.IsSuccess)
-                    {
-                        await Console.Error.WriteLineAsync(
-                            $"Emergency Aspire stop failed for {appHostName}:{Environment.NewLine}" +
-                            Redact(stop.CombinedOutput)).ConfigureAwait(false);
-                    }
-                }
-            }
-        }
-
-        private Task<ProcessResult> RunAspireAsync(
-            IReadOnlyList<string> arguments,
-            string workingDirectory,
-            IReadOnlyDictionary<string, string?>? environment,
-            CancellationToken cancellationToken) =>
-            _process.RunAsync(
-                new ProcessInvocation(
-                    _aspire.FileName,
-                    [.. _aspire.PrefixArguments, .. arguments],
-                    workingDirectory,
-                    environment),
-                cancellationToken);
-
-        private static void EnsureSuccess(ProcessResult result, string operation)
-        {
-            if (!result.IsSuccess)
-            {
-                throw new InvalidOperationException(
-                    $"{operation} failed with exit code {result.ExitCode}:{Environment.NewLine}" +
-                    Redact(result.CombinedOutput));
-            }
-        }
-
-        private static string FindHttpResourceUrl(string json)
-        {
-            using var document = JsonDocument.Parse(json);
-            if (TryFindHttpUrl(document.RootElement, out var url))
-            {
-                return url;
-            }
-
-            throw new InvalidOperationException("Aspire describe did not return an HTTP URL for the resource.");
-        }
-
-        private static bool TryFindHttpUrl(JsonElement element, out string url)
-        {
-            if (element.ValueKind == JsonValueKind.Object)
-            {
-                if (element.TryGetProperty("name", out var name) &&
-                    string.Equals(name.GetString(), "http", StringComparison.OrdinalIgnoreCase) &&
-                    element.TryGetProperty("url", out var endpoint) &&
-                    endpoint.GetString() is { Length: > 0 } value)
-                {
-                    url = value;
-                    return true;
-                }
-
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (TryFindHttpUrl(property.Value, out url))
-                    {
-                        return true;
-                    }
-                }
-            }
-            else if (element.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in element.EnumerateArray())
-                {
-                    if (TryFindHttpUrl(item, out url))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            url = string.Empty;
-            return false;
         }
     }
 
@@ -429,12 +180,12 @@ internal static class Program
                 await GetRevisionAsync(remoteCheckout, cancellationToken).ConfigureAwait(false),
                 "The unpinned checkout did not start at the producer's latest revision.");
             AssertEqual(
-                _remoteRepository,
-                await RunGitOutputAsync(
+                Redact(_remoteRepository),
+                Redact(await RunGitOutputAsync(
                     remoteCheckout,
                     ["remote", "get-url", "origin"],
-                    cancellationToken).ConfigureAwait(false),
-                "The unpinned checkout has the wrong configured origin.");
+                    cancellationToken).ConfigureAwait(false)),
+                "The unpinned checkout has the wrong normalized origin.");
 
             await WritePhaseAsync("Pick up a clean upstream change through initialize").ConfigureAwait(false);
             var initializedRevision = await CommitMarkerAsync(
@@ -555,7 +306,11 @@ internal static class Program
                 "Pack the module contract",
                 cancellationToken).ConfigureAwait(false);
 
-            CopyRepository(repositoryRoot, _consumerRepository);
+            await TrackedRepositoryFixture.CopyAsync(
+                _process,
+                repositoryRoot,
+                _consumerRepository,
+                cancellationToken).ConfigureAwait(false);
             Directory.Move(
                 Path.Combine(_consumerRepository, "samples", "MultiRepoE2E", "Spire.ModuleContract"),
                 _contractRepository);
@@ -572,8 +327,9 @@ internal static class Program
                 "Change marker after pinned revision",
                 cancellationToken).ConfigureAwait(false);
             _remoteRepository =
-                $"https://{DummyUserName}:{DummyPassword}@example.invalid/modular/resource-build.git" +
-                $"?access_token={DummyQueryToken}#{DummyFragment}";
+                $"https://{E2ERedactor.DummyUserName}:{E2ERedactor.DummyPassword}" +
+                "@example.invalid/modular/resource-build.git" +
+                $"?access_token={E2ERedactor.DummyQueryToken}#{E2ERedactor.DummyFragment}";
             _appHost = Path.Combine(
                 _consumerRepository,
                 "samples",
@@ -893,9 +649,10 @@ internal static class Program
             var environment = CreatePackageEnvironment();
             var section = "Aspire__ModularAppHosts";
             var module = $"{section}__Modules__{ModuleName}";
-            environment[$"{module}__DefinitionRepository"] = _contractRepository;
-            environment[$"{module}__BuildRepository"] = buildRepository;
-            environment[$"{module}__BuildRepositoryRevision"] = revision;
+            var container = $"{module}__Containers__{ResourceName}";
+            environment[$"{module}__Repository"] = _contractRepository;
+            environment[$"{container}__BuildRepository"] = buildRepository;
+            environment[$"{container}__BuildRepositoryRevision"] = revision;
             environment[$"{section}__GitExecutablePath"] = _driverExecutable;
             environment[$"{section}__GitHubCliPath"] = _driverExecutable;
             environment[$"{section}__RefreshBuildRepositoriesOnRun"] = refreshBuildRepositories.ToString();
@@ -1105,7 +862,8 @@ internal static class Program
 
         private static void AssertNoRepositoryMutation(IEnumerable<GitProxyOperation> operations)
         {
-            var mutation = operations.FirstOrDefault(operation => GitProxy.IsNetworkOrMutation(operation.Operation));
+            var mutation = operations.FirstOrDefault(operation =>
+                !ReadOnlyGitCommandPolicy.IsAllowed(operation.Arguments));
             if (mutation is not null)
             {
                 throw new InvalidOperationException(
@@ -1132,7 +890,7 @@ internal static class Program
 
         private static void AssertRedacted(string value)
         {
-            foreach (var sensitiveValue in new[] { DummyUserName, DummyPassword, DummyQueryToken, DummyFragment })
+            foreach (var sensitiveValue in E2ERedactor.SensitiveValues)
             {
                 if (value.Contains(sensitiveValue, StringComparison.Ordinal))
                 {
@@ -1209,8 +967,8 @@ internal static class Program
             var executable = Path.Combine(
                 AppContext.BaseDirectory,
                 OperatingSystem.IsWindows()
-                    ? "Spire.MultiRepo.E2E.Driver.exe"
-                    : "Spire.MultiRepo.E2E.Driver");
+                    ? "Spire.MultiRepo.E2E.Support.exe"
+                    : "Spire.MultiRepo.E2E.Support");
             if (!File.Exists(executable))
             {
                 throw new InvalidOperationException($"The Git proxy executable '{executable}' does not exist.");
@@ -1219,470 +977,5 @@ internal static class Program
             return executable;
         }
 
-        private static void CopyRepository(string source, string destination)
-        {
-            var excludedDirectoryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ".git",
-                ".aspire",
-                ".vs",
-                "artifacts",
-                "bin",
-                "obj"
-            };
-            CopyDirectory(source, destination, excludedDirectoryNames);
-        }
-
-        private static void CopyDirectory(
-            string source,
-            string destination,
-            IReadOnlySet<string> excludedDirectoryNames)
-        {
-            Directory.CreateDirectory(destination);
-            foreach (var file in Directory.EnumerateFiles(source))
-            {
-                var destinationFile = Path.Combine(destination, Path.GetFileName(file));
-                File.Copy(file, destinationFile);
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(destinationFile, File.GetUnixFileMode(file));
-                }
-            }
-
-            foreach (var directory in Directory.EnumerateDirectories(source))
-            {
-                if (excludedDirectoryNames.Contains(Path.GetFileName(directory)))
-                {
-                    continue;
-                }
-
-                CopyDirectory(
-                    directory,
-                    Path.Combine(destination, Path.GetFileName(directory)),
-                    excludedDirectoryNames);
-            }
-        }
-    }
-
-    private sealed record E2EOptions(
-        string? RepositoryRoot,
-        string? AspirePath,
-        string? ContainerRuntime,
-        bool KeepTemporary)
-    {
-        public static E2EOptions Parse(IReadOnlyList<string> args)
-        {
-            string? repositoryRoot = null;
-            string? aspirePath = null;
-            string? containerRuntime = null;
-            var keepTemporary = false;
-            for (var index = 0; index < args.Count; index++)
-            {
-                switch (args[index])
-                {
-                    case "--repository-root":
-                        repositoryRoot = ReadValue(args, ref index, "--repository-root");
-                        break;
-                    case "--aspire-path":
-                        aspirePath = ReadValue(args, ref index, "--aspire-path");
-                        break;
-                    case "--container-runtime":
-                        containerRuntime = ReadValue(args, ref index, "--container-runtime");
-                        if (containerRuntime is not ("docker" or "podman"))
-                        {
-                            throw new ArgumentException("--container-runtime must be 'docker' or 'podman'.");
-                        }
-                        break;
-                    case "--keep-temporary":
-                        keepTemporary = true;
-                        break;
-                    default:
-                        throw new ArgumentException($"Unknown option '{args[index]}'.");
-                }
-            }
-
-            return new E2EOptions(
-                repositoryRoot is null ? null : Path.GetFullPath(repositoryRoot),
-                aspirePath,
-                containerRuntime,
-                keepTemporary);
-        }
-
-        private static string ReadValue(IReadOnlyList<string> args, ref int index, string option)
-        {
-            index++;
-            if (index >= args.Count || string.IsNullOrWhiteSpace(args[index]))
-            {
-                throw new ArgumentException($"{option} requires a value.");
-            }
-
-            return args[index];
-        }
-    }
-
-    private sealed record AspireCommand(string FileName, IReadOnlyList<string> PrefixArguments)
-    {
-        public static AspireCommand Create(string? aspirePath)
-        {
-            return string.IsNullOrWhiteSpace(aspirePath)
-                ? new AspireCommand("dotnet", ["tool", "run", "aspire", "--"])
-                : new AspireCommand(aspirePath, []);
-        }
-    }
-
-    private sealed record ProcessInvocation(
-        string FileName,
-        IReadOnlyList<string> Arguments,
-        string WorkingDirectory,
-        IReadOnlyDictionary<string, string?>? Environment = null);
-
-    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError)
-    {
-        public bool IsSuccess => ExitCode == 0;
-
-        public string CombinedOutput => $"{StandardOutput}{Environment.NewLine}{StandardError}";
-    }
-
-    private sealed class ProcessExecutor
-    {
-        private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(10);
-
-        public async Task<ProcessResult> RunAsync(
-            ProcessInvocation invocation,
-            CancellationToken cancellationToken)
-        {
-            var startInfo = new ProcessStartInfo(invocation.FileName)
-            {
-                WorkingDirectory = invocation.WorkingDirectory,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            foreach (var argument in invocation.Arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-            if (invocation.Environment is not null)
-            {
-                foreach (var pair in invocation.Environment)
-                {
-                    startInfo.Environment[pair.Key] = pair.Value;
-                }
-            }
-
-            using var process = new Process { StartInfo = startInfo };
-            if (!process.Start())
-            {
-                throw new InvalidOperationException($"Unable to start '{invocation.FileName}'.");
-            }
-
-            using var timeoutSource = new CancellationTokenSource(ProcessTimeout);
-            using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                timeoutSource.Token);
-            var standardOutput = process.StandardOutput.ReadToEndAsync(linkedSource.Token);
-            var standardError = process.StandardError.ReadToEndAsync(linkedSource.Token);
-            try
-            {
-                await WaitForExitAndKillAsync(process, linkedSource.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested &&
-                !cancellationToken.IsCancellationRequested)
-            {
-                throw new TimeoutException(
-                    $"Process '{invocation.FileName}' exceeded the {ProcessTimeout} E2E timeout.");
-            }
-
-            return new ProcessResult(
-                process.ExitCode,
-                await standardOutput.ConfigureAwait(false),
-                await standardError.ConfigureAwait(false));
-        }
-
-    }
-
-    private enum GitProxyPolicy
-    {
-        Initialize,
-        ReadOnly,
-        Refresh
-    }
-
-    private sealed record RuntimeProxyOperation(
-        string Runtime,
-        string RealExecutable,
-        string[] Arguments);
-
-    private static class RuntimeProxy
-    {
-        public const string LogDirectoryEnvironmentVariable = "MODULAR_E2E_RUNTIME_PROXY_LOG_DIRECTORY";
-        public const string RealExecutableEnvironmentVariable = "MODULAR_E2E_REAL_CONTAINER_RUNTIME";
-        public const string RuntimeEnvironmentVariable = "MODULAR_E2E_CONTAINER_RUNTIME";
-
-        public static bool IsInvocation()
-        {
-            var runtime = Environment.GetEnvironmentVariable(RuntimeEnvironmentVariable);
-            return !string.IsNullOrWhiteSpace(runtime) &&
-                string.Equals(
-                    Path.GetFileNameWithoutExtension(Environment.ProcessPath),
-                    runtime,
-                    StringComparison.OrdinalIgnoreCase);
-        }
-
-        public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-        {
-            var runtime = Environment.GetEnvironmentVariable(RuntimeEnvironmentVariable)
-                ?? throw new InvalidOperationException($"{RuntimeEnvironmentVariable} is not configured.");
-            var realExecutable = Environment.GetEnvironmentVariable(RealExecutableEnvironmentVariable)
-                ?? throw new InvalidOperationException($"{RealExecutableEnvironmentVariable} is not configured.");
-            var logDirectory = Environment.GetEnvironmentVariable(LogDirectoryEnvironmentVariable)
-                ?? throw new InvalidOperationException($"{LogDirectoryEnvironmentVariable} is not configured.");
-            Directory.CreateDirectory(logDirectory);
-            var logPath = Path.Combine(
-                logDirectory,
-                $"{DateTimeOffset.UtcNow.UtcTicks:D19}-{Guid.NewGuid():N}.json");
-            await File.WriteAllTextAsync(
-                logPath,
-                JsonSerializer.Serialize(new RuntimeProxyOperation(runtime, realExecutable, args)),
-                cancellationToken).ConfigureAwait(false);
-
-            var startInfo = new ProcessStartInfo(realExecutable)
-            {
-                UseShellExecute = false
-            };
-            foreach (var argument in args)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            startInfo.Environment.Remove(LogDirectoryEnvironmentVariable);
-            startInfo.Environment.Remove(RealExecutableEnvironmentVariable);
-            startInfo.Environment.Remove(RuntimeEnvironmentVariable);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException($"Unable to start '{realExecutable}'.");
-            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
-            return process.ExitCode;
-        }
-    }
-
-    private sealed record GitProxyOperation(string Operation, string[] Arguments);
-
-    private static class GitProxy
-    {
-        public const string LogEnvironmentVariable = "MODULAR_E2E_GIT_PROXY_LOG";
-        public const string PolicyEnvironmentVariable = "MODULAR_E2E_GIT_PROXY_POLICY";
-        public const string RealGitEnvironmentVariable = "MODULAR_E2E_REAL_GIT";
-        public const string RemoteRepositoryEnvironmentVariable = "MODULAR_E2E_REMOTE_REPOSITORY";
-        public const string SourceRepositoryEnvironmentVariable = "MODULAR_E2E_SOURCE_REPOSITORY";
-
-        public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
-        {
-            var operation = ReadOnlyGitCommandPolicy.FindOperation(args);
-            await AppendOperationAsync(operation, args, cancellationToken).ConfigureAwait(false);
-            var policy = Enum.TryParse<GitProxyPolicy>(
-                Environment.GetEnvironmentVariable(PolicyEnvironmentVariable),
-                ignoreCase: true,
-                out var configuredPolicy)
-                ? configuredPolicy
-                : GitProxyPolicy.ReadOnly;
-            if (policy == GitProxyPolicy.ReadOnly && !ReadOnlyGitCommandPolicy.IsAllowed(args))
-            {
-                await Console.Error.WriteLineAsync(
-                    $"Git proxy denied '{operation}' during a default run.").ConfigureAwait(false);
-                return 97;
-            }
-
-            var realGit = Environment.GetEnvironmentVariable(RealGitEnvironmentVariable) ?? "git";
-            var remoteRepository = Environment.GetEnvironmentVariable(RemoteRepositoryEnvironmentVariable);
-            var sourceRepository = Environment.GetEnvironmentVariable(SourceRepositoryEnvironmentVariable);
-            if (operation == "clone" &&
-                !string.IsNullOrWhiteSpace(remoteRepository) &&
-                !string.IsNullOrWhiteSpace(sourceRepository) &&
-                args.Contains(remoteRepository, StringComparer.Ordinal))
-            {
-                await Console.Out.WriteLineAsync($"Cloning {remoteRepository}").ConfigureAwait(false);
-                var rewritten = args
-                    .Select(argument => string.Equals(argument, remoteRepository, StringComparison.Ordinal)
-                        ? sourceRepository
-                        : argument)
-                    .ToArray();
-                var exitCode = await ForwardAsync(realGit, rewritten, cancellationToken).ConfigureAwait(false);
-                if (exitCode != 0)
-                {
-                    return exitCode;
-                }
-
-                var destination = args[^1];
-                return await RunSilentAsync(
-                    realGit,
-                    ["-C", destination, "remote", "set-url", "origin", remoteRepository],
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            if (operation is "fetch" or "pull" &&
-                !string.IsNullOrWhiteSpace(remoteRepository) &&
-                !string.IsNullOrWhiteSpace(sourceRepository) &&
-                FindWorkingDirectory(args) is { } repositoryPath)
-            {
-                var configuredOrigin = await CaptureAsync(
-                    realGit,
-                    ["-C", repositoryPath, "config", "--get", "remote.origin.url"],
-                    cancellationToken).ConfigureAwait(false);
-                if (string.Equals(configuredOrigin.Output.Trim(), remoteRepository, StringComparison.Ordinal))
-                {
-                    var setLocalExitCode = await RunSilentAsync(
-                        realGit,
-                        ["-C", repositoryPath, "remote", "set-url", "origin", sourceRepository],
-                        cancellationToken).ConfigureAwait(false);
-                    if (setLocalExitCode != 0)
-                    {
-                        return setLocalExitCode;
-                    }
-
-                    try
-                    {
-                        return await ForwardAsync(realGit, args, cancellationToken).ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        await RunSilentAsync(
-                            realGit,
-                            ["-C", repositoryPath, "remote", "set-url", "origin", remoteRepository],
-                            CancellationToken.None).ConfigureAwait(false);
-                    }
-                }
-            }
-
-            return await ForwardAsync(realGit, args, cancellationToken).ConfigureAwait(false);
-        }
-
-        public static bool IsNetworkOrMutation(string operation) =>
-            ReadOnlyGitCommandPolicy.IsNetworkOrMutation(operation);
-
-        private static string? FindWorkingDirectory(IReadOnlyList<string> args)
-        {
-            for (var index = 0; index + 1 < args.Count; index++)
-            {
-                if (string.Equals(args[index], "-C", StringComparison.Ordinal))
-                {
-                    return args[index + 1];
-                }
-            }
-
-            return null;
-        }
-
-        private static async Task AppendOperationAsync(
-            string operation,
-            string[] args,
-            CancellationToken cancellationToken)
-        {
-            var logPath = Environment.GetEnvironmentVariable(LogEnvironmentVariable)
-                ?? throw new InvalidOperationException($"{LogEnvironmentVariable} is not configured.");
-            var line = JsonSerializer.Serialize(new GitProxyOperation(operation, args)) + Environment.NewLine;
-            await File.AppendAllTextAsync(logPath, line, cancellationToken).ConfigureAwait(false);
-        }
-
-        private static async Task<int> ForwardAsync(
-            string executable,
-            IReadOnlyList<string> args,
-            CancellationToken cancellationToken)
-        {
-            var startInfo = CreateStartInfo(executable, args, redirectOutput: false);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException($"Unable to start '{executable}'.");
-            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
-            return process.ExitCode;
-        }
-
-        private static async Task<int> RunSilentAsync(
-            string executable,
-            IReadOnlyList<string> args,
-            CancellationToken cancellationToken)
-        {
-            var result = await CaptureAsync(executable, args, cancellationToken).ConfigureAwait(false);
-            return result.ExitCode;
-        }
-
-        private static async Task<(int ExitCode, string Output)> CaptureAsync(
-            string executable,
-            IReadOnlyList<string> args,
-            CancellationToken cancellationToken)
-        {
-            var startInfo = CreateStartInfo(executable, args, redirectOutput: true);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException($"Unable to start '{executable}'.");
-            var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var error = process.StandardError.ReadToEndAsync(cancellationToken);
-            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
-            _ = await error.ConfigureAwait(false);
-            return (process.ExitCode, await output.ConfigureAwait(false));
-        }
-
-        private static ProcessStartInfo CreateStartInfo(
-            string executable,
-            IReadOnlyList<string> args,
-            bool redirectOutput)
-        {
-            var startInfo = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false,
-                RedirectStandardOutput = redirectOutput,
-                RedirectStandardError = redirectOutput
-            };
-            foreach (var argument in args)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-
-            startInfo.Environment.Remove(LogEnvironmentVariable);
-            startInfo.Environment.Remove(PolicyEnvironmentVariable);
-            startInfo.Environment.Remove(RemoteRepositoryEnvironmentVariable);
-            startInfo.Environment.Remove(SourceRepositoryEnvironmentVariable);
-            return startInfo;
-        }
-    }
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
-
-    private static string Redact(string value)
-    {
-        return value
-            .Replace(DummyUserName, "[REDACTED]", StringComparison.Ordinal)
-            .Replace(DummyPassword, "[REDACTED]", StringComparison.Ordinal)
-            .Replace(DummyQueryToken, "[REDACTED]", StringComparison.Ordinal)
-            .Replace(DummyFragment, "[REDACTED]", StringComparison.Ordinal);
-    }
-
-    private static string RemoveWhitespace(string value)
-    {
-        return new string(value.Where(character => !char.IsWhiteSpace(character)).ToArray());
-    }
-
-    private static void AssertContains(string value, string expected, string message)
-    {
-        if (!value.Contains(expected, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException($"{message}{Environment.NewLine}{Redact(value)}");
-        }
-    }
-
-    private static void AssertNotEmpty(string value, string message)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new InvalidOperationException(message);
-        }
-    }
-
-    private static void AssertEqual<T>(T expected, T actual, string message)
-    {
-        if (!EqualityComparer<T>.Default.Equals(expected, actual))
-        {
-            throw new InvalidOperationException(
-                $"{message} Expected '{expected}', actual '{actual}'.");
-        }
     }
 }
