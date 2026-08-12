@@ -189,7 +189,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
-    public async Task Aspire_state_store_round_trips_credential_free_initialization_state()
+    public async Task File_state_store_round_trips_credential_free_initialization_state()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -198,8 +198,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "https://build-user:secret@github.com/acme/services.git?token=secret",
             revision: "v2.0.0",
             updateOnInitialize: true).Requirement;
-        var deploymentState = new InMemoryDeploymentStateManager();
-        var store = new AspireModuleRepositoryStateStore(deploymentState);
+        var store = new FileModuleRepositoryStateStore();
         var state = new ModuleRepositoryInitializationState(
             ModuleRepositoryInitializationState.CurrentSchemaVersion,
             requirement.NormalizedRepository,
@@ -218,10 +217,9 @@ public sealed class ModuleRepositoryInitializationPipelineTests
         var restored = await store.ReadAsync(
             requirement,
             TestContext.Current.CancellationToken);
-        var section = await deploymentState.AcquireSectionAsync(
-            AspireModuleRepositoryStateStore.GetSectionName(requirement),
+        var serialized = await File.ReadAllTextAsync(
+            requirement.StatePath,
             TestContext.Current.CancellationToken);
-        var serialized = section.Data[string.Empty]!.GetValue<string>();
 
         Assert.Equal(state, restored);
         Assert.True(restored!.Matches(requirement));
@@ -230,7 +228,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
-    public async Task Malformed_deployment_state_is_treated_as_not_initialized()
+    public async Task Malformed_file_state_is_treated_as_not_initialized()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -239,20 +237,19 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "acme/services",
             revision: null,
             updateOnInitialize: true).Requirement;
-        var deploymentState = new InMemoryDeploymentStateManager();
-        var section = await deploymentState.AcquireSectionAsync(
-            AspireModuleRepositoryStateStore.GetSectionName(requirement),
+        Directory.CreateDirectory(Path.GetDirectoryName(requirement.StatePath)!);
+        await File.WriteAllTextAsync(
+            requirement.StatePath,
+            "{not valid JSON",
             TestContext.Current.CancellationToken);
-        section.SetValue("{not valid JSON");
-        await deploymentState.SaveSectionAsync(section, TestContext.Current.CancellationToken);
 
-        Assert.Null(await new AspireModuleRepositoryStateStore(deploymentState).ReadAsync(
+        Assert.Null(await new FileModuleRepositoryStateStore().ReadAsync(
             requirement,
             TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public async Task Failed_initialization_does_not_write_deployment_state()
+    public async Task Failed_initialization_does_not_write_repository_state()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);

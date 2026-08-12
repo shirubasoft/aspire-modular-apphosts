@@ -69,7 +69,7 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            await Console.Error.WriteLineAsync(exception.ToString()).ConfigureAwait(false);
+            await Console.Error.WriteLineAsync(Redact(exception.ToString())).ConfigureAwait(false);
             return 1;
         }
         finally
@@ -115,6 +115,32 @@ internal static class Program
         {
         }
         catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static async Task WaitForExitAndKillAsync(
+        Process process,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKillProcessTree(process);
+            throw;
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
         {
         }
     }
@@ -227,7 +253,7 @@ internal static class Program
             var remoteCheckout = GetNewSiblingGitDirectory(remoteDirectoriesBefore);
             AssertInitializationLifecycle(remoteInitialization.CombinedOutput, remoteCheckout, "clone");
             AssertRedacted(remoteInitialization.CombinedOutput);
-            AssertReceiptsAreCredentialFree();
+            AssertRepositoryStateIsCredentialFree();
             AssertEqual(
                 _latestRevision,
                 await GetRevisionAsync(remoteCheckout, cancellationToken).ConfigureAwait(false),
@@ -446,8 +472,16 @@ internal static class Program
 
             AssertContains(
                 result.CombinedOutput,
-                "Run 'aspire do initialize --non-interactive'.",
-                "The preflight failure did not contain the exact initialization command.");
+                "aspire do initialize --apphost",
+                "The preflight failure did not contain the AppHost-aware initialization command.");
+            AssertContains(
+                RemoveWhitespace(result.CombinedOutput),
+                RemoveWhitespace(Path.GetDirectoryName(_appHost)!),
+                "The preflight failure did not identify the AppHost to initialize.");
+            AssertContains(
+                result.CombinedOutput,
+                "--non-interactive",
+                "The preflight failure did not provide a non-interactive initialization command.");
         }
 
         private async Task<ProcessResult> RunInitializeAsync(
@@ -714,24 +748,24 @@ internal static class Program
             return added[0];
         }
 
-        private void AssertReceiptsAreCredentialFree()
+        private void AssertRepositoryStateIsCredentialFree()
         {
-            var receiptDirectory = Path.Combine(
+            var stateDirectory = Path.Combine(
                 _consumerRepository,
                 ".aspire",
                 "modular-apphosts",
                 "repositories");
-            var receipts = Directory.Exists(receiptDirectory)
-                ? Directory.EnumerateFiles(receiptDirectory, "*.json").ToArray()
+            var stateFiles = Directory.Exists(stateDirectory)
+                ? Directory.EnumerateFiles(stateDirectory, "*.json").ToArray()
                 : [];
-            if (receipts.Length == 0)
+            if (stateFiles.Length == 0)
             {
-                throw new InvalidOperationException("Initialization did not write a repository receipt.");
+                throw new InvalidOperationException("Initialization did not write repository state.");
             }
 
-            foreach (var receipt in receipts)
+            foreach (var stateFile in stateFiles)
             {
-                AssertRedacted(File.ReadAllText(receipt));
+                AssertRedacted(File.ReadAllText(stateFile));
             }
         }
 
@@ -808,11 +842,14 @@ internal static class Program
             }
 
             if (!captured.Any(operation =>
-                    operation.Arguments is ["image", "inspect", var imageReference, ..] &&
-                    imageReference.StartsWith("multi-repo-e2e-resource:", StringComparison.Ordinal)))
+                    operation.Arguments is ["build", .., "--tag", var imageReference, _] &&
+                    imageReference.StartsWith("multi-repo-e2e-resource:", StringComparison.Ordinal)) ||
+                !captured.Any(operation =>
+                    operation.Arguments is ["tag", var source, "multi-repo-e2e-resource:aspire-run"] &&
+                    source.StartsWith("multi-repo-e2e-resource:", StringComparison.Ordinal)))
             {
                 throw new InvalidOperationException(
-                    $"The image evaluator did not inspect its canonical image with configured runtime '{expectedRuntime}'.");
+                    $"The image evaluator did not build and tag its canonical image with configured runtime '{expectedRuntime}'.");
             }
         }
 
@@ -878,7 +915,7 @@ internal static class Program
                 if (value.Contains(sensitiveValue, StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException(
-                        $"Initialization output or receipt exposed E2E credential marker '{sensitiveValue}'.");
+                        $"Initialization output exposed E2E credential marker '{sensitiveValue}'.");
                 }
             }
         }
@@ -1125,12 +1162,11 @@ internal static class Program
             var standardError = process.StandardError.ReadToEndAsync(linkedSource.Token);
             try
             {
-                await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+                await WaitForExitAndKillAsync(process, linkedSource.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested &&
                 !cancellationToken.IsCancellationRequested)
             {
-                TryKill(process);
                 throw new TimeoutException(
                     $"Process '{invocation.FileName}' exceeded the {ProcessTimeout} E2E timeout.");
             }
@@ -1141,16 +1177,6 @@ internal static class Program
                 await standardError.ConfigureAwait(false));
         }
 
-        private static void TryKill(Process process)
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        }
     }
 
     private enum GitProxyPolicy
@@ -1212,7 +1238,7 @@ internal static class Program
             startInfo.Environment.Remove(RuntimeEnvironmentVariable);
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Unable to start '{realExecutable}'.");
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
             return process.ExitCode;
         }
     }
@@ -1227,21 +1253,9 @@ internal static class Program
         public const string RemoteRepositoryEnvironmentVariable = "MODULAR_E2E_REMOTE_REPOSITORY";
         public const string SourceRepositoryEnvironmentVariable = "MODULAR_E2E_SOURCE_REPOSITORY";
 
-        private static readonly HashSet<string> NetworkOrMutationOperations = new(StringComparer.Ordinal)
-        {
-            "clone",
-            "fetch",
-            "pull",
-            "checkout",
-            "switch",
-            "merge",
-            "rebase",
-            "reset"
-        };
-
         public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken)
         {
-            var operation = FindOperation(args);
+            var operation = ReadOnlyGitCommandPolicy.FindOperation(args);
             await AppendOperationAsync(operation, args, cancellationToken).ConfigureAwait(false);
             var policy = Enum.TryParse<GitProxyPolicy>(
                 Environment.GetEnvironmentVariable(PolicyEnvironmentVariable),
@@ -1249,7 +1263,7 @@ internal static class Program
                 out var configuredPolicy)
                 ? configuredPolicy
                 : GitProxyPolicy.ReadOnly;
-            if (policy == GitProxyPolicy.ReadOnly && IsNetworkOrMutation(operation))
+            if (policy == GitProxyPolicy.ReadOnly && !ReadOnlyGitCommandPolicy.IsAllowed(args))
             {
                 await Console.Error.WriteLineAsync(
                     $"Git proxy denied '{operation}' during a default run.").ConfigureAwait(false);
@@ -1321,29 +1335,7 @@ internal static class Program
         }
 
         public static bool IsNetworkOrMutation(string operation) =>
-            NetworkOrMutationOperations.Contains(operation) ||
-            string.Equals(operation, "submodule-update", StringComparison.Ordinal);
-
-        private static string FindOperation(IReadOnlyList<string> args)
-        {
-            for (var index = 0; index < args.Count; index++)
-            {
-                var argument = args[index];
-                if (string.Equals(argument, "submodule", StringComparison.Ordinal) &&
-                    index + 1 < args.Count && string.Equals(args[index + 1], "update", StringComparison.Ordinal))
-                {
-                    return "submodule-update";
-                }
-                if (NetworkOrMutationOperations.Contains(argument) || argument is
-                    "rev-parse" or "status" or "branch" or "config" or "diff" or "log" or "show" or
-                    "describe" or "symbolic-ref")
-                {
-                    return argument;
-                }
-            }
-
-            return args.FirstOrDefault(argument => !argument.StartsWith("-", StringComparison.Ordinal)) ?? "unknown";
-        }
+            ReadOnlyGitCommandPolicy.IsNetworkOrMutation(operation);
 
         private static string? FindWorkingDirectory(IReadOnlyList<string> args)
         {
@@ -1377,7 +1369,7 @@ internal static class Program
             var startInfo = CreateStartInfo(executable, args, redirectOutput: false);
             using var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Unable to start '{executable}'.");
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
             return process.ExitCode;
         }
 
@@ -1400,7 +1392,7 @@ internal static class Program
                 ?? throw new InvalidOperationException($"Unable to start '{executable}'.");
             var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var error = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await WaitForExitAndKillAsync(process, cancellationToken).ConfigureAwait(false);
             _ = await error.ConfigureAwait(false);
             return (process.ExitCode, await output.ConfigureAwait(false));
         }

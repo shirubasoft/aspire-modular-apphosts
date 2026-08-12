@@ -1,7 +1,5 @@
-#pragma warning disable ASPIREPIPELINES002
-
 using System.Text.Json;
-using Aspire.Hosting.Pipelines;
+using System.Text.Json.Serialization;
 
 namespace Aspire.Hosting;
 
@@ -37,27 +35,43 @@ internal interface IModuleRepositoryStateStore
         CancellationToken cancellationToken);
 }
 
-internal sealed class AspireModuleRepositoryStateStore(IDeploymentStateManager stateManager)
-    : IModuleRepositoryStateStore
+internal sealed class FileModuleRepositoryStateStore : IModuleRepositoryStateStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true
+    };
 
     public async Task<ModuleRepositoryInitializationState?> ReadAsync(
         ModuleRepositoryRequirement requirement,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(requirement);
-        var section = await stateManager.AcquireSectionAsync(
-            GetSectionName(requirement),
-            cancellationToken).ConfigureAwait(false);
+        if (!File.Exists(requirement.StatePath))
+        {
+            return null;
+        }
+
         try
         {
-            var json = section.Data[string.Empty]?.GetValue<string>();
-            return string.IsNullOrWhiteSpace(json)
-                ? null
-                : JsonSerializer.Deserialize<ModuleRepositoryInitializationState>(json, SerializerOptions);
+            var stream = new FileStream(
+                requirement.StatePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using (stream.ConfigureAwait(false))
+            {
+                return await JsonSerializer.DeserializeAsync<ModuleRepositoryInitializationState>(
+                    stream,
+                    SerializerOptions,
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
-        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        catch (Exception exception) when (
+            exception is JsonException or IOException or UnauthorizedAccessException)
         {
             return null;
         }
@@ -70,13 +84,46 @@ internal sealed class AspireModuleRepositoryStateStore(IDeploymentStateManager s
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentNullException.ThrowIfNull(state);
-        var section = await stateManager.AcquireSectionAsync(
-            GetSectionName(requirement),
-            cancellationToken).ConfigureAwait(false);
-        section.SetValue(JsonSerializer.Serialize(state, SerializerOptions));
-        await stateManager.SaveSectionAsync(section, cancellationToken).ConfigureAwait(false);
-    }
+        var stateDirectory = Path.GetDirectoryName(requirement.StatePath)
+            ?? throw new InvalidOperationException(
+                $"Unable to determine the state directory for '{requirement.StatePath}'.");
+        Directory.CreateDirectory(stateDirectory);
+        var temporaryPath = Path.Combine(
+            stateDirectory,
+            $".{Path.GetFileName(requirement.StatePath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough);
+            await using (stream.ConfigureAwait(false))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    state,
+                    SerializerOptions,
+                    cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
 
-    internal static string GetSectionName(ModuleRepositoryRequirement requirement) =>
-        $"modular-apphosts-repository-{requirement.StepKey}";
+            File.Move(temporaryPath, requirement.StatePath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 }

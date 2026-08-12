@@ -1,10 +1,8 @@
 #pragma warning disable ASPIREPIPELINES001
-#pragma warning disable ASPIREPIPELINES002
 #pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics;
 using Aspire.Hosting.Pipelines;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting;
@@ -74,6 +72,30 @@ internal static class ModuleRepositoryInitializationPipeline
             new EventId(5, nameof(LogRepositoryOperationSkipped)),
             "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
 
+    internal static bool IsInitializeCommand(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (string.Equals(arguments[index], "--step", StringComparison.Ordinal) &&
+                index + 1 < arguments.Count)
+            {
+                return string.Equals(arguments[index + 1], StepName, StringComparison.OrdinalIgnoreCase);
+            }
+
+            const string prefix = "--step=";
+            if (arguments[index].StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return string.Equals(
+                    arguments[index][prefix.Length..],
+                    StepName,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        return false;
+    }
+
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -121,8 +143,7 @@ internal static class ModuleRepositoryInitializationPipeline
                         settingsFactory(),
                         context.Logger,
                         context.Logger,
-                        new AspireModuleRepositoryStateStore(
-                            context.Services.GetRequiredService<IDeploymentStateManager>()),
+                        new FileModuleRepositoryStateStore(),
                         context.CancellationToken).ConfigureAwait(false);
                     await task.SucceedAsync(
                         $"Initialized at {requirement.RepositoryPath}",

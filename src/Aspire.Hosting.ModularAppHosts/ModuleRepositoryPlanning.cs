@@ -17,7 +17,8 @@ internal sealed class ModuleRepositoryRequirement
         string repositoryPath,
         string? revision,
         bool updateOnInitialize,
-        string stepKey)
+        string stepKey,
+        string statePath)
     {
         AddModule(moduleName);
         Repository = repository;
@@ -26,6 +27,7 @@ internal sealed class ModuleRepositoryRequirement
         Revision = NormalizeRevision(revision);
         UpdateOnInitialize = Revision is null && updateOnInitialize;
         StepKey = stepKey;
+        StatePath = Path.GetFullPath(statePath);
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
@@ -46,6 +48,8 @@ internal sealed class ModuleRepositoryRequirement
     public bool UpdateOnInitialize { get; }
 
     public string StepKey { get; }
+
+    public string StatePath { get; }
 
     public string ConfigurationFingerprint { get; }
 
@@ -102,6 +106,7 @@ internal readonly record struct ModuleRepositoryPlanRegistration(
 
 internal sealed class ModuleRepositoryPlanRegistry
 {
+    private const string StateDirectoryName = "repositories";
     private readonly Dictionary<string, ModuleRepositoryRequirement> _requirements =
         new(PathSafety.Comparer);
 
@@ -113,6 +118,11 @@ internal sealed class ModuleRepositoryPlanRegistry
         SiblingParent = Path.GetDirectoryName(AppHostRepositoryRoot)
             ?? throw new InvalidOperationException(
                 $"Unable to determine the parent of AppHost repository '{AppHostRepositoryRoot}'.");
+        StateDirectory = Path.Combine(
+            AppHostRepositoryRoot,
+            ".aspire",
+            "modular-apphosts",
+            StateDirectoryName);
     }
 
     public string AppHostDirectory { get; }
@@ -120,6 +130,8 @@ internal sealed class ModuleRepositoryPlanRegistry
     public string AppHostRepositoryRoot { get; }
 
     public string SiblingParent { get; }
+
+    public string StateDirectory { get; }
 
     public IReadOnlyCollection<ModuleRepositoryRequirement> Requirements =>
         _requirements.Values.ToArray();
@@ -182,7 +194,8 @@ internal sealed class ModuleRepositoryPlanRegistry
             fullRepositoryPath,
             revision,
             updateOnInitialize,
-            stepKey);
+            stepKey,
+            Path.Combine(StateDirectory, $"{stepKey}.json"));
         _requirements.Add(fullRepositoryPath, requirement);
         return new ModuleRepositoryPlanRegistration(requirement, IsNew: true);
     }

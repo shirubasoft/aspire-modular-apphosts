@@ -1,5 +1,4 @@
 #pragma warning disable ASPIREPIPELINES001
-#pragma warning disable ASPIREPIPELINES002
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
@@ -202,7 +201,7 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleImageManifestPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(_ => Options.Create(registry.Options));
-        builder.Pipeline.AddStep(new PipelineStep
+        var validationStep = new PipelineStep
         {
             Name = "validate-module-repositories",
             Description = "Validates initialized module repository checkouts.",
@@ -216,8 +215,7 @@ public static partial class DistributedApplicationModuleExtensions
                     GetConfiguredValue(registry.Options.GitHubCliPath) ?? "gh",
                     registry.Options.RepositoryCommandTimeout);
                 await registry.ValidateRepositoryPreflightAsync(
-                    new AspireModuleRepositoryStateStore(
-                        context.Services.GetRequiredService<IDeploymentStateManager>()),
+                    new FileModuleRepositoryStateStore(),
                     settings,
                     builder.AppHostDirectory,
                     context.Logger,
@@ -225,11 +223,17 @@ public static partial class DistributedApplicationModuleExtensions
             },
             RequiredBySteps =
             [
-                WellKnownPipelineSteps.BeforeStart,
                 WellKnownPipelineSteps.BuildPrereq,
                 WellKnownPipelineSteps.PublishPrereq
             ]
-        });
+        };
+        if (!ModuleRepositoryInitializationPipeline.IsInitializeCommand(
+                Environment.GetCommandLineArgs()))
+        {
+            validationStep.RequiredBySteps.Add(WellKnownPipelineSteps.BeforeStart);
+        }
+
+        builder.Pipeline.AddStep(validationStep);
         return registry;
     }
 
