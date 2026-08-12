@@ -106,6 +106,18 @@ internal static class ModuleImageDescriptionPipeline
                 var sourceState = publisher.TryGetPreparedImage(out var preparedImage)
                     ? preparedImage.SourceState
                     : await publisher.InspectSourceAsync(cancellationToken).ConfigureAwait(false);
+                if (sourceState is null)
+                {
+                    if (!publisher.Recipe.AllowsUnavailableSource)
+                    {
+                        throw ModuleImageRecipeEvaluator.CreateUnavailableSourceException(
+                            publisher.Recipe,
+                            "the build repository is missing");
+                    }
+
+                    sourceState = ModuleImageSourceState.Unavailable;
+                }
+
                 executionPlan = ModuleImageExecutionPlan.Create(publisher.Recipe, sourceState);
             }
 

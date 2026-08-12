@@ -12,7 +12,8 @@ internal sealed record ModuleRequiredPath(
     string ModuleName,
     string Description,
     string Path,
-    ModuleRequiredPathKind Kind);
+    ModuleRequiredPathKind Kind,
+    bool RequiredOnRun = true);
 
 internal static class ModuleRepositoryPreflight
 {
@@ -50,6 +51,11 @@ internal static class ModuleRepositoryPreflight
             cancellationToken.ThrowIfCancellationRequested();
             if (!Directory.Exists(repository.RepositoryPath))
             {
+                if (!repository.RequiredOnRun)
+                {
+                    continue;
+                }
+
                 failures.Add(
                     $"modules {FormatModules(repository.ModuleNames)} require repository " +
                     $"'{repository.NormalizedRepository}' at '{repository.RepositoryPath}', but the directory is missing");
@@ -130,6 +136,11 @@ internal static class ModuleRepositoryPreflight
                 : Directory.Exists(requiredPath.Path);
             if (!exists)
             {
+                if (!requiredPath.RequiredOnRun)
+                {
+                    continue;
+                }
+
                 failures.Add(
                     $"module '{requiredPath.ModuleName}' requires {requiredPath.Description} at " +
                     $"'{requiredPath.Path}', but it is missing");

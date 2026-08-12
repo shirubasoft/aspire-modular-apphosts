@@ -23,7 +23,10 @@ internal sealed record ModuleImageRepositorySettings(
     string GitExecutablePath,
     string GitHubCliPath,
     TimeSpan CommandTimeout,
-    string? DetachedBranchAlias = null);
+    string? DetachedBranchAlias = null,
+    string? AppHostDirectory = null,
+    bool InitializerOwned = false,
+    bool AllowsUnavailableSource = false);
 
 internal sealed record ModuleImageCommandSettings(
     ModuleImageCommandOptions Options,
@@ -71,6 +74,9 @@ internal sealed class ModuleImageBuildRecipe
         DetachedBranchAlias = string.IsNullOrWhiteSpace(repository.DetachedBranchAlias)
             ? null
             : repository.DetachedBranchAlias.Trim();
+        AppHostDirectory = Path.GetFullPath(repository.AppHostDirectory ?? RepositoryPath);
+        InitializerOwned = repository.InitializerOwned;
+        AllowsUnavailableSource = repository.AllowsUnavailableSource;
 
         var imageRepository = ModuleImageReference.GetRepository(Options);
         LocalImageReference = $"{imageRepository}:{LocalRunTag}";
@@ -104,6 +110,12 @@ internal sealed class ModuleImageBuildRecipe
 
     public string? DetachedBranchAlias { get; }
 
+    public string AppHostDirectory { get; }
+
+    public bool InitializerOwned { get; }
+
+    public bool AllowsUnavailableSource { get; }
+
     public string LocalImageReference { get; }
 }
 
@@ -111,7 +123,16 @@ internal sealed record ModuleImageSourceState(
     string? Branch,
     string? Commit,
     bool IsDirty,
-    string StatusFingerprint);
+    string StatusFingerprint,
+    bool IsAvailable = true)
+{
+    public static ModuleImageSourceState Unavailable { get; } = new(
+        Branch: null,
+        Commit: null,
+        IsDirty: false,
+        StatusFingerprint: "UNAVAILABLE",
+        IsAvailable: false);
+}
 
 internal enum ModuleImagePreparationDisposition
 {
@@ -143,6 +164,13 @@ internal sealed record ModuleImageExecutionPlan(
         ArgumentNullException.ThrowIfNull(sourceState);
 
         var options = recipe.Options;
+        if (!sourceState.IsAvailable && string.IsNullOrWhiteSpace(options.ImageTag))
+        {
+            throw new InvalidOperationException(
+                $"Module '{recipe.ModuleName}' resource '{recipe.ResourceName}' requires an explicit image tag " +
+                "before its image can be resolved without the build repository.");
+        }
+
         var imageRepository = ModuleImageReference.GetRepository(options);
         var cleanTag = string.IsNullOrWhiteSpace(options.ImageTag)
             ? ModuleImageTag.FromRepository(sourceState.Branch, sourceState.Commit)
@@ -195,7 +223,7 @@ internal interface IModuleImageRecipeOperations
 {
     Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken);
 
-    Task<ModuleImageSourceState> CaptureSourceStateAsync(
+    Task<ModuleImageSourceState?> TryCaptureSourceStateAsync(
         ModuleImageBuildRecipe recipe,
         CancellationToken cancellationToken);
 
@@ -354,8 +382,25 @@ internal static class ModuleImageRecipeEvaluator
 
         var containerRuntime = await operations.ResolveContainerRuntimeAsync(cancellationToken)
             .ConfigureAwait(false);
-        var sourceState = await operations.CaptureSourceStateAsync(recipe, cancellationToken)
+        var sourceState = await operations.TryCaptureSourceStateAsync(recipe, cancellationToken)
             .ConfigureAwait(false);
+        if (sourceState is null)
+        {
+            if (!recipe.AllowsUnavailableSource)
+            {
+                throw CreateUnavailableSourceException(recipe, "the build repository is missing");
+            }
+
+            return await PrepareWithoutSourceAsync(
+                recipe,
+                containerRuntime,
+                preparationStopwatch,
+                lifecycleLogger,
+                resourceLogger,
+                operations,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         sourceState = await RefreshAsync(
             recipe,
             sourceState,
@@ -473,6 +518,81 @@ internal static class ModuleImageRecipeEvaluator
             disposition);
     }
 
+    private static async Task<ModulePreparedImage> PrepareWithoutSourceAsync(
+        ModuleImageBuildRecipe recipe,
+        string containerRuntime,
+        Stopwatch preparationStopwatch,
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        IModuleImageRecipeOperations operations,
+        CancellationToken cancellationToken)
+    {
+        var sourceState = ModuleImageSourceState.Unavailable;
+        var plan = ModuleImageExecutionPlan.Create(recipe, sourceState);
+        ModuleImagePreparationDisposition disposition;
+        if (await operations.ImageExistsAsync(
+                containerRuntime,
+                plan.CanonicalImageReference,
+                recipe.ImageTransferTimeout,
+                cancellationToken).ConfigureAwait(false))
+        {
+            LogBoth(
+                lifecycleLogger,
+                resourceLogger,
+                logger => LogLocalImageFound(logger, plan.CanonicalImageReference, null));
+            disposition = ModuleImagePreparationDisposition.Reused;
+        }
+        else
+        {
+            LogBoth(
+                lifecycleLogger,
+                resourceLogger,
+                logger => LogPullStarted(logger, plan.CanonicalImageReference, null));
+            if (!await operations.PullImageAsync(
+                    containerRuntime,
+                    plan.CanonicalImageReference,
+                    recipe.ImageTransferTimeout,
+                    line => LogRawOutput(resourceLogger, line),
+                    cancellationToken).ConfigureAwait(false))
+            {
+                throw CreateUnavailableSourceException(
+                    recipe,
+                    $"image '{plan.CanonicalImageReference}' is unavailable locally and could not be pulled");
+            }
+
+            LogBoth(
+                lifecycleLogger,
+                resourceLogger,
+                logger => LogPullCompleted(logger, plan.CanonicalImageReference, null));
+            disposition = ModuleImagePreparationDisposition.Pulled;
+        }
+
+        await RetagAsync(
+            recipe,
+            containerRuntime,
+            plan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            lifecycleLogger,
+            resourceLogger,
+            operations,
+            cancellationToken).ConfigureAwait(false);
+        preparationStopwatch.Stop();
+        LogBoth(
+            lifecycleLogger,
+            resourceLogger,
+            logger => LogPreparationCompleted(
+                logger,
+                recipe.LocalImageReference,
+                GetDispositionName(disposition),
+                preparationStopwatch.Elapsed.TotalMilliseconds,
+                null));
+        return new ModulePreparedImage(
+            plan.CanonicalImageReference,
+            recipe.LocalImageReference,
+            sourceState,
+            disposition);
+    }
+
     private static async Task<ModuleImageSourceState> RefreshAsync(
         ModuleImageBuildRecipe recipe,
         ModuleImageSourceState sourceState,
@@ -517,8 +637,10 @@ internal static class ModuleImageRecipeEvaluator
             recipe,
             line => LogRawOutput(resourceLogger, line),
             cancellationToken).ConfigureAwait(false);
-        sourceState = await operations.CaptureSourceStateAsync(recipe, cancellationToken)
-            .ConfigureAwait(false);
+        sourceState = await operations.TryCaptureSourceStateAsync(recipe, cancellationToken)
+            .ConfigureAwait(false) ?? throw CreateUnavailableSourceException(
+                recipe,
+                "the build repository disappeared during refresh");
         stopwatch.Stop();
         LogBoth(
             lifecycleLogger,
@@ -548,8 +670,10 @@ internal static class ModuleImageRecipeEvaluator
             containerRuntime,
             line => LogRawOutput(resourceLogger, line),
             cancellationToken).ConfigureAwait(false);
-        var sourceStateAfterBuild = await operations.CaptureSourceStateAsync(recipe, cancellationToken)
-            .ConfigureAwait(false);
+        var sourceStateAfterBuild = await operations.TryCaptureSourceStateAsync(recipe, cancellationToken)
+            .ConfigureAwait(false) ?? throw CreateUnavailableSourceException(
+                recipe,
+                "the build repository disappeared during image preparation");
         if (sourceStateAfterBuild != sourceState)
         {
             throw new InvalidOperationException(
@@ -659,6 +783,21 @@ internal static class ModuleImageRecipeEvaluator
             ModuleImagePreparationDisposition.Built => "building the canonical image",
             _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null)
         };
+
+    internal static InvalidOperationException CreateUnavailableSourceException(
+        ModuleImageBuildRecipe recipe,
+        string reason)
+    {
+        ArgumentNullException.ThrowIfNull(recipe);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        var recovery = recipe.InitializerOwned
+            ? $"Run '{ModuleRepositoryPreflight.CreateInitializeCommand(recipe.AppHostDirectory)}' and retry."
+            : $"Provide the checkout at '{recipe.RepositoryPath}' or configure BuildRepository to an available checkout.";
+        return new InvalidOperationException(
+            $"Cannot build image for module '{recipe.ModuleName}' resource '{recipe.ResourceName}' because {reason}; " +
+            $"the build repository is unavailable at '{recipe.RepositoryPath}'. " +
+            recovery);
+    }
 }
 
 internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? runtimeResolver = null)
@@ -686,10 +825,18 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         return runtimeName;
     }
 
-    public async Task<ModuleImageSourceState> CaptureSourceStateAsync(
+    public async Task<ModuleImageSourceState?> TryCaptureSourceStateAsync(
         ModuleImageBuildRecipe recipe,
-        CancellationToken cancellationToken) =>
-        await InspectSourceStateAsync(recipe, cancellationToken).ConfigureAwait(false);
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(recipe);
+        if (!Directory.Exists(recipe.RepositoryPath))
+        {
+            return null;
+        }
+
+        return await InspectSourceStateAsync(recipe, cancellationToken).ConfigureAwait(false);
+    }
 
     internal static async Task<ModuleImageSourceState> InspectSourceStateAsync(
         ModuleImageBuildRecipe recipe,
@@ -783,6 +930,13 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         Action<string> progress,
         CancellationToken cancellationToken)
     {
+        if (!Directory.Exists(recipe.WorkingDirectory))
+        {
+            throw ModuleImageRecipeEvaluator.CreateUnavailableSourceException(
+                recipe,
+                $"the image build working directory '{recipe.WorkingDirectory}' is missing");
+        }
+
         await ModuleOperationTimeout.RunAsync(
             async operationToken =>
             {

@@ -212,6 +212,7 @@ internal static class ModuleImagePushPipeline
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault();
         if (publisher is null ||
             !publisher.TryGetPreparedImage(out var preparedImage) ||
+            !preparedImage.SourceState.IsAvailable ||
             preparedImage.SourceState.IsDirty ||
             resolved.PushImage is null)
         {

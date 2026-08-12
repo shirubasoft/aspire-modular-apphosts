@@ -78,6 +78,8 @@ verifies all of these behaviors in one locally reproducible command:
 9. A dirty checkout is preserved and rebuilt, including when runtime refresh is enabled.
 10. Repository lifecycle and command output are emitted without project-owned filtering.
 11. The requested Docker or Podman executable is selected through Aspire's runtime resolver.
+12. An explicit-tag publisher can describe, build, and run from a registry image while its separate
+    build checkout is absent.
 
 The build command and Dockerfile are executed from the initialized build checkout. Each run waits for
 the resulting container to become healthy and verifies the exact `/marker.txt` content, so using the
@@ -91,7 +93,11 @@ A separate CI job starts an ordinary local registry service and uses only the pa
 
 1. `images publish` runs the producer AppHost pipeline and writes its fully qualified tagged
    reference plus GitHub step outputs.
-2. `images apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
+2. `PublisherFallbackTests` removes the local producer tag, points the consumer publisher at a
+   deliberately missing build checkout, and validates `describe-images`, the generated build step,
+   and an `Aspire.Hosting.Testing` run against the pulled tag without cloning or building. It also
+   proves that a missing tag reports the exact initialization recovery command.
+3. `images apply` launches `Spire.Consumer.Tests` with the consumer configuration. The tests start
    the consumer AppHost with deliberately missing definition and build repositories plus missing
    initialization siblings. They verify `/marker.txt` from the image that Repo B published and prove
    that complete workflow-document identities do not prepare or clone source checkouts.

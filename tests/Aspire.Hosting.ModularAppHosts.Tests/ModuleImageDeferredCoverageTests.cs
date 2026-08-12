@@ -195,7 +195,7 @@ public sealed class ModuleImageDeferredCoverageTests
             (_, _) =>
             {
                 inspectCalls++;
-                return Task.FromResult(CleanSource);
+                return Task.FromResult<ModuleImageSourceState?>(CleanSource);
             });
         var builder = DistributedApplication.CreateBuilder();
         var resource = builder
@@ -276,11 +276,11 @@ public sealed class ModuleImageDeferredCoverageTests
             workingDirectory: repository.Path,
             repository: repository.Path);
 
-        var clean = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var clean = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         File.WriteAllText(trackedFile, "dirty");
-        var dirty = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var dirty = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         var dirtyPorcelain = await RunGitAsync(
@@ -289,7 +289,7 @@ public sealed class ModuleImageDeferredCoverageTests
             "--porcelain=v1",
             "--untracked-files=all");
         File.WriteAllText(trackedFile, "different dirty content");
-        var changedTracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var changedTracked = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         var changedTrackedPorcelain = await RunGitAsync(
@@ -304,7 +304,7 @@ public sealed class ModuleImageDeferredCoverageTests
             File.SetUnixFileMode(
                 trackedFile,
                 File.GetUnixFileMode(trackedFile) ^ UnixFileMode.UserExecute);
-            changedMode = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            changedMode = await ModuleImageRecipeOperations.InspectSourceStateAsync(
                 recipe,
                 TestContext.Current.CancellationToken);
             changedModePorcelain = await RunGitAsync(
@@ -315,7 +315,7 @@ public sealed class ModuleImageDeferredCoverageTests
         }
 
         File.WriteAllText(untrackedFile, "first untracked content");
-        var untracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var untracked = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         var untrackedPorcelain = await RunGitAsync(
@@ -324,7 +324,7 @@ public sealed class ModuleImageDeferredCoverageTests
             "--porcelain=v1",
             "--untracked-files=all");
         File.WriteAllText(untrackedFile, "different untracked content");
-        var changedUntracked = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var changedUntracked = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         var changedUntrackedPorcelain = await RunGitAsync(
@@ -334,11 +334,11 @@ public sealed class ModuleImageDeferredCoverageTests
             "--untracked-files=all");
         var beforeIgnored = changedUntracked.StatusFingerprint;
         File.WriteAllText(ignoredFile, "first ignored content");
-        var ignored = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var ignored = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
         File.WriteAllText(ignoredFile, "different ignored content");
-        var changedIgnored = await ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+        var changedIgnored = await ModuleImageRecipeOperations.InspectSourceStateAsync(
             recipe,
             TestContext.Current.CancellationToken);
 
@@ -380,7 +380,7 @@ public sealed class ModuleImageDeferredCoverageTests
             workingDirectory: directory.Path);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync(
+            ModuleImageRecipeOperations.InspectSourceStateAsync(
                 recipe,
                 TestContext.Current.CancellationToken));
 
@@ -907,12 +907,12 @@ public sealed class ModuleImageDeferredCoverageTests
             ILogger,
             CancellationToken,
             Task<ModulePreparedImage>>? prepareAsync = null,
-        Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>>? inspectAsync = null) =>
+        Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState?>>? inspectAsync = null) =>
         new(
             ModuleResourceKind.Container,
             recipe,
             prepareAsync ?? ((_, _, _, _) => Task.FromResult(CreatePreparedImage(recipe))),
-            inspectAsync ?? ((_, _) => Task.FromResult(CleanSource)));
+            inspectAsync ?? ((_, _) => Task.FromResult<ModuleImageSourceState?>(CleanSource)));
 
     private static (ContainerResource Resource, ModuleImagePublisherAnnotation Publisher)
         CreatePublishedContainer(ModuleImageBuildRecipe recipe)
@@ -1013,12 +1013,12 @@ public sealed class ModuleImageDeferredCoverageTests
             return Task.FromResult("container-runtime");
         }
 
-        public Task<ModuleImageSourceState> CaptureSourceStateAsync(
+        public Task<ModuleImageSourceState?> TryCaptureSourceStateAsync(
             ModuleImageBuildRecipe recipe,
             CancellationToken cancellationToken)
         {
             CaptureCount++;
-            return Task.FromResult(sourceState);
+            return Task.FromResult<ModuleImageSourceState?>(sourceState);
         }
 
         public Task<bool> HasUpstreamAsync(

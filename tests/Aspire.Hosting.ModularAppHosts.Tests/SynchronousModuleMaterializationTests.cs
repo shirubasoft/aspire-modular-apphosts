@@ -83,6 +83,46 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
+    public async Task Explicit_tag_pull_publisher_keeps_its_separate_checkout_optional_on_run()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddContainer("orders-api", "registry.example.test/acme/orders-api", "production")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "acme/orders-api",
+                    ModuleImageCommandOptions.ContainerRuntimePlaceholder,
+                    "build")
+                {
+                    ImageRegistry = "registry.example.test",
+                    ImageTag = "production",
+                    PullBeforeBuild = true,
+                    BuildRepository = "https://example.test/acme/orders-images.git"
+                });
+        });
+
+        builder.AddModule(module);
+
+        var publisher = Assert.Single(builder.Resources
+            .OfType<ContainerResource>()
+            .Single()
+            .Annotations
+            .OfType<ModuleImagePublisherAnnotation>());
+        Assert.True(publisher.Recipe.AllowsUnavailableSource);
+        var registry = GetRegistry(builder);
+        var requirement = Assert.Single(registry.RepositoryPlans!.Requirements);
+        Assert.False(requirement.RequiredOnRun);
+        Assert.False(Directory.Exists(requirement.RepositoryPath));
+        await registry.ValidateRepositoryPreflightAsync(
+            new InMemoryModuleRepositoryStateStore(),
+            CreateInitializationSettings(),
+            appHost.Path,
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public void GitHub_https_repository_advertises_Git_and_the_selected_credential_provider()
     {
         using var appHost = CreateGitAppHost();

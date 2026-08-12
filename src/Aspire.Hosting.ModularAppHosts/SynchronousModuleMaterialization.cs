@@ -541,6 +541,9 @@ public static partial class DistributedApplicationModuleExtensions
             declared,
             configured,
             workflow.ResolveTag(module.Name, declaredResourceName));
+        var canPrepareWithoutBuildRepository =
+            effectiveOptions.PullBeforeBuild &&
+            !string.IsNullOrWhiteSpace(effectiveOptions.ImageTag);
         var buildRepository = ModuleMaterializationPlanning.ResolveBuildRepository(
             builder,
             module,
@@ -549,7 +552,11 @@ public static partial class DistributedApplicationModuleExtensions
             configured,
             definitionRepository,
             registry,
-            moduleOptions);
+            moduleOptions,
+            allowMissingBuildRepository: canPrepareWithoutBuildRepository);
+        var allowsUnavailableSource =
+            canPrepareWithoutBuildRepository &&
+            !buildRepository.UsesModuleRepository;
         var workingDirectoryRelativePath = effectiveOptions.WorkingDirectory ??
             (buildRepository.UsesModuleRepository ? defaultWorkingDirectory : ".");
         var workingDirectory = PathSafety.GetContainedPath(
@@ -559,7 +566,8 @@ public static partial class DistributedApplicationModuleExtensions
         registry.RequireDirectory(
             module.Name,
             $"image build directory for resource '{declaredResourceName}'",
-            workingDirectory);
+            workingDirectory,
+            requiredOnRun: !allowsUnavailableSource);
         if (requiredProjectRelativePath is not null)
         {
             registry.RequireFile(
@@ -584,7 +592,10 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(options.GitExecutablePath) ?? "git",
                 GetConfiguredValue(options.GitHubCliPath) ?? "gh",
                 options.RepositoryCommandTimeout,
-                GetDetachedAppHostBranchAlias(builder, buildRepository)),
+                GetDetachedAppHostBranchAlias(builder, buildRepository),
+                builder.AppHostDirectory,
+                buildRepository.InitializerOwned,
+                allowsUnavailableSource),
             new ModuleImageCommandSettings(
                 effectiveOptions,
                 options.ImageBuildTimeout,

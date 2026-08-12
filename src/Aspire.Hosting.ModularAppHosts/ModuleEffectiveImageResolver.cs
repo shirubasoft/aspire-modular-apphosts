@@ -22,7 +22,7 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger,
         CancellationToken,
         Task<ModulePreparedImage>>? prepareAsync = null,
-    Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>>? inspectAsync = null) : IResourceAnnotation
+    Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState?>>? inspectAsync = null) : IResourceAnnotation
 {
     private readonly object _preparationLock = new();
     private readonly Func<
@@ -31,8 +31,8 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger,
         CancellationToken,
         Task<ModulePreparedImage>>? _prepareAsync = prepareAsync;
-    private readonly Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>> _inspectAsync =
-        inspectAsync ?? ModuleImageRecipeOperations.InspectSourceStateAsync;
+    private readonly Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState?>> _inspectAsync =
+        inspectAsync ?? ModuleImageRecipeOperations.Instance.TryCaptureSourceStateAsync;
     private Task<ModulePreparedImage>? _preparationTask;
     private ModulePreparedImage? _preparedImage;
 
@@ -144,7 +144,7 @@ internal sealed class ModuleImagePublisherAnnotation(
         }
     }
 
-    public Task<ModuleImageSourceState> InspectSourceAsync(CancellationToken cancellationToken) =>
+    public Task<ModuleImageSourceState?> InspectSourceAsync(CancellationToken cancellationToken) =>
         _inspectAsync(Recipe, cancellationToken);
 
     private async Task<ModulePreparedImage> PrepareCoreAsync(

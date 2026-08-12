@@ -490,6 +490,95 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
+    public async Task Preflight_allows_missing_source_optional_repositories_and_paths()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var plans = new ModuleRepositoryPlanRegistry(appHostPath);
+        var requirement = plans.Register(
+            "payments/image",
+            "https://example.test/acme/payments-image.git",
+            revision: null,
+            updateOnInitialize: true,
+            requiredOnRun: false).Requirement;
+        var missingBuildDirectory = Path.Combine(requirement.RepositoryPath, "src");
+
+        await ModuleRepositoryPreflight.ValidateAsync(
+            plans.Requirements,
+            [new ModuleRequiredPath(
+                "payments",
+                "image build directory for resource 'payments-api'",
+                missingBuildDirectory,
+                ModuleRequiredPathKind.Directory,
+                RequiredOnRun: false)],
+            new InMemoryModuleRepositoryStateStore(),
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            appHostPath,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(Directory.Exists(requirement.RepositoryPath));
+    }
+
+    [Fact]
+    public async Task Preflight_rejects_an_invalid_present_source_optional_repository()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var plans = new ModuleRepositoryPlanRegistry(appHostPath);
+        var requirement = plans.Register(
+            "payments/image",
+            "https://example.test/acme/payments-image.git",
+            revision: null,
+            updateOnInitialize: true,
+            requiredOnRun: false).Requirement;
+        Directory.CreateDirectory(requirement.RepositoryPath);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                plans.Requirements,
+                [],
+                new InMemoryModuleRepositoryStateStore(),
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("Git checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Shared_optional_repository_becomes_mandatory_when_any_consumer_requires_it()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var plans = new ModuleRepositoryPlanRegistry(appHostPath);
+        var optional = plans.Register(
+            "payments/image",
+            "https://example.test/acme/shared.git",
+            revision: null,
+            updateOnInitialize: true,
+            requiredOnRun: false).Requirement;
+        var required = plans.Register(
+            "payments",
+            "https://example.test/acme/shared.git",
+            revision: null,
+            updateOnInitialize: true,
+            requiredOnRun: true).Requirement;
+
+        Assert.Same(optional, required);
+        Assert.True(required.RequiredOnRun);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                plans.Requirements,
+                [],
+                new InMemoryModuleRepositoryStateStore(),
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains(required.RepositoryPath, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Initialization_routes_lifecycle_to_pipeline_logs_and_raw_output_only_to_the_resource()
     {
         using var workspace = TemporaryDirectory.Create();
