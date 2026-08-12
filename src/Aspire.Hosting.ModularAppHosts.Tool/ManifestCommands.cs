@@ -154,7 +154,13 @@ internal sealed class ManifestCommandService(
         IReadOnlyDictionary<string, string?>? environmentVariables,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string>
+        var invocation = AspireCliInvocationResolver.Resolve(
+            aspirePath,
+            appHost);
+        var appHostWorkingDirectory = Directory.Exists(appHost)
+            ? appHost
+            : Path.GetDirectoryName(appHost)!;
+        var arguments = new List<string>(invocation.PrefixArguments)
         {
             "do",
             step,
@@ -170,9 +176,9 @@ internal sealed class ManifestCommandService(
         arguments.Add("--non-interactive");
         return await processRunner.RunAsync(
             new ProcessInvocation(
-                aspirePath,
+                invocation.Executable,
                 arguments,
-                workingDirectory,
+                appHostWorkingDirectory,
                 environmentVariables,
                 ProcessOutputMode.Stream),
             cancellationToken).ConfigureAwait(false);

@@ -435,6 +435,53 @@ public sealed class ToolApplicationTests
     }
 
     [Fact]
+    public async Task Publish_uses_the_repository_local_aspire_tool_manifest()
+    {
+        using var directory = TestDirectory.Create();
+        var manifestDirectory = Path.Combine(directory.Path, ".config");
+        var appHostDirectory = Path.Combine(directory.Path, "src", "AppHost");
+        Directory.CreateDirectory(manifestDirectory);
+        Directory.CreateDirectory(appHostDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(manifestDirectory, "dotnet-tools.json"),
+            """
+            {
+              "version": 1,
+              "isRoot": true,
+              "tools": {
+                "aspire.cli": {
+                  "version": "13.4.6",
+                  "commands": [ "aspire" ]
+                }
+              }
+            }
+            """,
+            TestContext.Current.CancellationToken);
+        var runner = new FakeProcessRunner(async (invocation, cancellationToken) =>
+        {
+            var outputPath = GetOption(invocation.Arguments, "--output-path");
+            await CreateManifest().SaveAsync(
+                Path.Combine(outputPath!, ModuleImageManifestDocument.DefaultFileName),
+                cancellationToken);
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        var (exitCode, _, error, _) = await RunAsync(
+            directory,
+            ["manifest", "publish", "--apphost", appHostDirectory, "--all"],
+            runner);
+
+        Assert.Equal(ToolExitCode.Success, exitCode);
+        Assert.Empty(error);
+        var invocation = Assert.Single(runner.Invocations);
+        Assert.Equal("dotnet", invocation.FileName);
+        Assert.Equal(
+            ["tool", "run", "aspire", "--", "do", "workflow-images"],
+            invocation.Arguments.Take(6));
+        Assert.Equal(appHostDirectory, invocation.WorkingDirectory);
+    }
+
+    [Fact]
     public async Task Publish_stops_on_aspire_failure_and_maps_interruption()
     {
         using var directory = TestDirectory.Create();
