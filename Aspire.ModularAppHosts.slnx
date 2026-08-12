@@ -16,6 +16,9 @@
     <Project Path="samples/MultiRepoE2E/Spire.ModuleContract/Spire.ModuleContract.csproj" />
     <Project Path="samples/MultiRepoE2E/Spire.Producer.AppHost/Spire.Producer.AppHost.csproj" />
   </Folder>
+  <Folder Name="/samples/RemoteInitialization/">
+    <Project Path="samples/RemoteInitialization/RemoteInitialization.AppHost.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Tool/Aspire.Hosting.ModularAppHosts.Tool.csproj" />
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Testing/Aspire.Hosting.ModularAppHosts.Testing.csproj" />

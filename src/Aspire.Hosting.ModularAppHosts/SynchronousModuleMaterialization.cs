@@ -357,14 +357,46 @@ public static partial class DistributedApplicationModuleExtensions
             definitionRepository.RepositoryPath,
             imported,
             resourceImage);
-        var resource = definition.Materialize(
-            context,
-            new DistributedApplicationModuleResourceAnnotation(
-                module.Name,
-                definition.Name,
-                definitionRepository.RepositoryPath,
-                imported,
-                module.PackageId));
+        var moduleAnnotation = new DistributedApplicationModuleResourceAnnotation(
+            module.Name,
+            definition.Name,
+            definitionRepository.RepositoryPath,
+            imported,
+            module.PackageId);
+        IResource resource;
+        try
+        {
+            resource = definition.Materialize(context, moduleAnnotation);
+        }
+        catch (DistributedApplicationException exception) when (
+            typeof(ProjectResource).IsAssignableFrom(definition.ResourceType) &&
+            definitionRepository.InitializerOwned &&
+            !Directory.Exists(definitionRepository.RepositoryPath))
+        {
+            if (!builder.ExecutionContext.IsRunMode)
+            {
+                // Aspire adds a ProjectResource before it discovers launch settings. Keep that partial model in
+                // publish mode so the initialization pipeline can create the repository that discovery needs.
+                var deferredProject = builder.Resources
+                    .OfType<ProjectResource>()
+                    .LastOrDefault(candidate => string.Equals(
+                        candidate.Name,
+                        resourceName,
+                        StringComparison.OrdinalIgnoreCase)) ??
+                    builder.AddResource(new ProjectResource(resourceName)).Resource;
+                builder.CreateResourceBuilder(deferredProject).WithAnnotation(moduleAnnotation);
+                resource = deferredProject;
+            }
+            else
+            {
+                var initializeCommand = ModuleRepositoryPreflight.CreateInitializeCommand(builder.AppHostDirectory);
+                throw new InvalidOperationException(
+                    $"Module resource '{definition.Name}' requires repository " +
+                    $"'{definitionRepository.Repository}' at '{definitionRepository.RepositoryPath}', but the " +
+                    $"initializer-owned checkout is missing. Run '{initializeCommand}'.",
+                    exception);
+            }
+        }
         if (resource is ContainerResource containerResource)
         {
             var container = builder.CreateResourceBuilder(containerResource);

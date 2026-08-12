@@ -122,3 +122,10 @@ sample API from a contract package while its image build inputs live in a separa
 local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
 and a second local-registry producer-to-consumer module image workflow document handoff; it does not depend
 on an external `Shirubasoft/spire` checkout.
+
+## Remote initialization sample
+
+[`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
+flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
+which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
+starts the imported service; later initialization runs can fast-forward its clean checkout.

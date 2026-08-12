@@ -353,3 +353,51 @@ jobs:
           name: multi-repository-e2e-failure
           path: artifacts/e2e/multi-repo-failure
           if-no-files-found: ignore
+
+  e2e-remote-initialization-sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
+
+      - name: Restore the remote initialization sample
+        run: dotnet restore samples/RemoteInitialization/RemoteInitialization.AppHost.csproj
+
+      - name: Initialize the remote module repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          dotnet tool run aspire -- "do" initialize
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
+      - name: Start the initialized sample
+        run: >-
+          dotnet tool run aspire -- start
+          --apphost samples/RemoteInitialization
+          --isolated
+          --non-interactive
+
+      - name: Wait for the initialized service
+        run: >-
+          dotnet tool run aspire -- wait notification-service
+          --apphost samples/RemoteInitialization
+          --timeout 120
+          --non-interactive
+
+      - name: Stop the sample
+        if: always()
+        run: >-
+          dotnet tool run aspire -- stop
+          --apphost samples/RemoteInitialization
+          --non-interactive

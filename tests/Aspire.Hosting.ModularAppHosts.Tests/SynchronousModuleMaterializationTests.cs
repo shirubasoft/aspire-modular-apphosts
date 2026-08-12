@@ -134,6 +134,50 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
+    public void Repository_backed_project_factory_reports_the_initialize_command_before_project_discovery()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://example.test/acme/orders.git");
+            definition.RequiresRepository();
+            definition.AddResource<ProjectResource>("orders-api", context =>
+                context.ApplicationBuilder.AddProject(
+                    context.ResourceName,
+                    Path.Combine(context.RepositoryPath, "Orders.Api", "Orders.Api.csproj")));
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(() => builder.ImportModule("orders"));
+
+        Assert.Contains("orders-api", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("https://example.test/acme/orders.git", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ModuleRepositoryPreflight.CreateInitializeCommand(appHost.Path), exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(exception.InnerException);
+    }
+
+    [Fact]
+    public void Repository_backed_project_factory_defers_project_discovery_for_initialization_pipeline()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path, ["--publisher", "manifest"]);
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://example.test/acme/orders.git");
+            definition.RequiresRepository();
+            definition.AddResource<ProjectResource>("orders-api", context =>
+                context.ApplicationBuilder.AddProject(
+                    context.ResourceName,
+                    Path.Combine(context.RepositoryPath, "Orders.Api", "Orders.Api.csproj")));
+        });
+
+        var imported = builder.ImportModule("orders");
+
+        Assert.Equal("orders-api", imported.GetResource<ProjectResource>("orders-api").Resource.Name);
+        Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+    }
+
+    [Fact]
     public void External_image_override_remains_checkout_free()
     {
         using var appHost = CreateGitAppHost();
@@ -506,10 +550,12 @@ public sealed class SynchronousModuleMaterializationTests
         return appHost;
     }
 
-    private static IDistributedApplicationBuilder CreateBuilder(string projectDirectory) =>
+    private static IDistributedApplicationBuilder CreateBuilder(
+        string projectDirectory,
+        string[]? args = null) =>
         DistributedApplication.CreateBuilder(new DistributedApplicationOptions
         {
-            Args = [],
+            Args = args ?? [],
             AssemblyName = typeof(SynchronousModuleMaterializationTests).Assembly.FullName,
             ProjectDirectory = projectDirectory,
             DisableDashboard = true
