@@ -225,14 +225,13 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Restore the pinned Aspire CLI and sample graph
-        run: |
-          dotnet tool restore
-          dotnet restore Aspire.ModularAppHosts.slnx
+      - name: Restore the modular sample graph
+        run: dotnet restore samples/ModularSamples.Tests/ModularSamples.Tests.csproj
 
       - name: Start and validate both modular AppHosts
-        shell: bash
-        run: bash samples/test-modular-apphosts.sh
+        run: >-
+          dotnet test samples/ModularSamples.Tests/ModularSamples.Tests.csproj
+          --configuration Release --no-restore
 
   e2e-image-registry-pipelines:
     runs-on: ubuntu-latest

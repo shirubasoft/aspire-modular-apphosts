@@ -95,9 +95,10 @@ aspire describe --include-hidden
 
 The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
-Run `bash samples/test-modular-apphosts.sh` from the repository root to start both AppHosts exactly as
-CI does and verify that project, exported-project, and declared-container callbacks resolve the
-module-owned message.
+Run `dotnet test samples/ModularSamples.Tests/ModularSamples.Tests.csproj` from the repository root
+to exercise both AppHosts through Aspire's in-process testing builder exactly as CI does. The test
+verifies project, exported-project, declared-container, generated-image, and gateway behavior against
+the module-owned message.
 
 ## E2E testing sample
 
