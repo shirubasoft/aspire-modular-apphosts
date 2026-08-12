@@ -11,10 +11,7 @@ using Microsoft.Extensions.Logging;
 namespace Aspire.Hosting;
 
 internal sealed record ModuleNativeImagePublisherAnnotation(
-    ModuleResourceKind ResourceKind,
-    string? Registry,
-    string ImageName,
-    string ImageTag) : IResourceAnnotation;
+    ModuleResourceKind ResourceKind) : IResourceAnnotation;
 
 internal sealed class ModuleImagePublisherAnnotation(
     ModuleResourceKind resourceKind,

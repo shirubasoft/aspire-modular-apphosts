@@ -1,8 +1,8 @@
 # Module image pipeline sample
 
-This AppHost declares all three supported module image publishers: a declared container, a project
-exported as a container, and a factory-created container. A second module contributes another image
-publisher so the push sample proves named-resource isolation. It also declares a
+This AppHost declares the supported module image publishers: a declared container, a project
+exported as a container, a factory-created advanced publisher, and an Aspire-native Dockerfile
+resource. A second module contributes another image publisher so the push sample proves named-resource isolation. It also declares a
 consumed image with a pull mapping. A Docker Compose compute environment verifies that module and
 `WithContainerRegistry` declarations retain their remote identities. Publisher resources use
 explicit start, allowing the AppHost model to run against local fixtures:

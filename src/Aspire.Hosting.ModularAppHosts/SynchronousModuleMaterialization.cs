@@ -235,34 +235,29 @@ public static partial class DistributedApplicationModuleExtensions
                     ? GetConfiguredValue(projectOptions?.ImageTag) ??
                         GetConfiguredValue(project.Export.CommandOptions?.ImageTag) ??
                         "latest"
-                    : ModuleImageBuildRecipe.LocalRunTag)
-            .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
-                module.Name,
-                project.Name,
-                definitionRepository.RepositoryPath,
-                imported,
-                module.PackageId));
+                    : ModuleImageBuildRecipe.LocalRunTag);
         ApplyImageRegistry(
             container,
             publisher?.Recipe.Options.ImageRegistry ?? GetConfiguredValue(projectOptions?.ImageRegistry));
         var image = CreateResourceImage(container, publisher, projectOptions);
-        var context = new DistributedApplicationModuleResourceContext(
-            builder,
-            module,
-            resourceName,
-            definitionRepository.RepositoryPath,
-            imported,
-            image);
-        project.Export.ConfigureContainer?.Invoke(context, container);
-        ConfigureRepositoryLifecycle(builder, container, registry);
-        ConfigureContainerImage(
+        FinalizeContainerResource(
             builder,
             container,
-            publisher,
-            projectOptions,
-            publisher is null && !UsesExternalImage(projectOptions) ? null : image);
-        registry.TrackResource(container.Resource);
-        module.TrackMaterializedResource(builder, project.Name, container.Resource);
+            new NormalizedContainerDescriptor(
+                new ModuleContainerIdentity(
+                    module,
+                    project.Name,
+                    resourceName,
+                    definitionRepository.RepositoryPath,
+                    imported),
+                new ModuleContainerImagePlan(
+                    publisher,
+                    projectOptions,
+                    image,
+                    publisher is null && !UsesExternalImage(projectOptions) ? null : image),
+                project.Export.ConfigureContainer,
+                ModuleAnnotationAlreadyApplied: false),
+            registry);
     }
 
     private static void MaterializeContainer(
@@ -298,34 +293,29 @@ public static partial class DistributedApplicationModuleExtensions
                 publisher?.Recipe.Options.ImageName ?? GetConfiguredValue(configured?.ImageName) ?? definition.Image,
                 publisher is null
                     ? GetConfiguredValue(configured?.ImageTag) ?? definition.Tag
-                    : ModuleImageBuildRecipe.LocalRunTag)
-            .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
-                module.Name,
-                definition.Name,
-                definitionRepository.RepositoryPath,
-                imported,
-                module.PackageId));
+                    : ModuleImageBuildRecipe.LocalRunTag);
         ApplyImageRegistry(
             container,
             publisher?.Recipe.Options.ImageRegistry ?? GetConfiguredValue(configured?.ImageRegistry));
         var image = CreateResourceImage(container, publisher, configured);
-        var context = new DistributedApplicationModuleResourceContext(
-            builder,
-            module,
-            resourceName,
-            definitionRepository.RepositoryPath,
-            imported,
-            image);
-        definition.ConfigureContainer?.Invoke(context, container);
-        ConfigureRepositoryLifecycle(builder, container, registry);
-        ConfigureContainerImage(
+        FinalizeContainerResource(
             builder,
             container,
-            publisher,
-            configured,
-            publisher is null && !UsesExternalImage(configured) ? null : image);
-        registry.TrackResource(container.Resource);
-        module.TrackMaterializedResource(builder, definition.Name, container.Resource);
+            new NormalizedContainerDescriptor(
+                new ModuleContainerIdentity(
+                    module,
+                    definition.Name,
+                    resourceName,
+                    definitionRepository.RepositoryPath,
+                    imported),
+                new ModuleContainerImagePlan(
+                    publisher,
+                    configured,
+                    image,
+                    publisher is null && !UsesExternalImage(configured) ? null : image),
+                definition.ConfigureContainer,
+                ModuleAnnotationAlreadyApplied: false),
+            registry);
     }
 
     private static void MaterializeFactoryResource(
@@ -378,13 +368,24 @@ public static partial class DistributedApplicationModuleExtensions
         if (resource is ContainerResource containerResource)
         {
             var container = builder.CreateResourceBuilder(containerResource);
-            ConfigureRepositoryLifecycle(builder, container, registry);
-            ConfigureContainerImage(
+            FinalizeContainerResource(
                 builder,
                 container,
-                publisher,
-                configured,
-                resourceImage);
+                new NormalizedContainerDescriptor(
+                    new ModuleContainerIdentity(
+                        module,
+                        definition.Name,
+                        resourceName,
+                        definitionRepository.RepositoryPath,
+                        imported),
+                    new ModuleContainerImagePlan(
+                        publisher,
+                        configured,
+                        resourceImage,
+                        resourceImage),
+                    ConfigureContainer: null,
+                    ModuleAnnotationAlreadyApplied: true),
+                registry);
         }
         else if (publisher is not null)
         {
@@ -399,8 +400,94 @@ public static partial class DistributedApplicationModuleExtensions
                 builder.CreateResourceBuilder(resource),
                 registry);
         }
-        registry.TrackResource(resource);
-        module.TrackMaterializedResource(builder, definition.Name, resource);
+        if (resource is not ContainerResource)
+        {
+            registry.TrackResource(resource);
+            module.TrackMaterializedResource(builder, definition.Name, resource);
+        }
+    }
+
+    private static void FinalizeContainerResource(
+        IDistributedApplicationBuilder builder,
+        IResourceBuilder<ContainerResource> container,
+        NormalizedContainerDescriptor descriptor,
+        ModuleApplicationRegistry registry)
+    {
+        var identity = descriptor.Identity;
+        if (!descriptor.ModuleAnnotationAlreadyApplied)
+        {
+            container.WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
+                identity.Module.Name,
+                identity.DeclaredResourceName,
+                identity.RepositoryPath,
+                identity.Imported,
+                identity.Module.PackageId));
+        }
+
+        var context = new DistributedApplicationModuleResourceContext(
+            builder,
+            identity.Module,
+            identity.EffectiveResourceName,
+            identity.RepositoryPath,
+            identity.Imported,
+            descriptor.Image.ContextImage);
+        descriptor.ConfigureContainer?.Invoke(context, container);
+        ConfigureNativeDockerfilePublisher(builder, container, descriptor, registry.Options);
+        ConfigureRepositoryLifecycle(builder, container, registry);
+        ConfigureContainerImage(
+            builder,
+            container,
+            descriptor.Image.Publisher,
+            descriptor.Image.Configured,
+            descriptor.Image.OwnedImage);
+        registry.TrackResource(container.Resource);
+        identity.Module.TrackMaterializedResource(
+            builder,
+            identity.DeclaredResourceName,
+            container.Resource);
+    }
+
+    private static void ConfigureNativeDockerfilePublisher(
+        IDistributedApplicationBuilder builder,
+        IResourceBuilder<ContainerResource> container,
+        NormalizedContainerDescriptor descriptor,
+        ModularAppHostsOptions options)
+    {
+        if (descriptor.Image.Publisher is not null ||
+            UsesExternalImage(descriptor.Image.Configured) ||
+            container.Resource.Annotations.OfType<ModuleNativeImagePublisherAnnotation>().Any())
+        {
+            return;
+        }
+
+        var dockerfile = container.Resource.Annotations
+            .OfType<DockerfileBuildAnnotation>()
+            .LastOrDefault();
+        var image = container.Resource.Annotations
+            .OfType<ContainerImageAnnotation>()
+            .LastOrDefault();
+        if (dockerfile is null || image is null)
+        {
+            return;
+        }
+
+        var workflowTag = ModuleImageWorkflowConfiguration
+            .Read(builder.Configuration)
+            .ResolveTag(
+                descriptor.Identity.Module.Name,
+                descriptor.Identity.DeclaredResourceName);
+        var defaultImageName = GetConfiguredValue(dockerfile.ImageName) ?? image.Image;
+        var defaultImageTag = workflowTag ??
+            GetConfiguredValue(dockerfile.ImageTag) ??
+            GetConfiguredValue(image.Tag) ??
+            "latest";
+        container.WithAnnotation(new ModuleNativeImagePublisherAnnotation(ModuleResourceKind.Container));
+        ModuleNativeImageValidationPipeline.AddValidationStep(
+            container,
+            descriptor.Identity.RepositoryPath,
+            options);
+        container.WithImagePushOptions(context =>
+            FillDefaultImagePushOptions(context, defaultImageName, defaultImageTag));
     }
 
     private static ModuleImagePublisherAnnotation CreateImagePublisher(
@@ -705,11 +792,7 @@ public static partial class DistributedApplicationModuleExtensions
                 repositoryPath,
                 imported,
                 module.PackageId))
-            .WithAnnotation(new ModuleNativeImagePublisherAnnotation(
-                ModuleResourceKind.Project,
-                imageRegistry,
-                imageName,
-                imageTag));
+            .WithAnnotation(new ModuleNativeImagePublisherAnnotation(ModuleResourceKind.Project));
         var contextImage = new ModuleResourceImage(imageRegistry, imageName, imageTag);
         var context = new DistributedApplicationModuleResourceContext(
             builder,
@@ -724,13 +807,11 @@ public static partial class DistributedApplicationModuleExtensions
             container.WithImage(imageName, imageTag);
             ApplyImageRegistry(container, imageRegistry);
             ApplyImagePullPolicy(container, options?.ImagePullPolicy);
-            container.WithImagePushOptions(pushContext =>
-            {
-                pushContext.Options.RemoteImageName = imageName;
-                pushContext.Options.RemoteImageTag = imageTag;
-            });
             project.Export.ConfigureContainer?.Invoke(context, container);
+            container.WithImagePushOptions(pushContext =>
+                FillDefaultImagePushOptions(pushContext, imageName, imageTag));
         });
+        ModuleNativeImageValidationPipeline.AddValidationStep(resource, repositoryPath, registry.Options);
         ConfigureRepositoryLifecycle(builder, resource, registry);
         registry.TrackResource(resource.Resource);
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
@@ -816,6 +897,51 @@ public static partial class DistributedApplicationModuleExtensions
         annotation.Image = image.Name;
         container.WithImageTag(image.Tag);
     }
+
+    private static void FillDefaultImagePushOptions(
+        ContainerImagePushOptionsCallbackContext context,
+        string imageName,
+        string imageTag)
+    {
+#pragma warning disable CA1308
+        var aspireDefaultName = context.Resource.Name.ToLowerInvariant();
+#pragma warning restore CA1308
+        if (string.IsNullOrWhiteSpace(context.Options.RemoteImageName) ||
+            string.Equals(
+                context.Options.RemoteImageName,
+                aspireDefaultName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            context.Options.RemoteImageName = imageName;
+        }
+
+        if (string.IsNullOrWhiteSpace(context.Options.RemoteImageTag) ||
+            string.Equals(context.Options.RemoteImageTag, "latest", StringComparison.OrdinalIgnoreCase))
+        {
+            context.Options.RemoteImageTag = imageTag;
+        }
+    }
+
+    private sealed record ModuleContainerIdentity(
+        DistributedApplicationModule Module,
+        string DeclaredResourceName,
+        string EffectiveResourceName,
+        string RepositoryPath,
+        bool Imported);
+
+    private sealed record ModuleContainerImagePlan(
+        ModuleImagePublisherAnnotation? Publisher,
+        DistributedApplicationModuleImageOptions? Configured,
+        ModuleResourceImage? ContextImage,
+        ModuleResourceImage? OwnedImage);
+
+    private sealed record NormalizedContainerDescriptor(
+        ModuleContainerIdentity Identity,
+        ModuleContainerImagePlan Image,
+        Action<
+            IDistributedApplicationModuleResourceContext,
+            IResourceBuilder<ContainerResource>>? ConfigureContainer,
+        bool ModuleAnnotationAlreadyApplied);
 
     private static bool RequiresRepositoryForSynchronousMaterialization(
         IDistributedApplicationBuilder builder,

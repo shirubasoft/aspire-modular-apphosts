@@ -1,14 +1,109 @@
 #pragma warning disable ASPIREPIPELINES003
+#pragma warning disable ASPIREPIPELINES001
 #pragma warning disable ASPIRECOMPUTE003
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
+using Aspire.Hosting.Pipelines;
+using Aspire.Hosting.Publishing;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class ModuleImageWorkflowPipelineTests
 {
+    [Fact]
+    public async Task Includes_Aspire_native_Dockerfile_publishers_with_canonical_push_defaults()
+    {
+        using var repository = TemporaryDirectory.Create();
+        File.WriteAllText(
+            Path.Combine(repository.Path, "Dockerfile"),
+            "FROM scratch\n");
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = ["--publisher", "manifest"],
+            DisableDashboard = true,
+            ProjectDirectory = repository.Path
+        });
+        builder.Configuration[
+            $"{ModuleImageWorkflowConfiguration.ConfigurationSectionName}:" +
+            ModuleImageWorkflowConfiguration.TagConfigurationName] = "candidate";
+        var registry = builder.AddContainerRegistry("registry", "registry.example.test", "team");
+        var module = builder.ExportModule("workers", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddResource<ContainerResource>(
+                "default-worker",
+                context => context.ApplicationBuilder
+                    .AddDockerfile(context.ResourceName, repository.Path)
+                    .WithContainerRegistry(registry));
+            definition.AddResource<ContainerResource>(
+                "custom-worker",
+                context => context.ApplicationBuilder
+                    .AddDockerfile(context.ResourceName, repository.Path)
+                    .WithContainerRegistry(registry)
+                    .WithRemoteImageName("services/custom-worker")
+                    .WithRemoteImageTag("pinned"));
+        });
+        builder.AddModule(module);
+
+        var containers = builder.Resources.OfType<ContainerResource>().ToArray();
+        Assert.Equal(2, containers.Length);
+        Assert.All(containers, container =>
+        {
+            Assert.True(container.RequiresImageBuildAndPush());
+            Assert.Single(container.Annotations.OfType<ModuleNativeImagePublisherAnnotation>());
+            Assert.Empty(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+        });
+
+        var steps = new List<PipelineStep>();
+        foreach (var container in containers)
+        {
+            foreach (var annotation in container.Annotations.OfType<PipelineStepAnnotation>())
+            {
+                steps.AddRange(await annotation.CreateStepsAsync(new PipelineStepFactoryContext
+                {
+                    PipelineContext = null!,
+                    Resource = container
+                }));
+            }
+        }
+
+        ModuleImageWorkflowPipeline.AttachNativeValidationDependencies(steps);
+        foreach (var container in containers)
+        {
+            var validation = Assert.Single(steps, step =>
+                ReferenceEquals(step.Resource, container) &&
+                step.Tags.Contains(ModuleNativeImageValidationPipeline.StepTag));
+            var push = Assert.Single(steps, step =>
+                ReferenceEquals(step.Resource, container) &&
+                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage));
+            Assert.Contains(validation.Name, push.DependsOnSteps);
+        }
+
+        var document = await ModuleImageWorkflowPipeline.CreateDocumentAsync(
+            builder.Resources,
+            ModuleImageSelection.All,
+            TestContext.Current.CancellationToken);
+
+        Assert.Collection(
+            document.Images,
+            image =>
+            {
+                Assert.Equal("custom-worker", image.Resource);
+                Assert.Equal(ModuleResourceKind.Container, image.ResourceKind);
+                Assert.Equal(
+                    "registry.example.test/team/services/custom-worker:pinned",
+                    image.Reference);
+            },
+            image =>
+            {
+                Assert.Equal("default-worker", image.Resource);
+                Assert.Equal(ModuleResourceKind.Container, image.ResourceKind);
+                Assert.Equal("registry.example.test/team/default-worker:candidate", image.Reference);
+            });
+    }
+
     [Fact]
     public async Task Includes_Aspire_native_project_publishers()
     {

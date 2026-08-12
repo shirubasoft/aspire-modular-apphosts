@@ -48,6 +48,7 @@ internal static class ModuleImageWorkflowPipeline
                         .Any() &&
                     step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
                 .ToArray();
+            AttachNativeValidationDependencies(context.Steps, pushSteps);
             var selectedResources = workflow.Selection.ResolveResources(
                 pushSteps.Select(step => step.Resource!),
                 "workflow image push steps");
@@ -59,6 +60,34 @@ internal static class ModuleImageWorkflowPipeline
 
             return Task.CompletedTask;
         });
+    }
+
+    internal static void AttachNativeValidationDependencies(
+        IReadOnlyList<PipelineStep> steps,
+        IReadOnlyList<PipelineStep>? pushSteps = null)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        var imagePushSteps = pushSteps ?? steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+            .ToArray();
+        var nativeValidationSteps = steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Tags.Contains(ModuleNativeImageValidationPipeline.StepTag))
+            .ToDictionary(step => step.Resource!);
+        foreach (var pushStep in imagePushSteps.Where(step =>
+                     step.Resource!.Annotations
+                         .OfType<ModuleNativeImagePublisherAnnotation>()
+                         .Any()))
+        {
+            var validationStep = nativeValidationSteps[pushStep.Resource!];
+            if (!pushStep.DependsOnSteps.Contains(validationStep.Name, StringComparer.Ordinal))
+            {
+                pushStep.DependsOnSteps.Add(validationStep.Name);
+            }
+        }
     }
 
     internal static async Task<ModuleImageWorkflowDocument> CreateDocumentAsync(

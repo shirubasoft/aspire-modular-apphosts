@@ -526,7 +526,30 @@ public sealed class ModuleImageDeferredCoverageTests
                 token => Task.Delay(Timeout.InfiniteTimeSpan, token),
                 TimeSpan.FromMinutes(1),
                 "test transfer",
-                cancellationSource.Token));
+            cancellationSource.Token));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Push_operations_use_the_image_transfer_timeout(bool useAspireRegistry)
+    {
+        var resource = new ContainerResource("api");
+        var targetKind = useAspireRegistry
+            ? ModuleImagePushTargetKind.AspireRegistry
+            : ModuleImagePushTargetKind.ContainerRuntime;
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            ModuleImagePushPipeline.PushImageAsync(
+                targetKind,
+                resource,
+                "registry.example.test/acme/api:test",
+                (_, token) => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                (_, token) => Task.Delay(Timeout.InfiniteTimeSpan, token),
+                TimeSpan.FromTicks(1),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("Image push for resource 'api'", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

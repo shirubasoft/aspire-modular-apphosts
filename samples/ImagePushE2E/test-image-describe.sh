@@ -45,6 +45,7 @@ jq --exit-status --arg effective_image_tag "$effective_image_tag" '
     ([.images[].effectiveResource] == [
         "image-pull-mapped",
         "image-push-declared",
+        "image-push-dockerfile",
         "image-push-extra",
         "image-push-factory",
         "image-push-project"
@@ -63,6 +64,17 @@ jq --exit-status --arg effective_image_tag "$effective_image_tag" '
           "tag": "push-test"
         } and
         .build.step == "build-image-push-declared") and
+    (.images[] | select(.resource == "image-push-dockerfile") |
+        .repository == "image-push-dockerfile" and
+        (.tag | test("^[0-9a-f]{40}$")) and
+        .reference == "image-push-dockerfile:\(.tag)" and
+        .pullReference == "registry.example.test/image-push/dockerfile:push-test" and
+        .push == {
+          "registry": "registry.example.test",
+          "repository": "image-push/dockerfile",
+          "tag": "push-test"
+        } and
+        .build == null) and
     (.images[] | select(.resource == "image-push-factory") |
         .reference == "registry.example.test/image-push/factory:\($effective_image_tag)" and
         .pullReference == "registry.example.test/image-push/factory:push-test" and

@@ -91,6 +91,17 @@ var module = builder.ExportModule("image-push-e2e", "Sample.ImagePush.Contract",
             ImageTag = ImageTag,
             WorkingDirectory = "ImageFixture"
         });
+
+    definition.AddResource<ContainerResource>(
+        "image-push-dockerfile",
+        context => context.ApplicationBuilder
+            .AddDockerfile(
+                context.ResourceName,
+                Path.Combine(builder.AppHostDirectory, "ImageFixture"))
+            .WithContainerRegistry(registry)
+            .WithRemoteImageName("dockerfile")
+            .WithRemoteImageTag(ImageTag)
+            .WithExplicitStart());
 });
 
 builder.AddModule(module);
