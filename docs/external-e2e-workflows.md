@@ -16,7 +16,8 @@ The checked-in examples contain no custom orchestration scripts:
 ## Contract between the repos
 
 Repo B's AppHost must expose pushable module images. Each selected project/container needs a
-resolved registry, repository, tag, and build/push plan; see [module image publishing](modules.md).
+resolved registry, repository, tag, and build/push plan; see the
+[module image workflow guide](module-images.md).
 Repo A must import the same module contract identities. A module image workflow document entry is keyed by the declared
 `module/resource`, never by Repo A's effective Aspire alias.
 
@@ -81,8 +82,9 @@ dotnet tool run modular-apphosts -- images publish \
 
 Repeat `--module` and `--resource` to select module-owned publishers by their declared identities.
 Use `--all` only when every publishable module image should be pushed. The command runs Aspire's
-structured `describe-images` and `workflow-images` pipelines, then builds the module image workflow
-document from the resolved push targets.
+`workflow-images` pipeline once; the selected dependency graph prepares and pushes every selected
+image exactly once and writes the module image workflow document from those resolved push targets.
+Run `aspire do describe-images` separately when a read-only inventory is needed.
 
 On GitHub Actions it automatically emits step outputs:
 
@@ -178,7 +180,7 @@ container inputs.
 
 Workflow values are assigned through `env` and passed as quoted command arguments in the examples;
 they are not interpolated directly into shell programs. Tokens stay in `GH_TOKEN` or action inputs,
-not command lines or manifests.
+not command lines or workflow documents.
 
 ## Exit status and troubleshooting
 

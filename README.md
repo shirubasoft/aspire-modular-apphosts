@@ -83,9 +83,24 @@ Inside another module's `Define` method, `CatalogModule.Reference(module)` retur
 
 By default, local modules run as projects and imported modules run as containers. Module declaration is synchronous and performs no Git or image operations. Remote and pinned repositories are acquired from the AppHost directory with `aspire do initialize --apphost . --non-interactive`; normal run fails fast with the exact AppHost-aware recovery command when a sibling checkout, initialization state record, project, or build directory is missing. Use `UseLocalModuleProjects()` or `UseModuleContainers()` for AppHost-wide project-mode intent.
 
-Projects use Aspire's native container publisher through `ExportAsContainer(imageName)` by default. Advanced image commands can follow Aspire's Docker or Podman selection by using `ModuleImageCommandOptions.ContainerRuntimePlaceholder` with `ExportAsContainerWithCommand(...)` or `WithImagePublishCommand(...)`. In publish mode, image publishers contribute `build-<resource>` steps and registry-backed images participate in `aspire do push` and `aspire do pull`; push depends on build. A clean advanced publisher pushes the canonical image plus a sanitized source-branch alias, while module image workflow documents retain the exact canonical tag. Use Aspire's named resource steps, such as `aspire do pull-catalog-api`, for one resource; use repeatable `images publish --module` and `--resource` options for validated workflow selection. `aspire do describe-images --output-path artifacts` writes the effective run, pull, push, and build identities to `artifacts/module-images.json` without preparing images. A resource-level `WithImagePullMapping` can pull a remote reference from one registry and re-tag it as the resource image in another registry while retaining its push behavior.
+Projects use Aspire's native container publisher through `ExportAsContainer(imageName)` by default,
+and module-owned `AddDockerfile` resources retain Aspire's Dockerfile build and push operations.
+Advanced image commands can follow Aspire's Docker or Podman selection by using
+`ModuleImageCommandOptions.ContainerRuntimePlaceholder` with `ExportAsContainerWithCommand(...)` or
+`WithImagePublishCommand(...)`. Registry-backed images participate in `aspire do build`, `push`, and
+`pull`; dirty source may build and run locally but cannot be pushed. A clean advanced publisher also
+pushes a sanitized source-branch alias, while module image workflow documents retain the exact
+canonical tag. Named Aspire steps operate on one resource; repeatable `images publish --module` and
+`--resource` options select a validated graph. `aspire do describe-images --output-path artifacts`
+writes effective identities without preparing images.
 
-Initialization places remote checkouts in collision-resistant directories beside the AppHost Git root; pinned revisions receive distinct siblings that protect developer worktrees. Immediately before a published container starts, its Aspire resource callback inspects branch, commit, and dirty state, reuses or optionally pulls a clean canonical image, builds when needed, and retags the result to a deterministic `aspire-run` alias. Explicit-start resources remain lazy. Dirty source always rebuilds. Each publisher can select a separate `BuildRepository` and revision, and an explicit refresh option may fast-forward only clean unpinned build checkouts. The module guide documents the layout, configuration, and validation behavior.
+Initialization places remote checkouts in collision-resistant directories beside the AppHost Git
+root; pinned revisions receive distinct siblings that protect developer worktrees. Advanced command
+publishers inspect branch, commit, and dirty state immediately before their container starts, reuse
+or optionally pull a clean canonical image, build when needed, and retag the result to a deterministic
+`aspire-run` alias. Explicit-start resources remain lazy. Each advanced publisher can select a
+separate `BuildRepository` and revision, and an explicit refresh may fast-forward only a clean,
+unpinned build checkout.
 
 Set an exported project's run mode to `Project` for local debugging while keeping its portable container representation for publishing:
 
@@ -142,7 +157,8 @@ for pinned setup, tag precedence, complete workflow files, permissions, and trou
 
 ## Guides and samples
 
-- [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, repository behavior, and image publishing.
+- [Module guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/modules.md): module contracts, generated resources, imports, initialization, and configuration.
+- [Module image workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/module-images.md): native and advanced image publishers, lifecycle, pipeline steps, and workflow documents.
 - [E2E testing guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/e2e-testing.md): one test suite for AppHost and Docker Compose modes.
 - [Cross-repository E2E workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md): module image workflow document publication, application, reusable-workflow handoff, and script-free GitHub CLI dispatch.
 - [Upgrade guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/upgrade-guide.md): migration steps for the namespace, synchronous contract, repository, image, and workflow API redesign.

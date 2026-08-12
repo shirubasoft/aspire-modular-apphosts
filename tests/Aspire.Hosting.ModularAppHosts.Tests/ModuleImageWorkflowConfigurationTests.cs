@@ -8,7 +8,7 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class ModuleImageWorkflowConfigurationTests
 {
     [Fact]
-    public void Manifest_projects_to_standard_configuration_keys()
+    public void Workflow_document_projects_to_standard_configuration_keys()
     {
         var document = new ModuleImageWorkflowDocument();
         document.Images.Add(new ModuleImageWorkflowEntry
@@ -38,7 +38,7 @@ public sealed class ModuleImageWorkflowConfigurationTests
     [InlineData("orders__shadow")]
     [InlineData("orders/shadow")]
     [InlineData("orders=shadow")]
-    public void Manifest_rejects_names_that_can_escape_identity_or_configuration_segments(string module)
+    public void Workflow_document_rejects_names_that_can_escape_identity_or_configuration_segments(string module)
     {
         var document = new ModuleImageWorkflowDocument();
         document.Images.Add(new ModuleImageWorkflowEntry

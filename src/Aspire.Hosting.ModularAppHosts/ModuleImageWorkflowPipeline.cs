@@ -40,26 +40,36 @@ internal static class ModuleImageWorkflowPipeline
         builder.Pipeline.AddStep(workflowStep);
         builder.Pipeline.AddPipelineConfiguration(context =>
         {
-            var pushSteps = context.Steps
-                .Where(step =>
-                    step.Resource is not null &&
-                    step.Resource.Annotations
-                        .OfType<DistributedApplicationModuleResourceAnnotation>()
-                        .Any() &&
-                    step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
-                .ToArray();
-            AttachNativeValidationDependencies(context.Steps, pushSteps);
-            var selectedResources = workflow.Selection.ResolveResources(
-                pushSteps.Select(step => step.Resource!),
-                "workflow image push steps");
-            workflow.ValidateSelectedResources(selectedResources);
-            foreach (var step in pushSteps.Where(step => selectedResources.Contains(step.Resource!)))
-            {
-                workflowStep.DependsOnSteps.Add(step.Name);
-            }
-
+            ConfigureSelectedDependencies(context.Steps, workflow, workflowStep);
             return Task.CompletedTask;
         });
+    }
+
+    internal static void ConfigureSelectedDependencies(
+        IReadOnlyList<PipelineStep> steps,
+        ModuleImageWorkflowOptions workflow,
+        PipelineStep workflowStep)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        ArgumentNullException.ThrowIfNull(workflow);
+        ArgumentNullException.ThrowIfNull(workflowStep);
+        var pushSteps = steps
+            .Where(step =>
+                step.Resource is not null &&
+                step.Resource.Annotations
+                    .OfType<DistributedApplicationModuleResourceAnnotation>()
+                    .Any() &&
+                step.Tags.Contains(WellKnownPipelineTags.PushContainerImage))
+            .ToArray();
+        AttachNativeValidationDependencies(steps, pushSteps);
+        var selectedResources = workflow.Selection.ResolveResources(
+            pushSteps.Select(step => step.Resource!),
+            "workflow image push steps");
+        workflow.ValidateSelectedResources(selectedResources);
+        foreach (var step in pushSteps.Where(step => selectedResources.Contains(step.Resource!)))
+        {
+            workflowStep.DependsOnSteps.Add(step.Name);
+        }
     }
 
     internal static void AttachNativeValidationDependencies(

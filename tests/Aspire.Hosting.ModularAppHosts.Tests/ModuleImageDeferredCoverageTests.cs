@@ -229,7 +229,7 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Workflow_manifest_uses_prepared_canonical_tag()
+    public async Task Workflow_document_uses_prepared_canonical_tag()
     {
         var recipe = CreateRecipe();
         var (resource, publisher) = CreatePublishedContainer(recipe);
@@ -732,7 +732,7 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Manifest_pipeline_step_writes_and_logs_the_prepared_manifest()
+    public async Task Workflow_pipeline_step_writes_and_logs_the_prepared_document()
     {
         using var output = TemporaryDirectory.Create();
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
@@ -765,10 +765,10 @@ public sealed class ModuleImageDeferredCoverageTests
         await ExecutePipelineStepAsync(application, step);
 
         var path = Path.Combine(output.Path, ModuleImageWorkflowDocument.DefaultFileName);
-        var manifest = await ModuleImageWorkflowDocument.LoadAsync(
+        var document = await ModuleImageWorkflowDocument.LoadAsync(
             path,
             TestContext.Current.CancellationToken);
-        var image = Assert.Single(manifest.Images);
+        var image = Assert.Single(document.Images);
         Assert.Equal("coverage", image.Module);
         Assert.Equal("feature-coverage-0123456789ab", image.Tag);
     }

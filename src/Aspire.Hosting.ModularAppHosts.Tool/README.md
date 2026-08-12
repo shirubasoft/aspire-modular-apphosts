@@ -45,8 +45,10 @@ Exactly one selection mode is required:
 - Use `--all` to publish every image exposed by the AppHost.
 
 `--tag` applies first. Values in the `--resource-tags` JSON object win for their declared
-`module/resource`. The command runs Aspire's `describe-images` and `workflow-images` pipelines; use
-`--aspire-path` only when the Aspire executable is not named `aspire`.
+`module/resource`. The command runs Aspire's `workflow-images` pipeline once; that selected graph
+prepares and pushes each image and writes the workflow document in the same AppHost invocation. Use
+`describe-images` separately for read-only inspection, and use `--aspire-path` only when the Aspire
+executable is not named `aspire`.
 
 The module image workflow document is saved to `--output`, or `module-image-workflow.json` by default. Inside GitHub
 Actions, the command automatically writes these step outputs when `GITHUB_OUTPUT` is configured:
@@ -164,7 +166,7 @@ tool returns unchanged.
   suitable token through `GH_TOKEN` without placing it in command arguments.
 - `gh run watch` cannot use fine-grained personal access tokens because Checks read permission is
   unavailable to them. Use a compatible GitHub App or classic token.
-- Treat manifests as deployment inputs. The tool validates their shape, not whether a caller is
+- Treat module image workflow documents as deployment inputs. The tool validates their shape, not whether a caller is
   authorized to make Repo A execute an image.
 
 See the repository's [cross-repository workflow guide](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/docs/external-e2e-workflows.md)

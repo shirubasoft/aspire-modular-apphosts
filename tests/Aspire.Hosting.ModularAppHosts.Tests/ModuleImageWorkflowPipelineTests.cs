@@ -13,6 +13,56 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class ModuleImageWorkflowPipelineTests
 {
     [Fact]
+    public void Scoped_selection_depends_only_on_selected_module_steps_without_mutating_manifest_annotations()
+    {
+        var selected = new ContainerResource("orders-api");
+        selected.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
+            "orders",
+            "api",
+            "/work/orders",
+            imported: true));
+        var unselected = new ContainerResource("orders-worker");
+        unselected.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
+            "orders",
+            "worker",
+            "/work/orders",
+            imported: true));
+        var existingManifestCallback = new ManifestPublishingCallbackAnnotation(
+            static (ManifestPublishingContext _) => { });
+        unselected.Annotations.Add(existingManifestCallback);
+        var ordinary = new ContainerResource("ordinary");
+        var selectedPush = CreatePushStep("push-orders-api", selected);
+        var unselectedPush = CreatePushStep("push-orders-worker", unselected);
+        var ordinaryPush = CreatePushStep("push-ordinary", ordinary);
+        var workflowStep = new PipelineStep
+        {
+            Name = ModuleImageWorkflowPipeline.StepName,
+            Description = "test",
+            Action = static _ => Task.CompletedTask
+        };
+        var workflow = new ModuleImageWorkflowOptions(
+            new ModuleImageSelection([], ["api"]),
+            GlobalTag: null,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        ModuleImageWorkflowPipeline.ConfigureSelectedDependencies(
+            [selectedPush, unselectedPush, ordinaryPush],
+            workflow,
+            workflowStep);
+
+        Assert.Equal([selectedPush.Name], workflowStep.DependsOnSteps);
+        Assert.Same(
+            existingManifestCallback,
+            Assert.Single(unselected.Annotations.OfType<ManifestPublishingCallbackAnnotation>()));
+        Assert.DoesNotContain(
+            selected.Annotations.OfType<ManifestPublishingCallbackAnnotation>(),
+            annotation => ReferenceEquals(annotation, ManifestPublishingCallbackAnnotation.Ignore));
+        Assert.DoesNotContain(
+            unselected.Annotations.OfType<ManifestPublishingCallbackAnnotation>(),
+            annotation => ReferenceEquals(annotation, ManifestPublishingCallbackAnnotation.Ignore));
+    }
+
+    [Fact]
     public async Task Includes_Aspire_native_Dockerfile_publishers_with_canonical_push_defaults()
     {
         using var repository = TemporaryDirectory.Create();
@@ -223,4 +273,13 @@ public sealed class ModuleImageWorkflowPipelineTests
             imported: true));
         return Task.CompletedTask;
     }
+
+    private static PipelineStep CreatePushStep(string name, IResource resource) => new()
+    {
+        Name = name,
+        Description = "test",
+        Action = static _ => Task.CompletedTask,
+        Tags = [WellKnownPipelineTags.PushContainerImage],
+        Resource = resource
+    };
 }

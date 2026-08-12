@@ -76,6 +76,9 @@ fast-forwarding clean, unpinned image build repositories immediately before a re
 - Delete uses of the removed `ContainerRuntimeResolver`. Put
   `ModuleImageCommandOptions.ContainerRuntimePlaceholder` in the publish command or arguments;
   it resolves through Aspire's `IContainerRuntimeResolver` when the command runs.
+- Replace command-backed project exports with `ExportAsContainer(imageName)` where Aspire's project
+  publisher is sufficient. Factory-created Dockerfile containers can return `AddDockerfile(...)`;
+  they retain Aspire's standard build and push steps and participate in module image workflow documents.
 - Keep registry and repository separate: set `ImageRegistry` to a host such as `ghcr.io` and
   `ImageName` to a repository such as `example/orders-api`.
 - Use the `{image}`, `{image-registry}`, `{image-repository}`, `{image-name}`, and `{image-tag}`

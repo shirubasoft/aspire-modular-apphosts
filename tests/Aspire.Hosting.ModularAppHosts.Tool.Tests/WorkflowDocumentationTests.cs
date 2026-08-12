@@ -7,7 +7,7 @@ namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
 public sealed class WorkflowDocumentationTests
 {
     [Fact]
-    public async Task Checked_in_manifest_example_matches_the_current_contract()
+    public async Task Checked_in_workflow_document_example_matches_the_current_contract()
     {
         var repositoryRoot = FindRepositoryRoot();
         var examplePath = Path.Combine(
@@ -16,16 +16,16 @@ public sealed class WorkflowDocumentationTests
             "examples",
             ModuleImageWorkflowDocument.DefaultFileName);
 
-        var manifest = await ModuleImageWorkflowDocument.LoadAsync(
+        var document = await ModuleImageWorkflowDocument.LoadAsync(
             examplePath,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, manifest.SchemaVersion);
-        Assert.Equal(2, manifest.Images.Count);
+        Assert.Equal(ModuleImageWorkflowDocument.CurrentSchemaVersion, document.SchemaVersion);
+        Assert.Equal(2, document.Images.Count);
     }
 
     [Fact]
-    public async Task Checked_in_schema_tracks_the_current_manifest_version()
+    public async Task Checked_in_schema_tracks_the_current_workflow_document_version()
     {
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
@@ -67,7 +67,7 @@ public sealed class WorkflowDocumentationTests
     }
 
     [Fact]
-    public async Task Repo_A_workflow_runs_the_E2E_command_through_manifest_apply()
+    public async Task Repo_A_workflow_runs_the_E2E_command_through_workflow_apply()
     {
         var workflowPath = Path.Combine(
             FindRepositoryRoot(),
@@ -104,6 +104,79 @@ public sealed class WorkflowDocumentationTests
         Assert.Contains("dotnet test", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("GITHUB_ENV", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("export Aspire__", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Current_documentation_rejects_removed_contracts_commands_and_lifecycle_claims()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var documentationPaths = new List<string>
+        {
+            Path.Combine(repositoryRoot, "README.md"),
+            Path.Combine(repositoryRoot, "CONTRIBUTING.md"),
+            Path.Combine(repositoryRoot, "docs", "modules.md"),
+            Path.Combine(repositoryRoot, "docs", "module-images.md"),
+            Path.Combine(repositoryRoot, "docs", "e2e-testing.md"),
+            Path.Combine(repositoryRoot, "docs", "external-e2e-workflows.md")
+        };
+        documentationPaths.AddRange(Directory.EnumerateFiles(
+            Path.Combine(repositoryRoot, "samples"),
+            "README.md",
+            SearchOption.AllDirectories));
+        documentationPaths.AddRange(Directory.EnumerateFiles(
+            Path.Combine(repositoryRoot, "src"),
+            "README.md",
+            SearchOption.AllDirectories));
+        string[] removedContracts =
+        [
+            "using Aspire.Hosting.ModularAppHosts;",
+            "ModuleImageManifestDocument",
+            "ModuleImageManifestEntry",
+            "modular-apphosts manifest",
+            "AutoCloneRepositories",
+            "RepositoryBasePath",
+            "`ProjectName`"
+        ];
+        string[] removedLifecycleClaims =
+        [
+            "startup-time checkout",
+            "checkout during startup",
+            "clones repositories on startup",
+            "automatically clones repositories"
+        ];
+
+        foreach (var path in documentationPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var documentation = await File.ReadAllTextAsync(
+                path,
+                TestContext.Current.CancellationToken);
+            foreach (var removed in removedContracts.Concat(removedLifecycleClaims))
+            {
+                Assert.DoesNotContain(removed, documentation, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Primary_guides_link_to_the_checked_in_upgrade_guide()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var upgradeGuide = Path.Combine(repositoryRoot, "docs", "upgrade-guide.md");
+        Assert.True(File.Exists(upgradeGuide));
+
+        var rootReadme = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "README.md"),
+            TestContext.Current.CancellationToken);
+        var moduleGuide = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "docs", "modules.md"),
+            TestContext.Current.CancellationToken);
+        var imageGuide = await File.ReadAllTextAsync(
+            Path.Combine(repositoryRoot, "docs", "module-images.md"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("docs/upgrade-guide.md", rootReadme, StringComparison.Ordinal);
+        Assert.Contains("(upgrade-guide.md)", moduleGuide, StringComparison.Ordinal);
+        Assert.Contains("(upgrade-guide.md)", imageGuide, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

@@ -6,7 +6,7 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -165,7 +165,7 @@ public sealed class ModuleImagePullPipelineTests
     }
 
     [Fact]
-    public async Task Pull_mapping_records_the_remote_to_local_lifecycle_in_the_resource_log()
+    public async Task Pull_mapping_reports_lifecycle_once_and_reserves_resource_logs_for_subprocess_output()
     {
         var builder = DistributedApplication.CreateBuilder();
         var container = builder
@@ -174,11 +174,12 @@ public sealed class ModuleImagePullPipelineTests
             .Resource;
         await using var application = builder.Build();
         var resourceLoggerService = application.Services.GetRequiredService<ResourceLoggerService>();
+        var pipelineLogger = new RecordingLogger();
         var pipelineContext = new PipelineContext(
             application.Services.GetRequiredService<DistributedApplicationModel>(),
             application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             application.Services,
-            NullLogger.Instance,
+            pipelineLogger,
             TestContext.Current.CancellationToken);
         await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
             "pull-orders-api",
@@ -228,13 +229,14 @@ public sealed class ModuleImagePullPipelineTests
             logs.AddRange(lines);
         }
 
-        Assert.Contains(logs, line => line.Content.Contains(
+        Assert.Empty(logs);
+        Assert.Contains(pipelineLogger.Messages, message => message.Contains(
             "Pulling remote image mycustomregistry.io/images:api-1-0 for resource orders-api.",
             StringComparison.Ordinal));
-        Assert.Contains(logs, line => line.Content.Contains(
+        Assert.Contains(pipelineLogger.Messages, message => message.Contains(
             "Re-tagging remote image mycustomregistry.io/images:api-1-0 as local image ghcr.io/api:1-0 for resource orders-api.",
             StringComparison.Ordinal));
-        Assert.Contains(logs, line => line.Content.Contains(
+        Assert.Contains(pipelineLogger.Messages, message => message.Contains(
             "Re-tagged remote image mycustomregistry.io/images:api-1-0 as local image ghcr.io/api:1-0 for resource orders-api.",
             StringComparison.Ordinal));
     }
@@ -662,4 +664,22 @@ public sealed class ModuleImagePullPipelineTests
 
     private static string GetProjectPath(string directory) =>
         Path.Combine(directory, "Orders.Api.csproj");
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+    }
 }

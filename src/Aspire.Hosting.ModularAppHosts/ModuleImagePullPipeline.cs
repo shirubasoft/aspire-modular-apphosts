@@ -155,7 +155,6 @@ internal static class ModuleImagePullPipeline
             .GetLogger(resource);
 
         LogImagePullStarted(context.Logger, remoteImage, resource.Name, null);
-        LogImagePullStarted(resourceLogger, remoteImage, resource.Name, null);
 
         await executeRuntimeAsync(
             runtime,
@@ -166,13 +165,11 @@ internal static class ModuleImagePullPipeline
         if (!string.Equals(remoteImage, localImage, StringComparison.Ordinal))
         {
             LogImageRetagStarted(context.Logger, remoteImage, localImage, resource.Name, null);
-            LogImageRetagStarted(resourceLogger, remoteImage, localImage, resource.Name, null);
             await tagImageAsync(
                 remoteImage,
                 localImage,
                 cancellationToken).ConfigureAwait(false);
             LogImageRetagCompleted(context.Logger, remoteImage, localImage, resource.Name, null);
-            LogImageRetagCompleted(resourceLogger, remoteImage, localImage, resource.Name, null);
         }
     }
 

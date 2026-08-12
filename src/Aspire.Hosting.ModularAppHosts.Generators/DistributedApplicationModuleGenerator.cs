@@ -546,7 +546,22 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .Append(module.TypeName)
             .AppendLine();
         source.AppendLine("{");
-        source.AppendLine("    /// <summary>Gets a strongly typed reference to this module from another module definition.</summary>");
+        AppendSummary(
+            source,
+            "    ",
+            $"Gets a strongly typed reference to module '{module.ModuleName}' version '{module.ModuleVersion}' from another module definition.");
+        AppendParameter(source, "    ", "moduleBuilder", "The module definition that requires this contract.");
+        AppendReturns(source, "    ", $"A typed reference to module '{module.ModuleName}'.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.ArgumentNullException",
+            "moduleBuilder is null.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.InvalidOperationException",
+            $"Module '{module.ModuleName}' is missing, has an incompatible version, or is not materialized yet.");
         source.AppendLine("    public static Module Reference(");
         source.AppendLine("        global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder)");
         source.AppendLine("    {");
@@ -560,7 +575,18 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine();
         if (module.HasConventionalDefineMethod)
         {
-            source.AppendLine("    /// <summary>Defines and adds the module in one call and returns its typed resources.</summary>");
+            AppendSummary(
+                source,
+                "    ",
+                $"Defines and adds module '{module.ModuleName}' version '{module.ModuleVersion}' and returns its typed resources.");
+            AppendParameter(source, "    ", "builder", "The receiving Aspire application builder.");
+            AppendReturns(source, "    ", $"The materialized '{module.ModuleName}' module.");
+            AppendException(source, "    ", "global::System.ArgumentNullException", "builder is null.");
+            AppendException(
+                source,
+                "    ",
+                "global::System.InvalidOperationException",
+                "The definition or synchronous resource materialization is invalid.");
             source.Append("    public static Module ")
                 .Append(module.AddExtensionMethodName)
                 .AppendLine("(");
@@ -583,7 +609,28 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             source.AppendLine();
         }
 
-        source.AppendLine("    /// <summary>Adds the exported module to the AppHost and returns its typed resources.</summary>");
+        AppendSummary(
+            source,
+            "    ",
+            $"Adds an exported '{module.ModuleName}' module definition to the AppHost and returns its typed resources.");
+        AppendParameter(source, "    ", "builder", "The receiving Aspire application builder.");
+        AppendParameter(source, "    ", "module", $"The exported '{module.ModuleName}' module definition.");
+        AppendReturns(source, "    ", $"The materialized '{module.ModuleName}' module.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.ArgumentNullException",
+            "builder or module is null.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.ArgumentException",
+            $"module does not identify '{module.ModuleName}' version '{module.ModuleVersion}' with the expected package ID.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.InvalidOperationException",
+            "Synchronous resource materialization is invalid.");
         source.Append("    public static Module ")
             .Append(module.AddExtensionMethodName)
             .AppendLine("(");
@@ -616,7 +663,19 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
-        source.AppendLine("    /// <summary>Imports the module and returns its typed resources.</summary>");
+        AppendSummary(
+            source,
+            "    ",
+            $"Imports module '{module.ModuleName}' version '{module.ModuleVersion}' with default resource names.");
+        AppendInitializationRemarks(source, "    ", module.ModuleName);
+        AppendParameter(source, "    ", "builder", "The receiving Aspire application builder.");
+        AppendReturns(source, "    ", $"The imported '{module.ModuleName}' module.");
+        AppendException(source, "    ", "global::System.ArgumentNullException", "builder is null.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.InvalidOperationException",
+            "The definition, repository preflight requirements, or synchronous materialization is invalid.");
         source.Append("    public static Module ")
             .Append(module.ImportExtensionMethodName)
             .AppendLine("(");
@@ -628,7 +687,24 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             .AppendLine("(builder, new global::Aspire.Hosting.ModuleImportOptions());");
         source.AppendLine("    }");
         source.AppendLine();
-        source.AppendLine("    /// <summary>Imports the module with resource naming options and returns its typed resources.</summary>");
+        AppendSummary(
+            source,
+            "    ",
+            $"Imports module '{module.ModuleName}' version '{module.ModuleVersion}' with resource naming options.");
+        AppendInitializationRemarks(source, "    ", module.ModuleName);
+        AppendParameter(source, "    ", "builder", "The receiving Aspire application builder.");
+        AppendParameter(source, "    ", "options", "Resource prefixes and aliases for this import.");
+        AppendReturns(source, "    ", $"The imported '{module.ModuleName}' module.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.ArgumentNullException",
+            "builder or options is null.");
+        AppendException(
+            source,
+            "    ",
+            "global::System.InvalidOperationException",
+            "The definition, import naming, repository preflight requirements, or synchronous materialization is invalid.");
         source.Append("    public static Module ")
             .Append(module.ImportExtensionMethodName)
             .AppendLine("(");
@@ -656,7 +732,10 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
-        source.AppendLine("    /// <summary>A materialized module with strongly typed access to every declared resource.</summary>");
+        AppendSummary(
+            source,
+            "    ",
+            $"A materialized '{module.ModuleName}' module with strongly typed access to every declared resource.");
         source.AppendLine("    public sealed class Module : global::Aspire.Hosting.DistributedApplicationModuleReference");
         source.AppendLine("    {");
         source.AppendLine("        internal Module(global::Aspire.Hosting.IDistributedApplicationModule module)");
@@ -667,9 +746,15 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         foreach (var resource in module.Resources)
         {
             source.AppendLine();
-            source.Append("        /// <summary>Gets the '")
-                .Append(resource.ResourceName)
-                .AppendLine("' module resource.</summary>");
+            AppendSummary(
+                source,
+                "        ",
+                $"Gets the '{resource.ResourceName}' resource declared by module '{module.ModuleName}'.");
+            AppendException(
+                source,
+                "        ",
+                "global::System.InvalidOperationException",
+                $"Resource '{resource.ResourceName}' is unavailable or its materialized type is incompatible with the contract.");
             source.Append("        public global::Aspire.Hosting.ApplicationModel.IResourceBuilder<")
                 .Append(resource.TypeName)
                 .Append("> ")
@@ -697,6 +782,67 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
             GetHintName(module),
             SourceText.From(source.ToString(), Encoding.UTF8));
     }
+
+    private static void AppendSummary(
+        StringBuilder source,
+        string indentation,
+        string summary) =>
+        source.Append(indentation)
+            .Append("/// <summary>")
+            .Append(EscapeXmlDocumentation(summary))
+            .AppendLine("</summary>");
+
+    private static void AppendInitializationRemarks(
+        StringBuilder source,
+        string indentation,
+        string moduleName) =>
+        source.Append(indentation)
+            .Append("/// <remarks>Repository-backed imports of '")
+            .Append(EscapeXmlDocumentation(moduleName))
+            .Append("' require aspire do initialize --apphost &lt;path&gt; --non-interactive when normal-run preflight requests initialization.</remarks>")
+            .AppendLine();
+
+    private static void AppendParameter(
+        StringBuilder source,
+        string indentation,
+        string name,
+        string description) =>
+        source.Append(indentation)
+            .Append("/// <param name=\"")
+            .Append(name)
+            .Append("\">")
+            .Append(EscapeXmlDocumentation(description))
+            .AppendLine("</param>");
+
+    private static void AppendReturns(
+        StringBuilder source,
+        string indentation,
+        string description) =>
+        source.Append(indentation)
+            .Append("/// <returns>")
+            .Append(EscapeXmlDocumentation(description))
+            .AppendLine("</returns>");
+
+    private static void AppendException(
+        StringBuilder source,
+        string indentation,
+        string exceptionType,
+        string description) =>
+        source.Append(indentation)
+            .Append("/// <exception cref=\"")
+            .Append(exceptionType)
+            .Append("\">")
+            .Append(EscapeXmlDocumentation(description))
+            .AppendLine("</exception>");
+
+    private static string EscapeXmlDocumentation(string value) =>
+        value.Replace("&", "&amp;")
+            .Replace("<", "&lt;")
+            .Replace(">", "&gt;")
+            .Replace("\"", "&quot;")
+            .Replace("'", "&apos;")
+            .Replace("\r", "&#xD;")
+            .Replace("\n", "&#xA;");
 
     private static string GetHintName(ModuleModel module)
     {

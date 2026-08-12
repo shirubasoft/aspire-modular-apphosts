@@ -61,6 +61,26 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ParameterResource> Region", generated);
         Assert.Contains("IResourceBuilder<global::Aspire.Hosting.ApplicationModel.ContainerResource> Database", generated);
         Assert.Contains("ImportModule(builder, \"orders\", options)", generated);
+        Assert.Contains(
+            "/// <summary>Defines and adds module &apos;orders&apos; version &apos;2&apos; and returns its typed resources.</summary>",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "/// <param name=\"builder\">The receiving Aspire application builder.</param>",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "aspire do initialize --apphost &lt;path&gt; --non-interactive",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "/// <exception cref=\"global::System.InvalidOperationException\">",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Gets the &apos;orders-api&apos; resource declared by module &apos;orders&apos;.",
+            generated,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("global::System.Threading.Tasks.Task", generated, StringComparison.Ordinal);
         Assert.DoesNotContain("global::System.Threading.CancellationToken", generated, StringComparison.Ordinal);
         Assert.DoesNotContain("await", generated, StringComparison.Ordinal);
@@ -531,6 +551,10 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Contains("> Resource =>", generated);
         Assert.Contains("Module ImportClass(", generated);
         Assert.Contains("ImportModule(builder, \"orders\\\"north\\\\region\\n\", options)", generated);
+        Assert.Contains(
+            "orders&quot;north\\region&#xA;",
+            generated,
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -61,7 +61,7 @@ or Podman runtime as the AppHost.
 
 ```bash
 cd samples/AppHostA
-aspire run
+aspire
 ```
 
 AppHost A materializes its local module and opts into the module-declared image publishers. Development
@@ -79,7 +79,7 @@ Stop AppHost A, then run the importing host:
 
 ```bash
 cd ../AppHostB
-aspire run
+aspire
 ```
 
 AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
@@ -109,7 +109,7 @@ behavior against the module-owned message.
 
 [`ImagePushE2E`](ImagePushE2E) starts a temporary local OCI registry and executes Aspire's real
 `push` and `pull` pipelines for a declared container publisher, a project exported as a container,
-and a factory-created container publisher. A second module proves image isolation through Aspire's
+an advanced factory-created publisher, and an Aspire-native Dockerfile resource. A second module proves image isolation through Aspire's
 named resource steps while verifying that unselected publishers are not built. The pull fixture also maps an
 image from one temporary registry to a local reference in a second registry. `test-image-describe.sh`
 separately verifies the structured run, pull, push, and build identities consumed by CI tooling. See
