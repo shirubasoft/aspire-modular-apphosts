@@ -1,12 +1,56 @@
 #pragma warning disable ASPIRECOMMAND001
 
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class SynchronousModuleMaterializationTests
 {
+    [Fact]
+    public async Task Explicit_start_image_preparation_is_scoped_to_the_target_resource_event()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.Configuration["DcpPublisher:CliPath"] = Environment.ProcessPath;
+        builder.Configuration["DcpPublisher:DashboardPath"] = Environment.ProcessPath;
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddContainer("orders-api", "orders-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "orders-api",
+                    "publisher-that-must-remain-lazy",
+                    "build"))
+                .Configure((_, container) => container.WithExplicitStart());
+        });
+        builder.AddModule(module);
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Single(container.Annotations.OfType<ExplicitStartupAnnotation>());
+        var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
+
+        await using var application = builder.Build();
+        var model = application.Services.GetRequiredService<DistributedApplicationModel>();
+        await builder.Eventing.PublishAsync(
+            new BeforeStartEvent(application.Services, model),
+            TestContext.Current.CancellationToken);
+        Assert.False(publisher.TryGetPreparedImage(out _));
+
+        await builder.Eventing.PublishAsync(
+            new BeforeResourceStartedEvent(new ContainerResource("unrelated"), application.Services),
+            TestContext.Current.CancellationToken);
+        Assert.False(publisher.TryGetPreparedImage(out _));
+
+        using var emptyServices = new ServiceCollection().BuildServiceProvider();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.Eventing.PublishAsync(
+                new BeforeResourceStartedEvent(container, emptyServices),
+                TestContext.Current.CancellationToken));
+        Assert.Contains(nameof(ResourceLoggerService), exception.Message, StringComparison.Ordinal);
+        Assert.False(publisher.TryGetPreparedImage(out _));
+    }
+
     [Fact]
     public void Import_registers_initialize_steps_without_invoking_git_or_reading_checkout_content()
     {

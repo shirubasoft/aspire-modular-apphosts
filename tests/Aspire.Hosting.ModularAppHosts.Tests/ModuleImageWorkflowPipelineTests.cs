@@ -6,6 +6,8 @@ using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Publishing;
+using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -13,24 +15,26 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class ModuleImageWorkflowPipelineTests
 {
     [Fact]
-    public void Scoped_selection_depends_only_on_selected_module_steps_without_mutating_manifest_annotations()
+    public async Task Scoped_selection_preserves_subsequent_Aspire_manifest_output()
     {
-        var selected = new ContainerResource("orders-api");
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            Args = ["--publisher", "manifest"],
+            DisableDashboard = true
+        });
+        var selected = builder.AddContainer("orders-api", "acme/orders-api", "candidate").Resource;
         selected.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "api",
             "/work/orders",
             imported: true));
-        var unselected = new ContainerResource("orders-worker");
+        var unselected = builder.AddContainer("orders-worker", "acme/orders-worker", "candidate").Resource;
         unselected.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "worker",
             "/work/orders",
             imported: true));
-        var existingManifestCallback = new ManifestPublishingCallbackAnnotation(
-            static (ManifestPublishingContext _) => { });
-        unselected.Annotations.Add(existingManifestCallback);
-        var ordinary = new ContainerResource("ordinary");
+        var ordinary = builder.AddContainer("ordinary", "acme/ordinary", "candidate").Resource;
         var selectedPush = CreatePushStep("push-orders-api", selected);
         var unselectedPush = CreatePushStep("push-orders-worker", unselected);
         var ordinaryPush = CreatePushStep("push-ordinary", ordinary);
@@ -44,16 +48,23 @@ public sealed class ModuleImageWorkflowPipelineTests
             new ModuleImageSelection([], ["api"]),
             GlobalTag: null,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+        var resources = new IResource[] { selected, unselected, ordinary };
+        var manifestBeforeSelection = await RenderManifestResourcesAsync(
+            resources,
+            builder.ExecutionContext,
+            TestContext.Current.CancellationToken);
 
         ModuleImageWorkflowPipeline.ConfigureSelectedDependencies(
             [selectedPush, unselectedPush, ordinaryPush],
             workflow,
             workflowStep);
+        var manifestAfterSelection = await RenderManifestResourcesAsync(
+            resources,
+            builder.ExecutionContext,
+            TestContext.Current.CancellationToken);
 
         Assert.Equal([selectedPush.Name], workflowStep.DependsOnSteps);
-        Assert.Same(
-            existingManifestCallback,
-            Assert.Single(unselected.Annotations.OfType<ManifestPublishingCallbackAnnotation>()));
+        Assert.Equal(manifestBeforeSelection, manifestAfterSelection);
         Assert.DoesNotContain(
             selected.Annotations.OfType<ManifestPublishingCallbackAnnotation>(),
             annotation => ReferenceEquals(annotation, ManifestPublishingCallbackAnnotation.Ignore));
@@ -236,6 +247,39 @@ public sealed class ModuleImageWorkflowPipelineTests
 
         Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
         Assert.Contains("api", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static async Task<string> RenderManifestResourcesAsync(
+        IReadOnlyList<IResource> resources,
+        DistributedApplicationExecutionContext executionContext,
+        CancellationToken cancellationToken)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        foreach (var resource in resources)
+        {
+            var annotation = resource.Annotations
+                .OfType<ManifestPublishingCallbackAnnotation>()
+                .LastOrDefault();
+            if (annotation?.Callback is not { } callback)
+            {
+                continue;
+            }
+
+            writer.WritePropertyName(resource.Name);
+            writer.WriteStartObject();
+            await callback(new ManifestPublishingContext(
+                executionContext,
+                Path.Combine(Path.GetTempPath(), "module-manifest.json"),
+                writer,
+                cancellationToken));
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static Task AddPublisherAsync(
