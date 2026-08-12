@@ -242,8 +242,8 @@ public sealed class ModuleImageCommandOptions(
     public string? ImageRegistry { get; set; }
 
     /// <summary>
-    /// Gets or sets the image reference produced by a legacy publish command. When it differs from the effective
-    /// image reference, the installer tags it after the command succeeds.
+    /// Gets or sets the image reference produced by the advanced publish command. When it differs from the effective
+    /// image reference, image preparation tags it after the command succeeds.
     /// </summary>
     public string? ProducedImageReference { get; set; }
 
@@ -251,7 +251,7 @@ public sealed class ModuleImageCommandOptions(
     public bool PullBeforeBuild { get; set; }
 
     /// <summary>
-    /// Gets the executable invoked by the service installer. Use <see cref="ContainerRuntimePlaceholder"/> to defer
+    /// Gets the executable invoked during advanced image preparation. Use <see cref="ContainerRuntimePlaceholder"/> to defer
     /// Docker or Podman selection until the image publish command runs.
     /// </summary>
     public string PublishCommand { get; } = publishCommand;

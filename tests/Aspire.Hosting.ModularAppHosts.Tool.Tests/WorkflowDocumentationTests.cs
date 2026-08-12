@@ -117,7 +117,9 @@ public sealed class WorkflowDocumentationTests
             Path.Combine(repositoryRoot, "docs", "modules.md"),
             Path.Combine(repositoryRoot, "docs", "module-images.md"),
             Path.Combine(repositoryRoot, "docs", "e2e-testing.md"),
-            Path.Combine(repositoryRoot, "docs", "external-e2e-workflows.md")
+            Path.Combine(repositoryRoot, "docs", "external-e2e-workflows.md"),
+            Path.Combine(repositoryRoot, "src", "Aspire.Hosting.ModularAppHosts", "ModuleContracts.cs"),
+            Path.Combine(repositoryRoot, "src", "Aspire.Hosting.ModularAppHosts", "ModularAppHostsOptions.cs")
         };
         documentationPaths.AddRange(Directory.EnumerateFiles(
             Path.Combine(repositoryRoot, "samples"),
@@ -142,7 +144,10 @@ public sealed class WorkflowDocumentationTests
             "startup-time checkout",
             "checkout during startup",
             "clones repositories on startup",
-            "automatically clones repositories"
+            "automatically clones repositories",
+            "image installer",
+            "service installer",
+            "legacy publish command"
         ];
 
         foreach (var path in documentationPaths.Distinct(StringComparer.OrdinalIgnoreCase))

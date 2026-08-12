@@ -35,7 +35,7 @@ public sealed class ModularAppHostsOptions
     public bool UpdateRepositoriesOnInitialize { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether image installers may fetch and fast-forward clean unpinned build repositories during run.
+    /// Gets or sets whether image preparation may fetch and fast-forward clean unpinned build repositories during run.
     /// </summary>
     public bool RefreshBuildRepositoriesOnRun { get; set; }
 
@@ -161,7 +161,7 @@ public abstract class DistributedApplicationModuleImageOptions
     /// <summary>Gets or sets the explicit container registry host.</summary>
     public string? ImageRegistry { get; set; }
 
-    /// <summary>Gets or sets the image reference produced by a legacy publish command before final retagging.</summary>
+    /// <summary>Gets or sets the image reference produced by an advanced publish command before final retagging.</summary>
     public string? ProducedImageReference { get; set; }
 
     /// <summary>Gets or sets whether a missing clean image is pulled before its publish command runs.</summary>
@@ -195,7 +195,7 @@ public abstract class DistributedApplicationModuleImageOptions
     public string? BuildRepositoryRevision { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the image installer may fetch and fast-forward this clean unpinned build repository.
+    /// Gets or sets whether image preparation may fetch and fast-forward this clean unpinned build repository.
     /// </summary>
     public bool? RefreshBuildRepositoryOnRun { get; set; }
 
