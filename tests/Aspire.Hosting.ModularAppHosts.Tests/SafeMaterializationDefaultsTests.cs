@@ -20,7 +20,7 @@ public sealed class SafeMaterializationDefaultsTests
     }
 
     [Fact]
-    public void Auto_mode_runs_local_projects_directly_without_an_installer()
+    public void Auto_mode_runs_local_projects_directly()
     {
         using var source = TemporaryDirectory.Create();
         var projectPath = CreateProject(source.Path);
@@ -31,11 +31,10 @@ public sealed class SafeMaterializationDefaultsTests
 
         Assert.Single(builder.Resources.OfType<ProjectResource>());
         Assert.Empty(builder.Resources.OfType<ContainerResource>());
-        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
     }
 
     [Fact]
-    public void Auto_mode_runs_imported_projects_as_containers_with_a_deferred_installer()
+    public void Auto_mode_runs_imported_projects_as_containers_with_deferred_preparation()
     {
         using var source = TemporaryDirectory.Create();
         using var appHost = TemporaryDirectory.Create();
@@ -52,11 +51,12 @@ public sealed class SafeMaterializationDefaultsTests
 
         Assert.Single(builder.Resources.OfType<ContainerResource>());
         Assert.Empty(builder.Resources.OfType<ProjectResource>());
-        Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
     }
 
     [Fact]
-    public void Fluent_container_mode_selects_containers_and_image_installers()
+    public void Fluent_container_mode_selects_containers_with_deferred_preparation()
     {
         using var source = TemporaryDirectory.Create();
         var projectPath = CreateProject(source.Path);
@@ -67,7 +67,8 @@ public sealed class SafeMaterializationDefaultsTests
         builder.AddModule(module);
 
         Assert.Single(builder.Resources.OfType<ContainerResource>());
-        Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
     }
 
     [Fact]

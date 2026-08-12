@@ -106,12 +106,6 @@ internal static class ModuleImagePushPipeline
         {
             step.RequiredBySteps.RemoveAll(requiredBy =>
                 string.Equals(requiredBy, WellKnownPipelineSteps.Push, StringComparison.Ordinal));
-
-            var resource = step.Resource!;
-            if (!resource.IsExcludedFromPublish())
-            {
-                resource.Annotations.Add(ManifestPublishingCallbackAnnotation.Ignore);
-            }
         }
     }
 
@@ -123,10 +117,17 @@ internal static class ModuleImagePushPipeline
         var publisher = resource.Annotations.OfType<ModuleImagePublisherAnnotation>().LastOrDefault()
             ?? throw new InvalidOperationException(
                 $"Resource '{resource.Name}' does not have a module image publisher.");
-        await publisher.PrepareAsync(
+        var preparedImage = await publisher.PrepareAsync(
             context.Logger,
             resourceLogger,
             context.CancellationToken).ConfigureAwait(false);
+        if (preparedImage.SourceState.IsDirty)
+        {
+            throw new InvalidOperationException(
+                $"Resource '{resource.Name}' cannot push an image built from a dirty repository. " +
+                "Commit or stash the source changes before publishing the image.");
+        }
+
         var resolved = await ModuleEffectiveImageResolver.ResolveAsync(
             resource,
             context.CancellationToken,

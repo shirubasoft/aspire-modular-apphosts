@@ -180,16 +180,22 @@ public sealed class ModuleImageDeferredCoverageTests
     }
 
     [Fact]
-    public async Task Description_prepares_once_uses_resource_logger_and_emits_runtime_arguments()
+    public async Task Description_inspects_source_without_preparing_and_emits_runtime_arguments()
     {
         var recipe = CreateRecipe();
-        var calls = 0;
+        var prepareCalls = 0;
+        var inspectCalls = 0;
         var publisher = CreatePublisher(
             recipe,
             (_, _, _, _) =>
             {
-                calls++;
+                prepareCalls++;
                 return Task.FromResult(CreatePreparedImage(recipe));
+            },
+            (_, _) =>
+            {
+                inspectCalls++;
+                return Task.FromResult(CleanSource);
             });
         var builder = DistributedApplication.CreateBuilder();
         var resource = builder
@@ -202,18 +208,10 @@ public sealed class ModuleImageDeferredCoverageTests
             "api",
             recipe.RepositoryPath,
             imported: true));
-        var resourceLoggerRequests = 0;
-
         var document = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             [resource],
             ModuleImageSelection.All,
-            TestContext.Current.CancellationToken,
-            lifecycleLogger: NullLogger.Instance,
-            resourceLoggerFactory: _ =>
-            {
-                resourceLoggerRequests++;
-                return NullLogger.Instance;
-            });
+            TestContext.Current.CancellationToken);
         var second = await ModuleImageDescriptionPipeline.CreateDocumentAsync(
             [resource],
             ModuleImageSelection.All,
@@ -226,8 +224,8 @@ public sealed class ModuleImageDeferredCoverageTests
             image.Reference);
         Assert.Contains(image.Reference, image.Build!.Arguments);
         Assert.Single(second.Images);
-        Assert.Equal(1, calls);
-        Assert.Equal(1, resourceLoggerRequests);
+        Assert.Equal(0, prepareCalls);
+        Assert.Equal(2, inspectCalls);
     }
 
     [Fact]
@@ -516,16 +514,12 @@ public sealed class ModuleImageDeferredCoverageTests
             "registry.example.test",
             "team");
         var recipe = CreateRecipe(new ModuleContainerExportOptions("acme/api", "dotnet", "--version"));
-        var dirtySource = CleanSource with
-        {
-            IsDirty = true,
-            StatusFingerprint = "DIRTY"
-        };
-        var executionPlan = ModuleImageExecutionPlan.Create(recipe, dirtySource);
+        var cleanDetachedSource = CleanSource with { Branch = null };
+        var executionPlan = ModuleImageExecutionPlan.Create(recipe, cleanDetachedSource);
         var prepared = new ModulePreparedImage(
             executionPlan.CanonicalImageReference,
             recipe.LocalImageReference,
-            dirtySource,
+            cleanDetachedSource,
             ModuleImagePreparationDisposition.Built);
         var preparationCount = 0;
         var publisher = CreatePublisher(
@@ -566,6 +560,57 @@ public sealed class ModuleImageDeferredCoverageTests
         Assert.Same(container.Resource, Assert.Single(imageManager.PushedResources));
         Assert.Equal(1, preparationCount);
         Assert.True(publisher.TryGetPreparedImage(out _));
+    }
+
+    [Fact]
+    public async Task Push_step_rejects_dirty_source_before_contacting_the_registry()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "team");
+        var recipe = CreateRecipe(new ModuleContainerExportOptions("acme/api", "dotnet", "--version"));
+        var dirtySource = CleanSource with { IsDirty = true, StatusFingerprint = "DIRTY" };
+        var executionPlan = ModuleImageExecutionPlan.Create(recipe, dirtySource);
+        var publisher = CreatePublisher(
+            recipe,
+            (_, _, _, _) => Task.FromResult(new ModulePreparedImage(
+                executionPlan.CanonicalImageReference,
+                recipe.LocalImageReference,
+                dirtySource,
+                ModuleImagePreparationDisposition.Built)));
+        var container = builder
+            .AddContainer("api", recipe.Options.ImageName, ModuleImageBuildRecipe.LocalRunTag)
+            .WithContainerRegistry(registry)
+            .WithAnnotation(publisher);
+        ModuleImagePushPipeline.AddPushStep(container);
+        var imageManager = new RecordingImageManager();
+        builder.Services.AddSingleton<IResourceContainerImageManager>(imageManager);
+
+        await using var application = builder.Build();
+        var step = Assert.Single(await CreatePipelineStepsAsync(
+            container.Resource,
+            WellKnownPipelineTags.PushContainerImage));
+        await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
+            step.Name,
+            TestContext.Current.CancellationToken);
+        var pipelineContext = new PipelineContext(
+            application.Services.GetRequiredService<DistributedApplicationModel>(),
+            application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
+            application.Services,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => step.Action(
+            new PipelineStepContext
+            {
+                PipelineContext = pipelineContext,
+                ReportingStep = reportingStep
+            }));
+
+        Assert.Contains("dirty repository", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(imageManager.PushedResources);
     }
 
     [Fact]
@@ -815,11 +860,13 @@ public sealed class ModuleImageDeferredCoverageTests
             ILogger,
             ILogger,
             CancellationToken,
-            Task<ModulePreparedImage>>? prepareAsync = null) =>
+            Task<ModulePreparedImage>>? prepareAsync = null,
+        Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>>? inspectAsync = null) =>
         new(
             ModuleResourceKind.Container,
             recipe,
-            prepareAsync ?? ((_, _, _, _) => Task.FromResult(CreatePreparedImage(recipe))));
+            prepareAsync ?? ((_, _, _, _) => Task.FromResult(CreatePreparedImage(recipe))),
+            inspectAsync ?? ((_, _) => Task.FromResult(CleanSource)));
 
     private static (ContainerResource Resource, ModuleImagePublisherAnnotation Publisher)
         CreatePublishedContainer(ModuleImageBuildRecipe recipe)

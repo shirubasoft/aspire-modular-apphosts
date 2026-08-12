@@ -85,7 +85,7 @@ public sealed class SynchronousModuleMaterializationTests
 
         var registry = GetRegistry(builder);
         Assert.Null(registry.RepositoryPlans);
-        Assert.Empty(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
+        Assert.Single(builder.Resources);
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
         Assert.Equal("registry.example.test", image.Registry);
@@ -94,7 +94,33 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
-    public void Local_image_publisher_declares_stable_alias_and_deferred_installer()
+    public void External_image_override_requires_a_complete_image_identity()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ConfigureModularAppHosts(options =>
+            {
+                options.Modules["orders"] = new DistributedApplicationModuleOptions
+                {
+                    Containers =
+                    {
+                        ["orders-api"] = new DistributedApplicationModuleContainerOptions
+                        {
+                            PublishImage = false,
+                            ImageRegistry = "registry.example.test",
+                            ImageTag = "2026.08"
+                        }
+                    }
+                };
+            }));
+
+        Assert.Contains("Containers:orders-api:ImageName", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("PublishImage", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Local_image_publisher_declares_stable_alias_without_a_synthetic_resource()
     {
         using var appHost = CreateGitAppHost();
         var builder = CreateBuilder(appHost.Path);
@@ -117,10 +143,9 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.Equal(ModuleImageBuildRecipe.LocalRunTag, image.Tag);
         var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
         Assert.False(publisher.TryGetPreparedImage(out _));
-        var installer = Assert.Single(builder.Resources.OfType<ModuleRepositoryInstallerResource>());
-        Assert.Equal("orders-api:aspire-run", installer.ImageReference);
-        Assert.Equal(ModuleContainerExportOptions.ContainerRuntimePlaceholder, installer.PublishCommand);
-        Assert.NotNull(installer.Publisher);
+        Assert.Equal("orders-api:aspire-run", publisher.Recipe.LocalImageReference);
+        Assert.Equal(ModuleContainerExportOptions.ContainerRuntimePlaceholder, publisher.Options.PublishCommand);
+        Assert.Single(builder.Resources);
     }
 
     [Fact]

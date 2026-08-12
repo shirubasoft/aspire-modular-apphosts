@@ -1,3 +1,5 @@
+#pragma warning disable ASPIREPIPELINES003
+
 using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -232,12 +234,9 @@ public static partial class DistributedApplicationModuleExtensions
         project.Export.ConfigureContainer?.Invoke(context, container);
         ConfigureContainerImage(
             builder,
-            module,
-            project.Name,
             container,
             publisher,
-            projectOptions,
-            registry);
+            projectOptions);
         registry.TrackResource(container.Resource);
         module.TrackMaterializedResource(builder, project.Name, container.Resource);
     }
@@ -296,12 +295,9 @@ public static partial class DistributedApplicationModuleExtensions
         definition.ConfigureContainer?.Invoke(context, container);
         ConfigureContainerImage(
             builder,
-            module,
-            definition.Name,
             container,
             publisher,
-            configured,
-            registry);
+            configured);
         registry.TrackResource(container.Resource);
         module.TrackMaterializedResource(builder, definition.Name, container.Resource);
     }
@@ -371,12 +367,9 @@ public static partial class DistributedApplicationModuleExtensions
 
             ConfigureContainerImage(
                 builder,
-                module,
-                definition.Name,
                 container,
                 publisher,
-                configured,
-                registry);
+                configured);
         }
         else if (publisher is not null)
         {
@@ -481,12 +474,9 @@ public static partial class DistributedApplicationModuleExtensions
 
     private static void ConfigureContainerImage(
         IDistributedApplicationBuilder builder,
-        DistributedApplicationModule module,
-        string declaredResourceName,
         IResourceBuilder<ContainerResource> container,
         ModuleImagePublisherAnnotation? publisher,
-        DistributedApplicationModuleImageOptions? configured,
-        ModuleApplicationRegistry registry)
+        DistributedApplicationModuleImageOptions? configured)
     {
         ApplyImageSHA256(container, configured?.ImageSHA256);
         ApplyImagePullPolicy(container, configured?.ImagePullPolicy);
@@ -497,50 +487,37 @@ public static partial class DistributedApplicationModuleExtensions
         }
 
         container.WithAnnotation(publisher);
+        container.WithImagePushOptions(context =>
+        {
+            if (string.IsNullOrWhiteSpace(context.Options.RemoteImageName))
+            {
+                context.Options.RemoteImageName = publisher.Options.ImageName;
+            }
+
+            if (string.IsNullOrWhiteSpace(context.Options.RemoteImageTag))
+            {
+                context.Options.RemoteImageTag = publisher.TryGetPreparedImage(out var preparedImage)
+                    ? ModuleImageReference.GetTag(preparedImage.CanonicalImageReference)
+                    : publisher.Options.ImageTag ?? "latest";
+            }
+        });
         ModuleImageBuildPipeline.AddBuildStep(container);
         ModuleImagePushPipeline.AddPushStep(container);
         if (builder.ExecutionContext.IsRunMode)
         {
-            AddImagePreparationInstaller(
-                builder,
-                module,
-                declaredResourceName,
-                container,
-                publisher,
-                registry);
+            container.OnBeforeResourceStarted(async (resource, @event, cancellationToken) =>
+            {
+                var loggerFactory = @event.Services.GetRequiredService<ILoggerFactory>();
+                var lifecycleLogger = loggerFactory.CreateLogger("Aspire.Hosting.ModuleImagePreparation");
+                var resourceLogger = @event.Services
+                    .GetRequiredService<ResourceLoggerService>()
+                    .GetLogger(resource);
+                await publisher.PrepareAsync(
+                    lifecycleLogger,
+                    resourceLogger,
+                    cancellationToken).ConfigureAwait(false);
+            });
         }
-    }
-
-    private static void AddImagePreparationInstaller(
-        IDistributedApplicationBuilder builder,
-        DistributedApplicationModule module,
-        string declaredResourceName,
-        IResourceBuilder<ContainerResource> container,
-        ModuleImagePublisherAnnotation publisher,
-        ModuleApplicationRegistry registry)
-    {
-        var installerResource = new ModuleRepositoryInstallerResource(
-            GetInstallerName(container.Resource.Name),
-            publisher);
-        var installer = builder.AddResource(installerResource)
-            .WithParentRelationship(container.Resource)
-            .ExcludeFromManifest()
-            .WithExplicitStart()
-            .WithIconName("ArrowDownload");
-        container.WithAnnotation(new ModuleRepositoryInstallerAnnotation(installerResource));
-        builder.Eventing.Subscribe<BeforeStartEvent>(async (@event, cancellationToken) =>
-        {
-            var loggerFactory = @event.Services.GetRequiredService<ILoggerFactory>();
-            var lifecycleLogger = loggerFactory.CreateLogger("Aspire.Hosting.ModuleImagePreparation");
-            var resourceLogger = @event.Services
-                .GetRequiredService<ResourceLoggerService>()
-                .GetLogger(installerResource);
-            await publisher.PrepareAsync(
-                lifecycleLogger,
-                resourceLogger,
-                cancellationToken).ConfigureAwait(false);
-        });
-        registry.TrackResource(installer.Resource);
     }
 
     private static void MaterializeProjectResourceSynchronously(
@@ -681,20 +658,9 @@ public static partial class DistributedApplicationModuleExtensions
         bool imported,
         ModuleResourceNameMap resourceNames)
     {
-        var planned = new List<string>();
-        foreach (var definition in module.ResourceDefinitions)
-        {
-            var effectiveName = resourceNames[definition.Name];
-            planned.Add(effectiveName);
-            if (builder.ExecutionContext.IsRunMode && HasRuntimeImagePublisher(
-                    definition,
-                    options,
-                    moduleOptions,
-                    imported))
-            {
-                planned.Add(GetInstallerName(effectiveName));
-            }
-        }
+        var planned = module.ResourceDefinitions
+            .Select(definition => resourceNames[definition.Name])
+            .ToArray();
 
         var duplicate = planned
             .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -702,7 +668,7 @@ public static partial class DistributedApplicationModuleExtensions
         if (duplicate is not null)
         {
             throw new InvalidOperationException(
-                $"Cannot materialize module '{module.Name}' because its aliases, prefix, and installer names " +
+                $"Cannot materialize module '{module.Name}' because its aliases and prefix " +
                 $"produce duplicate resource '{duplicate}'.");
         }
 
@@ -722,23 +688,4 @@ public static partial class DistributedApplicationModuleExtensions
         }
     }
 
-    private static bool HasRuntimeImagePublisher(
-        IDistributedApplicationModuleResource definition,
-        ModularAppHostsOptions options,
-        DistributedApplicationModuleOptions? moduleOptions,
-        bool imported) =>
-        definition switch
-        {
-            DistributedApplicationModuleProject project =>
-                ResolveProjectMode(options, moduleOptions, moduleOptions?.FindProject(project.Name), imported) ==
-                    ModuleProjectMode.Container &&
-                !UsesExternalImage(moduleOptions?.FindProject(project.Name)),
-            DistributedApplicationModuleContainer container =>
-                container.ImagePublishOptions is not null &&
-                !UsesExternalImage(moduleOptions?.FindContainer(container.Name)),
-            IDistributedApplicationModuleFactoryResource resource =>
-                resource.ImagePublishOptions is not null &&
-                !UsesExternalImage(moduleOptions?.FindContainer(resource.Name)),
-            _ => false
-        };
 }

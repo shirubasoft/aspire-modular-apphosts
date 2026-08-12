@@ -158,7 +158,8 @@ public sealed class ModuleImageDescriptionPipelineTests
                 executionPlan.CanonicalImageReference,
                 recipe.LocalImageReference,
                 sourceState,
-                ModuleImagePreparationDisposition.Built))));
+                ModuleImagePreparationDisposition.Built)),
+            (_, _) => Task.FromResult(sourceState)));
         resource.Annotations.Add(new DistributedApplicationModuleResourceAnnotation(
             "orders",
             "api",
@@ -317,7 +318,8 @@ public sealed class ModuleImageDescriptionPipelineTests
                     executionPlan.CanonicalImageReference,
                     publisher.Recipe.LocalImageReference,
                     sourceState,
-                    ModuleImagePreparationDisposition.Built))));
+                    ModuleImagePreparationDisposition.Built)),
+                (_, _) => Task.FromResult(sourceState)));
         }
     }
 

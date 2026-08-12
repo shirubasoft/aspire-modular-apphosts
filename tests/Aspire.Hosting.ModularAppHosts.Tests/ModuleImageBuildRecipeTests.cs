@@ -364,6 +364,37 @@ public sealed class ModuleImageBuildRecipeTests
         Assert.Same(prepared, cached);
     }
 
+    [Fact]
+    public async Task Publisher_annotation_retries_after_a_failed_preparation()
+    {
+        var recipe = CreateRecipe();
+        var prepared = CreatePreparedImage(recipe, CleanMain);
+        var calls = 0;
+        var publisher = new ModuleImagePublisherAnnotation(
+            ModuleResourceKind.Container,
+            recipe,
+            (_, _, _, _) =>
+            {
+                calls++;
+                return calls == 1
+                    ? Task.FromException<ModulePreparedImage>(new InvalidOperationException("first attempt failed"))
+                    : Task.FromResult(prepared);
+            });
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken));
+        var retried = await publisher.PrepareAsync(
+            NullLogger.Instance,
+            NullLogger.Instance,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("first attempt failed", exception.Message);
+        Assert.Equal(2, calls);
+        Assert.Same(prepared, retried);
+    }
+
     private static Task<ModulePreparedImage> PrepareAsync(
         ModuleImageBuildRecipe recipe,
         IModuleImageRecipeOperations operations) =>

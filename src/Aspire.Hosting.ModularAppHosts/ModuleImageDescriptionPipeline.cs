@@ -44,9 +44,7 @@ internal static class ModuleImageDescriptionPipeline
         IEnumerable<IResource> resources,
         ModuleImageSelection selection,
         CancellationToken cancellationToken,
-        IEnumerable<IDistributedApplicationModule>? modules = null,
-        ILogger? lifecycleLogger = null,
-        Func<IResource, ILogger>? resourceLoggerFactory = null)
+        IEnumerable<IDistributedApplicationModule>? modules = null)
     {
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(selection);
@@ -103,21 +101,20 @@ internal static class ModuleImageDescriptionPipeline
             cancellationToken.ThrowIfCancellationRequested();
             var module = item.Module!;
             var publisher = item.Publisher;
-            ModulePreparedImage? preparedImage = null;
+            ModuleImageExecutionPlan? executionPlan = null;
             if (publisher is not null)
             {
-                var logger = lifecycleLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
-                preparedImage = await publisher.PrepareAsync(
-                    logger,
-                    resourceLoggerFactory?.Invoke(item.Resource) ?? logger,
-                    cancellationToken).ConfigureAwait(false);
+                var sourceState = publisher.TryGetPreparedImage(out var preparedImage)
+                    ? preparedImage.SourceState
+                    : await publisher.InspectSourceAsync(cancellationToken).ConfigureAwait(false);
+                executionPlan = ModuleImageExecutionPlan.Create(publisher.Recipe, sourceState);
             }
 
             var effective = await ModuleEffectiveImageResolver.ResolveAsync(
                 item.Resource,
                 cancellationToken,
                 allowUnqualifiedPullReference: true,
-                usePreparedPublisherImage: preparedImage is not null).ConfigureAwait(false);
+                imagePlan: executionPlan).ConfigureAwait(false);
             var description = new ModuleImageDescription
             {
                 Module = module.ModuleName,
@@ -149,9 +146,6 @@ internal static class ModuleImageDescriptionPipeline
                         Step = $"build-{item.Resource.Name}"
                     }
             };
-            var executionPlan = publisher is null || preparedImage is null
-                ? null
-                : ModuleImageExecutionPlan.Create(publisher.Recipe, preparedImage.SourceState);
             foreach (var argument in executionPlan?.PublishArguments ?? [])
             {
                 description.Build!.Arguments.Add(argument);
@@ -173,11 +167,7 @@ internal static class ModuleImageDescriptionPipeline
             context.CancellationToken,
             context.Services.GetService<IDistributedApplicationModuleCatalog>() is ModuleApplicationRegistry registry
                 ? registry.GetMaterializedModules()
-                : [],
-            context.Logger,
-            context.Services
-                .GetRequiredService<ResourceLoggerService>()
-                .GetLogger).ConfigureAwait(false);
+                : []).ConfigureAwait(false);
         var output = context.Services.GetRequiredService<IPipelineOutputService>().GetOutputDirectory();
         var path = Path.Combine(output, FileName);
         await document.SaveAsync(path, context.CancellationToken).ConfigureAwait(false);

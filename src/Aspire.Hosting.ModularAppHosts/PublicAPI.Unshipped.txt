@@ -485,18 +485,8 @@ Aspire.Hosting.ModuleContainerExportOptions.PublishArguments.get -> System.Colle
 Aspire.Hosting.ModuleContainerExportOptions.PublishCommand.get -> string!
 Aspire.Hosting.ModuleContainerExportOptions.WorkingDirectory.get -> string?
 Aspire.Hosting.ModuleContainerExportOptions.WorkingDirectory.set -> void
-Aspire.Hosting.ModuleRepositoryInstallerAnnotation
-Aspire.Hosting.ModuleRepositoryInstallerAnnotation.Installer.get -> Aspire.Hosting.ModuleRepositoryInstallerResource!
-Aspire.Hosting.ModuleRepositoryInstallerAnnotation.ModuleRepositoryInstallerAnnotation(Aspire.Hosting.ModuleRepositoryInstallerResource! installer) -> void
-Aspire.Hosting.ModuleRepositoryInstallerResource
-Aspire.Hosting.ModuleRepositoryInstallerResource.ImageReference.get -> string!
 *REMOVED*Aspire.Hosting.ModuleRepositoryInstallerResource.ModuleRepositoryInstallerResource(string! name, string! repositoryPath, string? repository, bool updatesRepository, string! publishCommand, System.Collections.Generic.IReadOnlyList<string!>! publishArguments, string! workingDirectory, string! imageReference, bool repositoryDirty) -> void
-Aspire.Hosting.ModuleRepositoryInstallerResource.PublishArguments.get -> System.Collections.Generic.IReadOnlyList<string!>!
-Aspire.Hosting.ModuleRepositoryInstallerResource.PublishCommand.get -> string!
-Aspire.Hosting.ModuleRepositoryInstallerResource.Repository.get -> string?
 *REMOVED*Aspire.Hosting.ModuleRepositoryInstallerResource.RepositoryDirty.get -> bool
-Aspire.Hosting.ModuleRepositoryInstallerResource.RepositoryPath.get -> string!
-Aspire.Hosting.ModuleRepositoryInstallerResource.UpdatesRepository.get -> bool
 Aspire.Hosting.ModuleImportOptions
 Aspire.Hosting.ModuleImportOptions.ModuleImportOptions() -> void
 Aspire.Hosting.ModuleImportOptions.ResourceAliases.get -> System.Collections.Generic.IDictionary<string!, string!>!

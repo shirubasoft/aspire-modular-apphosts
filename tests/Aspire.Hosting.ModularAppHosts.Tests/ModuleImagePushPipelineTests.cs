@@ -131,6 +131,46 @@ public sealed class ModuleImagePushPipelineTests
     }
 
     [Fact]
+    public async Task Publisher_supplies_remote_defaults_to_aspires_push_options()
+    {
+        using var repository = CreateProject();
+        var builder = CreatePublishBuilder(repository.Path);
+        var registry = builder.AddContainerRegistry(
+            "registry",
+            "registry.example.test",
+            "acme");
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(repository.Path);
+            definition.AddProject("orders-api", GetProjectPath(repository.Path))
+                .ExportAsContainer(
+                    new ModuleContainerExportOptions("services/orders", "dotnet", "publish")
+                    {
+                        ImageTag = "candidate"
+                    },
+                    (_, container) => container.WithContainerRegistry(registry));
+        });
+
+        builder.AddModule(module);
+
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var pushOptions = new ContainerImagePushOptions();
+        var context = new ContainerImagePushOptionsCallbackContext
+        {
+            Resource = container,
+            Options = pushOptions,
+            CancellationToken = TestContext.Current.CancellationToken
+        };
+        foreach (var annotation in container.Annotations.OfType<ContainerImagePushOptionsCallbackAnnotation>())
+        {
+            await annotation.Callback(context);
+        }
+
+        Assert.Equal("services/orders", pushOptions.RemoteImageName);
+        Assert.Equal("candidate", pushOptions.RemoteImageTag);
+    }
+
+    [Fact]
     public async Task Clean_publisher_resolves_a_branch_alias_in_the_remote_repository()
     {
         var resource = await CreateBranchAliasResourceAsync("feature-orders", repositoryDirty: false);
@@ -297,7 +337,7 @@ public sealed class ModuleImagePushPipelineTests
 
         Assert.Contains(WellKnownPipelineSteps.Push, apiStep.RequiredBySteps);
         Assert.DoesNotContain(WellKnownPipelineSteps.Push, workerStep.RequiredBySteps);
-        Assert.True(workerStep.Resource!.IsExcludedFromPublish());
+        Assert.False(workerStep.Resource!.IsExcludedFromPublish());
     }
 
     [Fact]

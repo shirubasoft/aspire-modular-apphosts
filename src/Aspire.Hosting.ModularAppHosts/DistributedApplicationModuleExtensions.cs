@@ -316,16 +316,7 @@ public static partial class DistributedApplicationModuleExtensions
 
     private static bool UsesExternalImage(DistributedApplicationModuleImageOptions? options)
     {
-        if (options?.PublishImage != false ||
-            GetConfiguredValue(options.ImageRegistry) is null ||
-            GetConfiguredValue(options.ImageName) is null)
-        {
-            return false;
-        }
-
-        var hasTag = GetConfiguredValue(options.ImageTag) is not null;
-        var hasDigest = GetConfiguredValue(options.ImageSHA256) is not null;
-        return hasTag != hasDigest;
+        return options?.PublishImage == false;
     }
 
     private static void ValidatePackageId(string? packageId)
@@ -397,6 +388,7 @@ public static partial class DistributedApplicationModuleExtensions
             {
                 var projectKey = $"{moduleKey}:{nameof(module.Projects)}:{projectName}";
                 ValidateImageSHA256(project.ImageSHA256, $"{projectKey}:{nameof(project.ImageSHA256)}");
+                ValidateExternalImage(project, projectKey);
                 if (project.ProjectMode is { } projectMode)
                 {
                     ValidateEnum(projectMode, $"{projectKey}:{nameof(project.ProjectMode)}");
@@ -412,6 +404,7 @@ public static partial class DistributedApplicationModuleExtensions
             {
                 var containerKey = $"{moduleKey}:{nameof(module.Containers)}:{containerName}";
                 ValidateImageSHA256(container.ImageSHA256, $"{containerKey}:{nameof(container.ImageSHA256)}");
+                ValidateExternalImage(container, containerKey);
                 if (container.ImagePullPolicy is { } containerPullPolicy)
                 {
                     ValidateEnum(
@@ -419,6 +412,40 @@ public static partial class DistributedApplicationModuleExtensions
                         $"{containerKey}:{nameof(container.ImagePullPolicy)}");
                 }
             }
+        }
+    }
+
+    private static void ValidateExternalImage(
+        DistributedApplicationModuleImageOptions options,
+        string configurationKey)
+    {
+        if (options.PublishImage != false)
+        {
+            return;
+        }
+
+        if (GetConfiguredValue(options.ImageRegistry) is null)
+        {
+            throw new InvalidOperationException(
+                $"{configurationKey}:{nameof(options.ImageRegistry)} is required when " +
+                $"{configurationKey}:{nameof(options.PublishImage)} is false.");
+        }
+
+        if (GetConfiguredValue(options.ImageName) is null)
+        {
+            throw new InvalidOperationException(
+                $"{configurationKey}:{nameof(options.ImageName)} is required when " +
+                $"{configurationKey}:{nameof(options.PublishImage)} is false.");
+        }
+
+        var hasTag = GetConfiguredValue(options.ImageTag) is not null;
+        var hasDigest = GetConfiguredValue(options.ImageSHA256) is not null;
+        if (hasTag == hasDigest)
+        {
+            throw new InvalidOperationException(
+                $"Configure exactly one of {configurationKey}:{nameof(options.ImageTag)} or " +
+                $"{configurationKey}:{nameof(options.ImageSHA256)} when " +
+                $"{configurationKey}:{nameof(options.PublishImage)} is false.");
         }
     }
 
@@ -450,7 +477,5 @@ public static partial class DistributedApplicationModuleExtensions
                 $"{string.Join(", ", Enum.GetNames<TEnum>())}.");
         }
     }
-
-    private static string GetInstallerName(string projectName) => $"{projectName}-installer";
 
 }

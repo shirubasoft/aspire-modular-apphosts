@@ -14,7 +14,8 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger,
         ILogger,
         CancellationToken,
-        Task<ModulePreparedImage>>? prepareAsync = null) : IResourceAnnotation
+        Task<ModulePreparedImage>>? prepareAsync = null,
+    Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>>? inspectAsync = null) : IResourceAnnotation
 {
     private readonly object _preparationLock = new();
     private readonly Func<
@@ -23,6 +24,8 @@ internal sealed class ModuleImagePublisherAnnotation(
         ILogger,
         CancellationToken,
         Task<ModulePreparedImage>> _prepareAsync = prepareAsync ?? ModuleImageRecipeEvaluator.PrepareAsync;
+    private readonly Func<ModuleImageBuildRecipe, CancellationToken, Task<ModuleImageSourceState>> _inspectAsync =
+        inspectAsync ?? ModuleImageRecipeOperations.Instance.CaptureSourceStateAsync;
     private Task<ModulePreparedImage>? _preparationTask;
     private ModulePreparedImage? _preparedImage;
 
@@ -52,10 +55,21 @@ internal sealed class ModuleImagePublisherAnnotation(
 
         lock (_preparationLock)
         {
-            _preparationTask ??= PrepareCoreAsync(
-                lifecycleLogger,
-                resourceLogger,
-                cancellationToken);
+            if (_preparationTask is null)
+            {
+                var preparationTask = PrepareCoreAsync(
+                    lifecycleLogger,
+                    resourceLogger,
+                    cancellationToken);
+                _preparationTask = preparationTask;
+                _ = preparationTask.ContinueWith(
+                    completed => ClearFailedPreparation(completed),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return preparationTask;
+            }
+
             return _preparationTask;
         }
     }
@@ -75,6 +89,9 @@ internal sealed class ModuleImagePublisherAnnotation(
         }
     }
 
+    public Task<ModuleImageSourceState> InspectSourceAsync(CancellationToken cancellationToken) =>
+        _inspectAsync(Recipe, cancellationToken);
+
     private async Task<ModulePreparedImage> PrepareCoreAsync(
         ILogger lifecycleLogger,
         ILogger resourceLogger,
@@ -91,6 +108,22 @@ internal sealed class ModuleImagePublisherAnnotation(
         }
 
         return preparedImage;
+    }
+
+    private void ClearFailedPreparation(Task<ModulePreparedImage> completed)
+    {
+        if (completed.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        lock (_preparationLock)
+        {
+            if (ReferenceEquals(_preparationTask, completed))
+            {
+                _preparationTask = null;
+            }
+        }
     }
 }
 
@@ -164,7 +197,8 @@ internal static class ModuleEffectiveImageResolver
         IResource resource,
         CancellationToken cancellationToken,
         bool allowUnqualifiedPullReference = false,
-        bool usePreparedPublisherImage = false)
+        bool usePreparedPublisherImage = false,
+        ModuleImageExecutionPlan? imagePlan = null)
     {
         ArgumentNullException.ThrowIfNull(resource);
         if (!resource.TryGetContainerImageName(out var localImage))
@@ -188,6 +222,10 @@ internal static class ModuleEffectiveImageResolver
         if (preparedImage is not null)
         {
             localImage = preparedImage.CanonicalImageReference;
+        }
+        else if (imagePlan is not null)
+        {
+            localImage = imagePlan.CanonicalImageReference;
         }
 
         var mapping = GetPullMapping(resource);
@@ -214,6 +252,7 @@ internal static class ModuleEffectiveImageResolver
                 registry,
                 publisher,
                 preparedImage,
+                imagePlan,
                 localImage,
                 cancellationToken).ConfigureAwait(false);
             pushTargetKind = ModuleImagePushTargetKind.AspireRegistry;
@@ -260,6 +299,7 @@ internal static class ModuleEffectiveImageResolver
         IContainerRegistry registry,
         ModuleImagePublisherAnnotation? publisher,
         ModulePreparedImage? preparedImage,
+        ModuleImageExecutionPlan? imagePlan,
         string localImageReference,
         CancellationToken cancellationToken)
     {
@@ -271,7 +311,7 @@ internal static class ModuleEffectiveImageResolver
 #pragma warning disable CA1308
             RemoteImageName = publisher?.Options.ImageName ?? resource.Name.ToLowerInvariant(),
 #pragma warning restore CA1308
-            RemoteImageTag = preparedImage is not null
+            RemoteImageTag = preparedImage is not null || imagePlan is not null
                 ? effectiveIdentity.Tag ?? "latest"
                 : publisher?.Options.ImageTag ?? "latest"
         };

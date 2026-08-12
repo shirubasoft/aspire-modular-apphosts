@@ -30,6 +30,17 @@ internal static class ModuleImageReference
             ? options.ImageName
             : $"{options.ImageRegistry}/{options.ImageName}";
     }
+
+    public static string GetTag(string imageReference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(imageReference);
+        var withoutDigest = imageReference.Split('@', 2)[0];
+        var lastSlash = withoutDigest.LastIndexOf('/');
+        var lastColon = withoutDigest.LastIndexOf(':');
+        return lastColon > lastSlash
+            ? withoutDigest[(lastColon + 1)..]
+            : "latest";
+    }
 }
 
 internal static class ModuleImageTag
