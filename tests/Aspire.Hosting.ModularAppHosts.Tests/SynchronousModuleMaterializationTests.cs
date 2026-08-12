@@ -31,7 +31,7 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
-    public void Normal_run_preflight_reports_the_initialize_command_for_planned_checkout()
+    public async Task Normal_run_preflight_reports_the_initialize_command_for_planned_checkout()
     {
         using var appHost = CreateGitAppHost();
         var builder = CreateBuilder(appHost.Path);
@@ -43,11 +43,15 @@ public sealed class SynchronousModuleMaterializationTests
         });
         builder.ImportModule("orders");
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            GetRegistry(builder).ValidateRepositoryPreflight());
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GetRegistry(builder).ValidateRepositoryPreflightAsync(
+                new InMemoryModuleRepositoryStateStore(),
+                CreateInitializationSettings(),
+                appHost.Path,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("orders", exception.Message, StringComparison.Ordinal);
-        Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ModuleRepositoryPreflight.CreateInitializeCommand(appHost.Path), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -149,7 +153,7 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
-    public void Project_image_publisher_uses_the_project_directory_for_preflight_and_builds()
+    public async Task Project_image_publisher_uses_the_project_directory_for_preflight_and_builds()
     {
         using var appHost = CreateGitAppHost();
         var projectDirectory = Path.Combine(appHost.Path, "Api");
@@ -173,11 +177,15 @@ public sealed class SynchronousModuleMaterializationTests
         var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
         var publisher = Assert.Single(container.Annotations.OfType<ModuleImagePublisherAnnotation>());
         Assert.Equal(projectDirectory, publisher.WorkingDirectory);
-        GetRegistry(builder).ValidateRepositoryPreflight();
+        await GetRegistry(builder).ValidateRepositoryPreflightAsync(
+            new InMemoryModuleRepositoryStateStore(),
+            CreateInitializationSettings(),
+            appHost.Path,
+            cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
-    public void Containerized_project_preflight_requires_the_declared_project_file()
+    public async Task Containerized_project_preflight_requires_the_declared_project_file()
     {
         using var appHost = CreateGitAppHost();
         var projectDirectory = Path.Combine(appHost.Path, "Api");
@@ -197,10 +205,14 @@ public sealed class SynchronousModuleMaterializationTests
 
         builder.AddModule(module);
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            GetRegistry(builder).ValidateRepositoryPreflight());
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            GetRegistry(builder).ValidateRepositoryPreflightAsync(
+                new InMemoryModuleRepositoryStateStore(),
+                CreateInitializationSettings(),
+                appHost.Path,
+                cancellationToken: TestContext.Current.CancellationToken));
         Assert.Contains(projectPath, exception.Message, StringComparison.Ordinal);
-        Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(ModuleRepositoryPreflight.CreateInitializeCommand(appHost.Path), exception.Message, StringComparison.Ordinal);
     }
 
     private static TemporaryDirectory CreateGitAppHost()
@@ -218,6 +230,9 @@ public sealed class SynchronousModuleMaterializationTests
             ProjectDirectory = projectDirectory,
             DisableDashboard = true
         });
+
+    private static ModuleRepositoryInitializationSettings CreateInitializationSettings() =>
+        new("git", "gh", TimeSpan.FromMinutes(2));
 
     private static ModuleApplicationRegistry GetRegistry(IDistributedApplicationBuilder builder) =>
         Assert.IsType<ModuleApplicationRegistry>(builder.Services

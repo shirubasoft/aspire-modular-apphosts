@@ -2,13 +2,6 @@ using Aspire.Hosting.ApplicationModel;
 
 namespace Aspire.Hosting;
 
-internal sealed class ModuleRepositoryInitializationResource(
-    string name,
-    ModuleRepositoryRequirement requirement) : Resource(name)
-{
-    public ModuleRepositoryRequirement Requirement { get; } = requirement;
-}
-
 /// <summary>Associates a materialized resource with its module definition.</summary>
 public sealed class DistributedApplicationModuleResourceAnnotation(
     string moduleName,

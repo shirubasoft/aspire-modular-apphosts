@@ -17,7 +17,7 @@ public sealed class RepositoryInitializationContractTests
         using var workspace = TemporaryDirectory.Create();
         var sourcePath = Path.Combine(workspace.Path, "orders-source");
         var firstCommit = await InitializeRepositoryAsync(sourcePath, "first");
-        await CommitAsync(sourcePath, "second");
+        var secondCommit = await CommitAsync(sourcePath, "second");
         var appHostPath = CreateAppHostRepository(workspace.Path);
         var plans = new ModuleRepositoryPlanRegistry(appHostPath);
         var requirement = plans.Register(
@@ -26,11 +26,14 @@ public sealed class RepositoryInitializationContractTests
             revision: firstCommit,
             updateOnInitialize: true).Requirement;
         var logger = new CapturingLogger();
+        var stateStore = new InMemoryModuleRepositoryStateStore();
 
-        await ModuleRepositoryInitializationPipeline.InitializeAsync(
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
             requirement,
             new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
             logger,
+            logger,
+            stateStore,
             TestContext.Current.CancellationToken);
 
         Assert.NotEqual(sourcePath, requirement.RepositoryPath);
@@ -38,7 +41,41 @@ public sealed class RepositoryInitializationContractTests
         Assert.False(requirement.UpdateOnInitialize);
         Assert.Equal(firstCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
         Assert.Equal(string.Empty, await ReadGitAsync(requirement.RepositoryPath, "branch", "--show-current"));
-        Assert.True(ModuleInitializationReceiptStore.HasMatchingReceipt(requirement));
+        var state = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.NotNull(state);
+        Assert.True(state.Matches(requirement));
+        Assert.Equal(firstCommit, state.ResolvedCommit, ignoreCase: true);
+
+        await ModuleRepositoryPreflight.ValidateAsync(
+            [requirement],
+            [],
+            stateStore,
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            appHostPath,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await RunGitAsync(requirement.RepositoryPath, "checkout", "--detach", secondCommit);
+        var staleCommit = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                [requirement],
+                [],
+                stateStore,
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("HEAD does not match", staleCommit.Message, StringComparison.Ordinal);
+
+        await RunGitAsync(requirement.RepositoryPath, "checkout", "--detach", firstCommit);
+        await RunGitAsync(requirement.RepositoryPath, "remote", "set-url", "origin", "https://example.test/other.git");
+        var wrongOrigin = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                [requirement],
+                [],
+                stateStore,
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("checkout origin differs", wrongOrigin.Message, StringComparison.Ordinal);
 
         Assert.Contains(logger.Entries, entry => entry.EventId.Id == 1);
         Assert.Contains(logger.Entries, entry => entry.EventId.Id == 3);
@@ -420,10 +457,11 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
-    public void Preflight_logs_aggregate_failure_details_and_the_exact_initialize_command()
+    public async Task Preflight_logs_aggregate_failure_details_and_the_exact_initialize_command()
     {
         using var workspace = TemporaryDirectory.Create();
-        var plans = new ModuleRepositoryPlanRegistry(CreateAppHostRepository(workspace.Path));
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var plans = new ModuleRepositoryPlanRegistry(appHostPath);
         var requirement = plans.Register(
             "payments",
             "https://example.test/acme/payments.git",
@@ -432,20 +470,25 @@ public sealed class RepositoryInitializationContractTests
         var missingProject = Path.Combine(requirement.RepositoryPath, "src", "Payments.csproj");
         var logger = new CapturingLogger();
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleRepositoryPreflight.Validate(
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
                 plans.Requirements,
                 [new ModuleRequiredPath(
                     "payments",
                     "project 'payments-api'",
                     missingProject,
                     ModuleRequiredPathKind.File)],
-                logger));
+                new InMemoryModuleRepositoryStateStore(),
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                appHostPath,
+                logger,
+                TestContext.Current.CancellationToken));
 
         var failure = Assert.Single(logger.Entries, entry => entry.EventId.Id == 10);
         Assert.Equal(2, failure.State["FailureCount"]);
-        Assert.Equal(ModuleRepositoryPreflight.InitializeCommand, failure.State["InitializeCommand"]);
-        Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
+        var initializeCommand = ModuleRepositoryPreflight.CreateInitializeCommand(appHostPath);
+        Assert.Equal(initializeCommand, failure.State["InitializeCommand"]);
+        Assert.Contains(initializeCommand, exception.Message, StringComparison.Ordinal);
         Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
         Assert.Contains(missingProject, exception.Message, StringComparison.Ordinal);
     }

@@ -1,8 +1,8 @@
 #pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES002
 #pragma warning disable ASPIREPIPELINES003
 
 using System.Diagnostics;
-using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -74,15 +74,6 @@ internal static class ModuleRepositoryInitializationPipeline
             new EventId(5, nameof(LogRepositoryOperationSkipped)),
             "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
 
-    public static bool IsInitializeCommand(IReadOnlyList<string> arguments)
-    {
-        ArgumentNullException.ThrowIfNull(arguments);
-        return string.Equals(
-            ModuleImagePipelineSelectionParser.GetRequestedStep(arguments),
-            StepName,
-            StringComparison.OrdinalIgnoreCase);
-    }
-
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -95,14 +86,7 @@ internal static class ModuleRepositoryInitializationPipeline
         Func<ModuleRepositoryInitializationSettings> settingsFactory)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        var resource = new ModuleRepositoryInitializationResource(
-            GetRepositoryStepName(requirement),
-            requirement);
-        builder.AddResource(resource)
-            .ExcludeFromManifest()
-            .WithExplicitStart()
-            .WithIconName("SourceBranch");
-        builder.Pipeline.AddStep(CreateRepositoryStep(requirement, settingsFactory, resource));
+        builder.Pipeline.AddStep(CreateRepositoryStep(requirement, settingsFactory));
     }
 
     internal static PipelineStep CreateAggregateStep() => new()
@@ -114,8 +98,7 @@ internal static class ModuleRepositoryInitializationPipeline
 
     internal static PipelineStep CreateRepositoryStep(
         ModuleRepositoryRequirement requirement,
-        Func<ModuleRepositoryInitializationSettings> settingsFactory,
-        ModuleRepositoryInitializationResource? resource = null)
+        Func<ModuleRepositoryInitializationSettings> settingsFactory)
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentNullException.ThrowIfNull(settingsFactory);
@@ -125,23 +108,36 @@ internal static class ModuleRepositoryInitializationPipeline
             Description =
                 $"Initializes repository {requirement.NormalizedRepository} for " +
                 $"{string.Join(", ", requirement.ModuleNames.Order(StringComparer.OrdinalIgnoreCase))}.",
-            Action = context =>
+            Action = async context =>
             {
-                var resourceLogger = resource is null
-                    ? context.Logger
-                    : context.Services
-                        .GetRequiredService<ResourceLoggerService>()
-                        .GetLogger(resource);
-                return InitializeAsync(
-                    requirement,
-                    settingsFactory(),
-                    context.Logger,
-                    resourceLogger,
-                    context.CancellationToken);
+                var task = await context.ReportingStep.CreateTaskAsync(
+                    $"Initialize {requirement.NormalizedRepository}",
+                    context.CancellationToken).ConfigureAwait(false);
+                await using var configuredTask = task.ConfigureAwait(false);
+                try
+                {
+                    await InitializeAndRecordAsync(
+                        requirement,
+                        settingsFactory(),
+                        context.Logger,
+                        context.Logger,
+                        new AspireModuleRepositoryStateStore(
+                            context.Services.GetRequiredService<IDeploymentStateManager>()),
+                        context.CancellationToken).ConfigureAwait(false);
+                    await task.SucceedAsync(
+                        $"Initialized at {requirement.RepositoryPath}",
+                        context.CancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    await task.FailAsync(
+                        ModuleCliOutputRedactor.Redact(exception.Message),
+                        CancellationToken.None).ConfigureAwait(false);
+                    throw;
+                }
             },
             RequiredBySteps = [StepName],
-            Tags = [RepositoryStepTag],
-            Resource = resource
+            Tags = [RepositoryStepTag]
         };
     }
 
@@ -174,6 +170,27 @@ internal static class ModuleRepositoryInitializationPipeline
                     progress,
                     lifecycle),
             cancellationToken);
+
+    internal static async Task InitializeAndRecordAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings settings,
+        ILogger lifecycleLogger,
+        ILogger resourceLogger,
+        IModuleRepositoryStateStore stateStore,
+        CancellationToken cancellationToken)
+    {
+        await InitializeAsync(
+            requirement,
+            settings,
+            lifecycleLogger,
+            resourceLogger,
+            cancellationToken).ConfigureAwait(false);
+        await RecordStateAsync(
+            requirement,
+            settings,
+            stateStore,
+            cancellationToken).ConfigureAwait(false);
+    }
 
     internal static Task InitializeAsync(
         ModuleRepositoryRequirement requirement,
@@ -299,10 +316,6 @@ internal static class ModuleRepositoryInitializationPipeline
                 }
             },
             cancellationToken).ConfigureAwait(false);
-        await ModuleInitializationReceiptStore.WriteAsync(
-            requirement,
-            DateTimeOffset.UtcNow,
-            cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
         LogBoth(lifecycleLogger, resourceLogger, target =>
             LogInitializationCompleted(
@@ -311,6 +324,59 @@ internal static class ModuleRepositoryInitializationPipeline
                 requirement.RepositoryPath,
                 stopwatch.Elapsed.TotalMilliseconds,
                 null));
+    }
+
+    internal static async Task RecordStateAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings settings,
+        IModuleRepositoryStateStore stateStore,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(stateStore);
+        var origin = await RepositoryInspector.TryGetRemoteAsync(
+            requirement.RepositoryPath,
+            settings.GitExecutablePath,
+            settings.CommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var resolvedCommit = await RepositoryInspector.TryResolveCommitAsync(
+            requirement.RepositoryPath,
+            "HEAD",
+            settings.GitExecutablePath,
+            settings.CommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (origin is null || resolvedCommit is null)
+        {
+            throw new InvalidOperationException(
+                $"Repository '{requirement.RepositoryPath}' could not be inspected after initialization.");
+        }
+
+        var normalizedOrigin = ModuleRepositoryPathPlanner.NormalizeRepositoryIdentity(
+            origin,
+            requirement.RepositoryPath);
+        if (!string.Equals(
+                normalizedOrigin,
+                requirement.NormalizedRepository,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Repository '{requirement.RepositoryPath}' has origin '{normalizedOrigin}' after initialization; " +
+                $"expected '{requirement.NormalizedRepository}'.");
+        }
+
+        await stateStore.WriteAsync(
+            requirement,
+            new ModuleRepositoryInitializationState(
+                ModuleRepositoryInitializationState.CurrentSchemaVersion,
+                requirement.NormalizedRepository,
+                requirement.RepositoryPath,
+                requirement.Revision,
+                requirement.ConfigurationFingerprint,
+                normalizedOrigin,
+                resolvedCommit,
+                DateTimeOffset.UtcNow),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static void LogBoth(ILogger lifecycleLogger, ILogger resourceLogger, Action<ILogger> log)

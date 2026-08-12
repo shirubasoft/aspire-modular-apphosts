@@ -1,4 +1,8 @@
+#pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREPIPELINES002
+
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Publishing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -200,35 +204,33 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleImageManifestPipeline.Configure(builder);
         builder.Services.AddSingleton<IDistributedApplicationModuleCatalog>(registry);
         builder.Services.AddSingleton<IOptions<ModularAppHostsOptions>>(Options.Create(options));
-        builder.Eventing.Subscribe<BeforeStartEvent>((@event, _) =>
+        builder.Pipeline.AddStep(new PipelineStep
         {
-            registry.RefreshConfiguration();
-            ValidateOptions(registry.Options);
-            registry.ValidateConfiguredModules();
-            if (!ModuleRepositoryInitializationPipeline.IsInitializeCommand(
-                    Environment.GetCommandLineArgs()))
+            Name = "validate-module-repositories",
+            Description = "Validates initialized module repository checkouts.",
+            Action = async context =>
             {
-                registry.ValidateRepositoryPreflight(
-                    @event.Services.GetRequiredService<ILoggerFactory>()
-                        .CreateLogger("Aspire.Hosting.ModuleRepositoryPreflight"));
-            }
-
-            return Task.CompletedTask;
-        });
-        builder.Eventing.Subscribe<BeforePublishEvent>((@event, _) =>
-        {
-            registry.RefreshConfiguration();
-            ValidateOptions(registry.Options);
-            registry.ValidateConfiguredModules();
-            if (!ModuleRepositoryInitializationPipeline.IsInitializeCommand(
-                    Environment.GetCommandLineArgs()))
-            {
-                registry.ValidateRepositoryPreflight(
-                    @event.Services.GetRequiredService<ILoggerFactory>()
-                        .CreateLogger("Aspire.Hosting.ModuleRepositoryPreflight"));
-            }
-
-            return Task.CompletedTask;
+                registry.RefreshConfiguration();
+                ValidateOptions(registry.Options);
+                registry.ValidateConfiguredModules();
+                var settings = new ModuleRepositoryInitializationSettings(
+                    GetConfiguredValue(registry.Options.GitExecutablePath) ?? "git",
+                    GetConfiguredValue(registry.Options.GitHubCliPath) ?? "gh",
+                    registry.Options.RepositoryCommandTimeout);
+                await registry.ValidateRepositoryPreflightAsync(
+                    new AspireModuleRepositoryStateStore(
+                        context.Services.GetRequiredService<IDeploymentStateManager>()),
+                    settings,
+                    builder.AppHostDirectory,
+                    context.Logger,
+                    context.CancellationToken).ConfigureAwait(false);
+            },
+            RequiredBySteps =
+            [
+                WellKnownPipelineSteps.BeforeStart,
+                WellKnownPipelineSteps.BuildPrereq,
+                WellKnownPipelineSteps.PublishPrereq
+            ]
         });
         return registry;
     }

@@ -116,12 +116,21 @@ internal sealed class ModuleApplicationRegistry(
     internal void RequireDirectory(string moduleName, string description, string path) =>
         RequirePath(moduleName, description, path, ModuleRequiredPathKind.Directory);
 
-    internal void ValidateRepositoryPreflight(Microsoft.Extensions.Logging.ILogger? logger = null)
+    internal Task ValidateRepositoryPreflightAsync(
+        IModuleRepositoryStateStore stateStore,
+        ModuleRepositoryInitializationSettings settings,
+        string appHostPath,
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        CancellationToken cancellationToken = default)
     {
-        ModuleRepositoryPreflight.Validate(
+        return ModuleRepositoryPreflight.ValidateAsync(
             RepositoryPlans?.Requirements ?? [],
             _requiredPaths,
-            logger);
+            stateStore,
+            settings,
+            appHostPath,
+            logger,
+            cancellationToken);
     }
 
     internal void RefreshConfiguration()

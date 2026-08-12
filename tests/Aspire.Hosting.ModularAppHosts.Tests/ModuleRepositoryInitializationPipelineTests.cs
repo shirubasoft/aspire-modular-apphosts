@@ -161,20 +161,6 @@ public sealed class ModuleRepositoryInitializationPipelineTests
         Assert.Contains("direct sibling", exception.Message, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(new[] { "--operation", "publish", "--step", "initialize" }, true)]
-    [InlineData(new[] { "--operation", "publish", "--step=INITIALIZE" }, true)]
-    [InlineData(new[] { "--operation", "run" }, false)]
-    [InlineData(new[] { "--operation", "publish", "--step", "build" }, false)]
-    public void Initialize_command_detection_matches_the_requested_pipeline_step(
-        string[] arguments,
-        bool expected)
-    {
-        Assert.Equal(
-            expected,
-            ModuleRepositoryInitializationPipeline.IsInitializeCommand(arguments));
-    }
-
     [Fact]
     public void Pipeline_exposes_aggregate_and_per_repository_steps()
     {
@@ -203,7 +189,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
-    public async Task Successful_initialization_writes_a_credential_free_matching_receipt()
+    public async Task Aspire_state_store_round_trips_credential_free_initialization_state()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -212,40 +198,39 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "https://build-user:secret@github.com/acme/services.git?token=secret",
             revision: "v2.0.0",
             updateOnInitialize: true).Requirement;
-        var settings = new ModuleRepositoryInitializationSettings(
-            "git",
-            "gh",
-            TimeSpan.FromMinutes(2));
-        var synchronizationCount = 0;
+        var deploymentState = new InMemoryDeploymentStateManager();
+        var store = new AspireModuleRepositoryStateStore(deploymentState);
+        var state = new ModuleRepositoryInitializationState(
+            ModuleRepositoryInitializationState.CurrentSchemaVersion,
+            requirement.NormalizedRepository,
+            requirement.RepositoryPath,
+            requirement.Revision,
+            requirement.ConfigurationFingerprint,
+            requirement.NormalizedRepository,
+            "0123456789abcdef0123456789abcdef01234567",
+            DateTimeOffset.UtcNow);
 
-        await ModuleRepositoryInitializationPipeline.InitializeAsync(
+        await store.WriteAsync(
             requirement,
-            settings,
-            NullLogger.Instance,
-            (_, _, progress, _, _) =>
-            {
-                synchronizationCount++;
-                progress("fetch complete");
-                return Task.CompletedTask;
-            },
+            state,
             TestContext.Current.CancellationToken);
 
-        var receipt = await ModuleInitializationReceiptStore.ReadAsync(
-            requirement.ReceiptPath,
+        var restored = await store.ReadAsync(
+            requirement,
             TestContext.Current.CancellationToken);
-        var receiptContents = await File.ReadAllTextAsync(
-            requirement.ReceiptPath,
+        var section = await deploymentState.AcquireSectionAsync(
+            AspireModuleRepositoryStateStore.GetSectionName(requirement),
             TestContext.Current.CancellationToken);
-        Assert.Equal(1, synchronizationCount);
-        Assert.NotNull(receipt);
-        Assert.True(receipt.Matches(requirement));
-        Assert.True(ModuleInitializationReceiptStore.HasMatchingReceipt(requirement));
-        Assert.DoesNotContain("secret", receiptContents, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("build-user", receiptContents, StringComparison.OrdinalIgnoreCase);
+        var serialized = section.Data[string.Empty]!.GetValue<string>();
+
+        Assert.Equal(state, restored);
+        Assert.True(restored!.Matches(requirement));
+        Assert.DoesNotContain("secret", serialized, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("build-user", serialized, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Malformed_receipt_is_treated_as_not_initialized_by_synchronous_preflight()
+    public async Task Malformed_deployment_state_is_treated_as_not_initialized()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -254,14 +239,20 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "acme/services",
             revision: null,
             updateOnInitialize: true).Requirement;
-        Directory.CreateDirectory(Path.GetDirectoryName(requirement.ReceiptPath)!);
-        File.WriteAllText(requirement.ReceiptPath, "{not valid JSON");
+        var deploymentState = new InMemoryDeploymentStateManager();
+        var section = await deploymentState.AcquireSectionAsync(
+            AspireModuleRepositoryStateStore.GetSectionName(requirement),
+            TestContext.Current.CancellationToken);
+        section.SetValue("{not valid JSON");
+        await deploymentState.SaveSectionAsync(section, TestContext.Current.CancellationToken);
 
-        Assert.False(ModuleInitializationReceiptStore.HasMatchingReceipt(requirement));
+        Assert.Null(await new AspireModuleRepositoryStateStore(deploymentState).ReadAsync(
+            requirement,
+            TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public async Task Failed_initialization_does_not_write_a_receipt()
+    public async Task Failed_initialization_does_not_write_deployment_state()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -274,6 +265,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "git",
             "gh",
             TimeSpan.FromMinutes(2));
+        var stateStore = new InMemoryModuleRepositoryStateStore();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ModuleRepositoryInitializationPipeline.InitializeAsync(
@@ -283,11 +275,11 @@ public sealed class ModuleRepositoryInitializationPipelineTests
                 (_, _, _, _, _) => throw new InvalidOperationException("clone failed"),
                 TestContext.Current.CancellationToken));
 
-        Assert.False(File.Exists(requirement.ReceiptPath));
+        Assert.Null(await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public void Preflight_aggregates_missing_repositories_and_required_paths()
+    public async Task Preflight_aggregates_missing_repositories_and_required_paths()
     {
         using var workspace = CreateGitWorkspace();
         var plans = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -298,49 +290,22 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             updateOnInitialize: true).Requirement;
         var missingProject = Path.Combine(requirement.RepositoryPath, "src", "Catalog.csproj");
 
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ModuleRepositoryPreflight.Validate(
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
                 plans.Requirements,
                 [new ModuleRequiredPath(
                     "catalog",
                     "project 'catalog-api'",
                     missingProject,
-                    ModuleRequiredPathKind.File)]));
+                    ModuleRequiredPathKind.File)],
+                new InMemoryModuleRepositoryStateStore(),
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(2)),
+                workspace.AppHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
         Assert.Contains(missingProject, exception.Message, StringComparison.Ordinal);
-        Assert.Contains(ModuleRepositoryPreflight.InitializeCommand, exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task Preflight_accepts_initialized_repository_with_current_receipt_and_paths()
-    {
-        using var workspace = CreateGitWorkspace();
-        var plans = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
-        var requirement = plans.Register(
-            "catalog",
-            "acme/services",
-            revision: null,
-            updateOnInitialize: true).Requirement;
-        Directory.CreateDirectory(Path.Combine(requirement.RepositoryPath, ".git"));
-        var project = Path.Combine(requirement.RepositoryPath, "src", "Catalog.csproj");
-        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
-        await File.WriteAllTextAsync(
-            project,
-            "<Project />",
-            TestContext.Current.CancellationToken);
-        await ModuleInitializationReceiptStore.WriteAsync(
-            requirement,
-            DateTimeOffset.UtcNow,
-            TestContext.Current.CancellationToken);
-
-        ModuleRepositoryPreflight.Validate(
-            plans.Requirements,
-            [new ModuleRequiredPath(
-                "catalog",
-                "project 'catalog-api'",
-                project,
-                ModuleRequiredPathKind.File)]);
+        Assert.Contains(ModuleRepositoryPreflight.CreateInitializeCommand(workspace.AppHostPath), exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
