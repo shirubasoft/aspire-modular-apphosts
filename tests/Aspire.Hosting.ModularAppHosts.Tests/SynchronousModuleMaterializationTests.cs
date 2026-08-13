@@ -218,6 +218,28 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
+    public void Repository_backed_native_project_defers_project_discovery_for_initialization_pipeline()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path, ["--publisher", "manifest"]);
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://example.test/acme/orders.git");
+            definition
+                .AddProject(
+                    "orders-api",
+                    Path.Combine("Orders.Api", "Orders.Api.csproj"),
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainer("orders-api");
+        });
+
+        var imported = builder.ImportModule("orders");
+
+        Assert.Equal("orders-api", imported.GetResource<ProjectResource>("orders-api").Resource.Name);
+        Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+    }
+
+    [Fact]
     public void External_image_override_remains_checkout_free()
     {
         using var appHost = CreateGitAppHost();

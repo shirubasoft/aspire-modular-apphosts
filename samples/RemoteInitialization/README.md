@@ -31,3 +31,18 @@ aspire
 The resource now becomes healthy, and its `/notifications` endpoint is available from the Aspire
 dashboard. Run the initialization command again whenever you want to fast-forward the clean,
 unpinned checkout to the latest `main` commit.
+
+`notification-service` uses the specialized module project contract, so it also contributes
+developer-local mode-switching steps. Its checked-in configuration keeps a fresh clone
+runnable as a project. To run its .NET SDK container image instead, build it, select container mode,
+and restart the AppHost:
+
+```bash
+aspire do build-notification-service --apphost . --non-interactive
+aspire do use-container-notification-service --apphost . --non-interactive
+aspire
+```
+
+Use `aspire do use-project-notification-service --apphost . --non-interactive` to force direct
+project execution, or `aspire do use-configured-modes --apphost . --non-interactive` to remove all
+developer-local mode overrides.

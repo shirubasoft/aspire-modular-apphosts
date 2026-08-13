@@ -94,7 +94,7 @@ cd ../AppHostB
 aspire
 ```
 
-AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. Its development configuration keeps `sample-api` in project mode so a fresh checkout remains runnable without prebuilding the native image. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. Its checked-in configuration keeps `sample-api` in project mode so a fresh checkout remains runnable without prebuilding the native image. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api
@@ -140,4 +140,6 @@ on an external `Shirubasoft/spire` checkout.
 [`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
 flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
 which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
-starts the imported service; later initialization runs can fast-forward its clean checkout.
+starts the imported service; later initialization runs can fast-forward its clean checkout. The
+imported `notification-service` is a specialized project export, so its native project/container
+mode can also be selected through the generated `aspire do use-*-notification-service` steps.

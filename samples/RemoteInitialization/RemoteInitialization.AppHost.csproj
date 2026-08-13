@@ -1,6 +1,7 @@
 <Project Sdk="Aspire.AppHost.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <UserSecretsId>aspire-modular-apphosts-remote-initialization</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Aspire.Hosting.ModularAppHosts/Aspire.Hosting.ModularAppHosts.csproj"

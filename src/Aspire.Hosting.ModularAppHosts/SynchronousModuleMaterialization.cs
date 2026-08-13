@@ -189,6 +189,29 @@ public static partial class DistributedApplicationModuleExtensions
     {
         var projectOptions = moduleOptions?.FindProject(project.Name);
         ValidatePublisherDigest(project.Name, project.IsExportedAsContainer, projectOptions);
+        if (!builder.ExecutionContext.IsRunMode &&
+            project.Export.CommandOptions is null &&
+            !UsesExternalImage(projectOptions) &&
+            definitionRepository.InitializerOwned)
+        {
+            var projectPath = PathSafety.GetContainedPath(
+                definitionRepository.RepositoryPath,
+                project.GetRepositoryRelativeProjectPath(),
+                nameof(project.ProjectPath));
+            if (!File.Exists(projectPath))
+            {
+                MaterializeDeferredProjectResource(
+                    builder,
+                    module,
+                    project,
+                    resourceName,
+                    definitionRepository.RepositoryPath,
+                    imported,
+                    registry);
+                return;
+            }
+        }
+
         var runAsContainer = builder.ExecutionContext.IsRunMode &&
             ResolveProjectMode(
                 options,
@@ -884,6 +907,28 @@ public static partial class DistributedApplicationModuleExtensions
                 FillDefaultImagePushOptions(pushContext, imageName, imageTag));
         });
         ModuleNativeImageValidationPipeline.AddValidationStep(resource, repositoryPath, registry.Options);
+        ConfigureRepositoryLifecycle(builder, resource, registry);
+        registry.TrackResource(resource.Resource);
+        module.TrackMaterializedResource(builder, project.Name, resource.Resource);
+    }
+
+    private static void MaterializeDeferredProjectResource(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        DistributedApplicationModuleProject project,
+        string resourceName,
+        string repositoryPath,
+        bool imported,
+        ModuleApplicationRegistry registry)
+    {
+        var resource = builder
+            .AddResource(new ProjectResource(resourceName))
+            .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
+                module.Name,
+                project.Name,
+                repositoryPath,
+                imported,
+                module.PackageId));
         ConfigureRepositoryLifecycle(builder, resource, registry);
         registry.TrackResource(resource.Resource);
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);

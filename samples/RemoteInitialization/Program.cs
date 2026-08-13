@@ -1,22 +1,31 @@
-using Aspire.Hosting.ApplicationModel;
-
 var builder = DistributedApplication.CreateBuilder(args);
 
 builder.ExportModule("remote-notifications", module =>
 {
     module.WithRepository("https://github.com/shirubasoft/spire-external-repo-sample.git");
-    module.RequiresRepository();
-    module.AddResource<ProjectResource>("notification-service", context =>
-        context.ApplicationBuilder
-            .AddProject(
-                context.ResourceName,
-                Path.Combine(
-                    context.RepositoryPath,
-                    "NotificationService",
-                    "NotificationService.csproj"))
-            .WithHttpEndpoint(name: "http")
-            .WithExternalHttpEndpoints()
-            .WithHttpHealthCheck("/health"));
+    module
+        .AddProject(
+            "notification-service",
+            Path.Combine("NotificationService", "NotificationService.csproj"),
+            ModuleProjectPathBase.Repository)
+        .ConfigureProject((_, project) =>
+            project
+                .WithHttpEndpoint(name: "http")
+                .WithExternalHttpEndpoints()
+                .WithHttpHealthCheck("/health"))
+        .ExportAsContainerWithCommand(
+            new ModuleImageCommandOptions(
+                "notification-service",
+                "dotnet",
+                "publish",
+                "NotificationService.csproj",
+                "/t:PublishContainer",
+                $"-p:ContainerRepository={ModuleImageCommandOptions.ImageNamePlaceholder}",
+                $"-p:ContainerImageTag={ModuleImageCommandOptions.ImageTagPlaceholder}"),
+            (_, container) =>
+                container
+                    .WithHttpEndpoint(targetPort: 8080, name: "http")
+                    .WithExternalHttpEndpoints());
 });
 
 builder.ImportModule("remote-notifications");

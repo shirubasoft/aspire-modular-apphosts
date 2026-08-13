@@ -11,6 +11,7 @@ using Xunit;
 
 namespace ModularSamples.Tests;
 
+[Collection(ModularAppHostTestsCollection.Name)]
 public sealed class ModularAppHostTests
 {
     private const string ExpectedMessage = "Hello from an arbitrary exported Aspire resource.";
@@ -201,4 +202,10 @@ public sealed class ModularAppHostTests
         return directory?.FullName ?? throw new InvalidOperationException(
             $"Could not find the repository root from '{AppContext.BaseDirectory}'.");
     }
+}
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ModularAppHostTestsCollection
+{
+    public const string Name = "Modular AppHost E2E";
 }
