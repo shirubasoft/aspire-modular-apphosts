@@ -221,14 +221,11 @@ public static partial class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(
             options,
             projectModeSwitching: new ModuleProjectModeSwitchingPipeline(builder));
-        builder.Services.AddSingleton(_ => new ModuleRepositoryDeploymentStateManager(
-            ModuleRepositoryDeploymentStateManager.ResolveStateFilePath(
-                builder.Configuration["AppHost:PathSha256"],
-                builder.Environment.EnvironmentName)));
-        builder.Services.AddSingleton<IModuleRepositoryStateStore>(services =>
-            new AspireModuleRepositoryStateStore(
-                services.GetRequiredService<IDeploymentStateManager>(),
-                services.GetRequiredService<ModuleRepositoryDeploymentStateManager>()));
+        builder.Services.AddSingleton<IModuleRepositoryStateStore>(_ =>
+            new FileModuleRepositoryStateStore(
+                FileModuleRepositoryStateStore.ResolveStateFilePath(
+                    builder.Configuration["AppHost:PathSha256"],
+                    builder.AppHostDirectory)));
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
         ModuleImageWorkflowPipeline.Configure(builder);

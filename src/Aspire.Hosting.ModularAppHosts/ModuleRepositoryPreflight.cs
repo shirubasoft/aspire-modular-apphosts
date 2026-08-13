@@ -49,13 +49,13 @@ internal static class ModuleRepositoryPreflight
             PathSafety.Comparer))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!repository.RequiredOnRun)
+            {
+                continue;
+            }
+
             if (!Directory.Exists(repository.RepositoryPath))
             {
-                if (!repository.RequiredOnRun)
-                {
-                    continue;
-                }
-
                 failures.Add(
                     $"modules {FormatModules(repository.ModuleNames)} require repository " +
                     $"'{repository.NormalizedRepository}' at '{repository.RepositoryPath}', but the directory is missing");
@@ -75,11 +75,21 @@ internal static class ModuleRepositoryPreflight
             }
 
             var state = await stateStore.ReadAsync(repository, cancellationToken).ConfigureAwait(false);
-            if (state is null || !state.Matches(repository))
+            if (state is null)
             {
+                var stateLocation = FormatStateLocation(stateStore.StateFilePath);
                 failures.Add(
-                    $"modules {FormatModules(repository.ModuleNames)} have no current initialization state for " +
-                    $"'{repository.RepositoryPath}'");
+                    $"modules {FormatModules(repository.ModuleNames)} have no initialization state for " +
+                    $"'{repository.RepositoryPath}'{stateLocation}");
+                continue;
+            }
+
+            if (!state.Matches(repository))
+            {
+                var stateLocation = FormatStateLocation(stateStore.StateFilePath);
+                failures.Add(
+                    $"modules {FormatModules(repository.ModuleNames)} have initialization state that does not match " +
+                    $"the current repository configuration for '{repository.RepositoryPath}'{stateLocation}");
                 continue;
             }
 
@@ -172,4 +182,9 @@ internal static class ModuleRepositoryPreflight
             moduleNames
                 .Order(StringComparer.OrdinalIgnoreCase)
                 .Select(name => $"'{name}'"));
+
+    private static string FormatStateLocation(string? stateFilePath) =>
+        string.IsNullOrWhiteSpace(stateFilePath)
+            ? string.Empty
+            : $"; expected state at '{stateFilePath}'";
 }

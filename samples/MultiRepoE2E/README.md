@@ -58,8 +58,8 @@ The xUnit E2E suite creates this layout outside the checked-out source tree:
 └── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
 ```
 
-Credential-free per-repository initialization sections are stored through Aspire's deployment-state
-API under `~/.aspire/deployments/<apphost-sha>/<environment>.json`.
+Credential-free repository initialization state is stored independently of the AppHost environment at
+`~/.aspire/deployments/<apphost-sha>/modular-apphosts.json`.
 
 The suite packs the contract, removes its source and the build fixture from the isolated consumer,
 and creates independent local producer repositories. It then exercises the real Aspire CLI and

@@ -365,18 +365,31 @@ internal static class ModuleRepositoryInitializationPipeline
                 $"expected '{requirement.NormalizedRepository}'.");
         }
 
+        var expectedState = new ModuleRepositoryInitializationState(
+            ModuleRepositoryInitializationState.CurrentSchemaVersion,
+            requirement.NormalizedRepository,
+            requirement.RepositoryPath,
+            requirement.Revision,
+            requirement.ConfigurationFingerprint,
+            normalizedOrigin,
+            resolvedCommit,
+            DateTimeOffset.UtcNow);
         await stateStore.WriteAsync(
             requirement,
-            new ModuleRepositoryInitializationState(
-                ModuleRepositoryInitializationState.CurrentSchemaVersion,
-                requirement.NormalizedRepository,
-                requirement.RepositoryPath,
-                requirement.Revision,
-                requirement.ConfigurationFingerprint,
-                normalizedOrigin,
-                resolvedCommit,
-                DateTimeOffset.UtcNow),
+            expectedState,
             cancellationToken).ConfigureAwait(false);
+        var persistedState = await stateStore.ReadAsync(
+            requirement,
+            cancellationToken).ConfigureAwait(false);
+        if (persistedState != expectedState || !persistedState.Matches(requirement))
+        {
+            var stateLocation = string.IsNullOrWhiteSpace(stateStore.StateFilePath)
+                ? string.Empty
+                : $" at '{stateStore.StateFilePath}'";
+            throw new InvalidOperationException(
+                $"Repository initialization state for '{requirement.RepositoryPath}' could not be verified" +
+                $"{stateLocation} after it was written.");
+        }
     }
 
 }

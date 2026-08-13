@@ -90,14 +90,16 @@ Initialization locates the AppHost Git root without executing Git and assigns ma
 <workspace>/consumer/                         # AppHost Git root
 <workspace>/orders-<remote-hash>/             # unpinned checkout
 <workspace>/orders-<remote-hash>-rev-.../     # isolated pinned checkout
-~/.aspire/deployments/<apphost-sha>/<environment>.json
+~/.aspire/deployments/<apphost-sha>/modular-apphosts.json
 ```
 
-Equivalent repositories share one initialization step. Pinned revisions receive distinct paths and are checked out detached after fetch. Initialization validates existing origins, preserves dirty worktrees, fast-forwards clean unpinned branches when enabled, updates submodules, and writes credential-free per-repository sections through Aspire's deployment-state API. Repeating the command is idempotent.
+Equivalent repositories share one initialization step. Pinned revisions receive distinct paths and are checked out detached after fetch. Initialization validates existing origins, preserves dirty worktrees, fast-forwards clean unpinned branches when enabled, updates submodules, and writes credential-free repository state to the fixed machine-local file above. The state is independent of the AppHost environment and Aspire execution mode. Repeating the command is idempotent.
+
+Versions through 11.0 stored repository records in environment deployment-state files or user secrets. Those records are not read from the fixed store; after upgrading, run `aspire do initialize --apphost . --non-interactive` once to recreate them.
 
 An existing unpinned local repository path is used directly and is excluded from initialization. A local repository paired with a revision is treated as a clone source for an initializer-owned sibling, protecting the developer checkout. Repository values can come from `WithRepository`, `DistributedApplicationModuleOptions.Repository`, or the standard `Aspire:ModularAppHosts:Modules:<module>:Repository` configuration key. Use `GetRepositoryConfigurationKey(moduleName)` to construct that key.
 
-Normal `aspire run` validates sibling directories, `.git` metadata, initialization state, project files, and build directories without cloning, fetching, pulling, or checking out. It ends an aggregate failure with an exact `aspire do initialize --apphost <path> --non-interactive` recovery command. Read-only Git inspection is used only when an image recipe evaluates source state. Set `RefreshBuildRepositoriesOnRun` globally or `RefreshBuildRepositoryOnRun` per resource to explicitly permit a clean unpinned build checkout to fast-forward during image preparation.
+Normal `aspire run` validates required sibling directories, `.git` metadata, initialization state, project files, and build directories without cloning, fetching, pulling, or checking out. State failures name the exact fixed file that was consulted and end with an `aspire do initialize --apphost <path> --non-interactive` recovery command. Build repositories made optional by an explicit tagged-image fallback are not inspected at run time, even when their checkout directory exists. Set `RefreshBuildRepositoriesOnRun` globally or `RefreshBuildRepositoryOnRun` per resource to explicitly permit a clean, unpinned, source-required build checkout to fast-forward during image preparation.
 
 Project paths declared with `ModuleProjectPathBase.Repository` and repository-relative publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
 

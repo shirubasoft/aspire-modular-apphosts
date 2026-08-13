@@ -22,7 +22,9 @@ aspire do initialize --apphost "<absolute-path-to-this-directory>" --non-interac
 ```
 
 Initialization clones the external repository into an initializer-owned directory next to this
-repository. Start the sample again:
+repository and records it in the environment-independent `modular-apphosts.json` state file. This
+sample deliberately initializes with the pipeline's default Production environment and starts with
+its Development launch profile. Start the sample again:
 
 ```bash
 aspire

@@ -453,6 +453,86 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
+    public async Task Initialization_fails_when_repository_state_does_not_round_trip()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "catalog-source");
+        await InitializeRepositoryAsync(sourcePath, "first");
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "catalog",
+            sourcePath,
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var statePath = Path.Combine(workspace.Path, "state", "modular-apphosts.json");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+                requirement,
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                new DiscardingModuleRepositoryStateStore(statePath),
+                reportingStep: null,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("could not be verified", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(statePath, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Preflight_names_the_fixed_state_file_for_missing_and_stale_state()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "catalog",
+            "https://example.test/acme/catalog.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        await InitializeRepositoryAsync(requirement.RepositoryPath, "first");
+        var statePath = Path.Combine(workspace.Path, "state", "modular-apphosts.json");
+        using var stateStore = new FileModuleRepositoryStateStore(statePath);
+        var settings = new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1));
+
+        var missing = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                [requirement],
+                [],
+                stateStore,
+                settings,
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("no initialization state", missing.Message, StringComparison.Ordinal);
+        Assert.Contains($"expected state at '{statePath}'", missing.Message, StringComparison.Ordinal);
+
+        await stateStore.WriteAsync(
+            requirement,
+            new ModuleRepositoryInitializationState(
+                ModuleRepositoryInitializationState.CurrentSchemaVersion,
+                requirement.NormalizedRepository,
+                requirement.RepositoryPath,
+                requirement.Revision,
+                "stale-configuration-fingerprint",
+                requirement.NormalizedRepository,
+                "0123456789abcdef0123456789abcdef01234567",
+                DateTimeOffset.UtcNow),
+            TestContext.Current.CancellationToken);
+        var stale = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryPreflight.ValidateAsync(
+                [requirement],
+                [],
+                stateStore,
+                settings,
+                appHostPath,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("does not match", stale.Message, StringComparison.Ordinal);
+        Assert.Contains($"expected state at '{statePath}'", stale.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Preflight_logs_aggregate_failure_details_and_the_exact_initialize_command()
     {
         using var workspace = TemporaryDirectory.Create();
@@ -520,7 +600,7 @@ public sealed class RepositoryInitializationContractTests
     }
 
     [Fact]
-    public async Task Preflight_rejects_an_invalid_present_source_optional_repository()
+    public async Task Preflight_ignores_an_invalid_present_source_optional_repository_without_inspection()
     {
         using var workspace = TemporaryDirectory.Create();
         var appHostPath = CreateAppHostRepository(workspace.Path);
@@ -533,17 +613,19 @@ public sealed class RepositoryInitializationContractTests
             requiredOnRun: false).Requirement;
         Directory.CreateDirectory(requirement.RepositoryPath);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            ModuleRepositoryPreflight.ValidateAsync(
-                plans.Requirements,
-                [],
-                new InMemoryModuleRepositoryStateStore(),
-                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
-                appHostPath,
-                cancellationToken: TestContext.Current.CancellationToken));
+        await ModuleRepositoryPreflight.ValidateAsync(
+            plans.Requirements,
+            [],
+            new ThrowingModuleRepositoryStateStore(
+                Path.Combine(workspace.Path, "state-that-must-not-be-read.json")),
+            new ModuleRepositoryInitializationSettings(
+                "git-that-must-not-run",
+                "gh-that-must-not-run",
+                TimeSpan.FromMinutes(1)),
+            appHostPath,
+            cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Contains("Git checkout", exception.Message, StringComparison.Ordinal);
-        Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(requirement.RepositoryPath));
     }
 
     [Fact]

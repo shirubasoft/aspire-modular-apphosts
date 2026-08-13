@@ -691,7 +691,7 @@ internal static partial class Program
                 ".aspire",
                 "deployments",
                 appHostHash,
-                "multirepoe2e.json");
+                "modular-apphosts.json");
             if (!File.Exists(stateFile))
             {
                 throw new InvalidOperationException("Initialization did not write repository state.");
@@ -700,12 +700,24 @@ internal static partial class Program
             var state = File.ReadAllText(stateFile);
             AssertContains(
                 state,
-                "modular-apphosts:repositories:",
-                "Initialization did not write a per-repository deployment-state section.");
+                "\"repositories\"",
+                "Initialization did not write the repository-state document.");
             AssertContains(
                 state,
                 "example.invalid/modular/resource-build",
                 "Initialization state did not retain the normalized repository identity.");
+
+            var legacyEnvironmentStateFile = Path.Combine(
+                Path.GetDirectoryName(stateFile)!,
+                "multirepoe2e.json");
+            if (File.Exists(legacyEnvironmentStateFile) &&
+                File.ReadAllText(legacyEnvironmentStateFile).Contains(
+                    "modular-apphosts:repositories:",
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Initialization still wrote repository state to the environment deployment-state file.");
+            }
         }
 
         private IReadOnlyList<GitProxyOperation> ReadGitProxyOperations()
