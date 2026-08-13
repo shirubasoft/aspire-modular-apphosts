@@ -519,9 +519,14 @@ public sealed class RepositoryInitializationContractTests
                 updateRepository: false,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains(expectedSource, exception.Message, StringComparison.Ordinal);
         Assert.Contains(
-            mismatchedSource ?? "(missing or unavailable)",
+            RepositoryIdentity.NormalizeRepositoryIdentity(expectedSource, workspace.Path),
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            mismatchedSource is null
+                ? "(missing or unavailable)"
+                : RepositoryIdentity.NormalizeRepositoryIdentity(mismatchedSource, workspace.Path),
             exception.Message,
             StringComparison.Ordinal);
     }
