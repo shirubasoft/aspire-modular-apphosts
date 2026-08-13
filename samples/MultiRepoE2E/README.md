@@ -42,8 +42,9 @@ For an independent checkout or pinned build, set `BuildRepository` and
 `BuildRepositoryRevision` under
 `Aspire:ModularAppHosts:Modules:multi-repo-resource-build:Containers:multi-repo-api` through JSON,
 command-line, or another standard .NET configuration provider. Set the definition checkout with the
-module-level `Repository` option. If either repository needs initialization, run the exact AppHost-aware
-command reported by preflight.
+module-level `Repository` option. Use `CheckoutDirectoryName` at the module or container scope to
+resolve a canonical sibling-name conflict. If either repository needs initialization, run the exact
+AppHost-aware command reported by preflight.
 
 ## What CI proves
 
@@ -53,8 +54,9 @@ The xUnit E2E suite creates this layout outside the checked-out source tree:
 <temporary-root>/
 ├── consumer/                 # isolated Git repository containing only the AppHost
 ├── resource-build-source/    # separately initialized producer Git repository
+├── resource-build-adopted/   # existing matching developer checkout, adopted without updates
+├── resource-build/           # initializer-created canonical unpinned sibling
 ├── packages/                 # packed runtime and module contract
-├── <remote-hash>/            # initializer-owned unpinned sibling
 └── <remote-hash>-rev-.../    # initializer-owned detached revision sibling
 ```
 
@@ -67,11 +69,13 @@ verifies all of these behaviors in one locally reproducible command:
 
 1. Both checked-in AppHosts start and become healthy using only their default configuration.
 2. `aspire start` fails fast before initialization with the exact `--apphost` recovery command.
-3. `aspire do initialize --apphost <path> --non-interactive` creates direct sibling checkouts and normalized state.
-4. Repeated initialization is idempotent.
-5. A configured local source plus a revision uses a detached initializer-owned sibling without moving
+3. An existing matching canonical sibling is recorded as `Adopted`; initialization never fetches,
+   fast-forwards, cleans, or moves it, including when it is dirty and upstream has advanced.
+4. A missing unpinned remote is cloned to the human-readable `resource-build/` sibling, recorded as
+   `Created`, and fast-forwarded by later initialization according to configuration.
+5. Repeated initialization preserves `Created` and `Adopted` ownership.
+6. A configured local source plus a revision uses a detached initializer-owned hashed sibling without moving
    the developer checkout.
-6. Another initialization fast-forwards a clean unpinned checkout.
 7. Default run permits only explicitly allowlisted read-only Git inspection; every other Git command
    shape is rejected and recorded.
 8. Opt-in runtime refresh fast-forwards a clean build checkout.

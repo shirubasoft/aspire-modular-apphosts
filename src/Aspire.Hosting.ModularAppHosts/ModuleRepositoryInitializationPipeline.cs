@@ -178,19 +178,75 @@ internal static class ModuleRepositoryInitializationPipeline
         ILogger resourceLogger,
         IModuleRepositoryStateStore stateStore,
         IReportingStep? reportingStep,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<
+            ModuleRepositoryRequirement,
+            ModuleRepositoryInitializationSettings,
+            Action<string>,
+            Action<RepositorySyncLifecycleEvent>,
+            CancellationToken,
+            Task>? synchronizeAsync = null)
     {
-        await InitializeAsync(
+        var previousState = await stateStore.ReadAsync(
             requirement,
-            settings,
-            lifecycleLogger,
-            resourceLogger,
-            reportingStep,
             cancellationToken).ConfigureAwait(false);
+        var ownership = ClassifyOwnership(requirement, previousState);
+        if (requirement.UsesCanonicalCheckout && PathExists(requirement.RepositoryPath))
+        {
+            await ValidateCanonicalCheckoutAsync(
+                requirement,
+                settings,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (ownership == ModuleRepositoryCheckoutOwnership.Adopted)
+        {
+            if (!PathExists(requirement.RepositoryPath))
+            {
+                throw new InvalidOperationException(
+                    $"Repository state records canonical checkout '{requirement.RepositoryPath}' for " +
+                    $"'{requirement.NormalizedRepository}' as Adopted, but the developer-owned checkout is missing. " +
+                    "Restore the checkout; initialization will not replace an adopted checkout with an initializer-owned clone.");
+            }
+
+            LogRepositoryOperationSkipped(
+                lifecycleLogger,
+                "synchronize",
+                "skipped",
+                requirement.NormalizedRepository,
+                requirement.RepositoryPath,
+                "adopted-developer-checkout",
+                null);
+        }
+        else
+        {
+            if (synchronizeAsync is null)
+            {
+                await InitializeAsync(
+                    requirement,
+                    settings,
+                    lifecycleLogger,
+                    resourceLogger,
+                    reportingStep,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await InitializeAsync(
+                    requirement,
+                    settings,
+                    lifecycleLogger,
+                    resourceLogger,
+                    synchronizeAsync,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         await RecordStateAsync(
             requirement,
             settings,
             stateStore,
+            ownership,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -330,6 +386,7 @@ internal static class ModuleRepositoryInitializationPipeline
         ModuleRepositoryRequirement requirement,
         ModuleRepositoryInitializationSettings settings,
         IModuleRepositoryStateStore stateStore,
+        ModuleRepositoryCheckoutOwnership ownership,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(requirement);
@@ -373,6 +430,7 @@ internal static class ModuleRepositoryInitializationPipeline
             requirement.ConfigurationFingerprint,
             normalizedOrigin,
             resolvedCommit,
+            ownership,
             DateTimeOffset.UtcNow);
         await stateStore.WriteAsync(
             requirement,
@@ -391,5 +449,118 @@ internal static class ModuleRepositoryInitializationPipeline
                 $"{stateLocation} after it was written.");
         }
     }
+
+    private static ModuleRepositoryCheckoutOwnership ClassifyOwnership(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationState? previousState)
+    {
+        if (!requirement.UsesCanonicalCheckout)
+        {
+            return ModuleRepositoryCheckoutOwnership.Created;
+        }
+
+        if (previousState?.RefersTo(requirement) == true)
+        {
+            return previousState.Ownership;
+        }
+
+        return PathExists(requirement.RepositoryPath)
+            ? ModuleRepositoryCheckoutOwnership.Adopted
+            : ModuleRepositoryCheckoutOwnership.Created;
+    }
+
+    private static async Task ValidateCanonicalCheckoutAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings settings,
+        CancellationToken cancellationToken)
+    {
+        bool isGitRepository;
+        try
+        {
+            isGitRepository = await RepositoryInspector.IsGitRepositoryAsync(
+                requirement.RepositoryPath,
+                settings.GitExecutablePath,
+                settings.CommandTimeout,
+                requireSuccessfulInspection: true,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidOperationException(
+                CreateCanonicalCheckoutConflictException(
+                    requirement,
+                    actualOrigin: null,
+                    $"the canonical checkout could not be inspected with Git executable " +
+                    $"'{settings.GitExecutablePath}'").Message,
+                exception);
+        }
+        if (!isGitRepository)
+        {
+            throw CreateCanonicalCheckoutConflictException(
+                requirement,
+                actualOrigin: null,
+                "the canonical directory exists but is not a Git checkout");
+        }
+
+        var origin = await RepositoryInspector.TryGetRemoteAsync(
+            requirement.RepositoryPath,
+            settings.GitExecutablePath,
+            settings.CommandTimeout,
+            cancellationToken).ConfigureAwait(false);
+        var normalizedOrigin = TryNormalizeOrigin(origin, requirement.RepositoryPath);
+        if (!string.Equals(
+                normalizedOrigin,
+                requirement.NormalizedRepository,
+                StringComparison.Ordinal))
+        {
+            throw CreateCanonicalCheckoutConflictException(
+                requirement,
+                normalizedOrigin,
+                origin is null
+                    ? "the checkout has no origin"
+                    : "the checkout origin does not match the planned repository");
+        }
+    }
+
+    private static InvalidOperationException CreateCanonicalCheckoutConflictException(
+        ModuleRepositoryRequirement requirement,
+        string? actualOrigin,
+        string reason)
+    {
+        var configurationKeys = string.Join(
+            ", ",
+            requirement.CheckoutDirectoryNameConfigurationKeys
+                .Order(StringComparer.Ordinal)
+                .Select(key => $"'{key}'"));
+        var actual = actualOrigin is null
+            ? string.Empty
+            : $" Actual normalized origin: '{actualOrigin}'.";
+        return new InvalidOperationException(
+            $"Canonical checkout conflict at '{requirement.RepositoryPath}': {reason}. " +
+            $"Expected normalized repository identity: '{requirement.NormalizedRepository}'.{actual} " +
+            $"Choose a distinct sibling name with CheckoutDirectoryName at configuration key(s) " +
+            $"{configurationKeys}; initialization will not clone to a hashed fallback.");
+    }
+
+    private static string? TryNormalizeOrigin(string? origin, string repositoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(origin))
+        {
+            return null;
+        }
+
+        try
+        {
+            return RepositoryIdentity.NormalizeRepositoryIdentity(origin, repositoryPath);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                          or ArgumentException
+                                          or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static bool PathExists(string path) => Directory.Exists(path) || File.Exists(path);
 
 }

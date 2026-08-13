@@ -109,10 +109,27 @@ public interface IDistributedApplicationModuleBuilder
     /// <summary>Overrides the Git repository and pins its imported branch, tag, or commit.</summary>
     IDistributedApplicationModuleBuilder WithRepository(string repository, string revision);
 
+    /// <summary>Overrides the Git repository and its checkout declaration.</summary>
+    IDistributedApplicationModuleBuilder WithRepository(
+        string repository,
+        ModuleRepositoryOptions options);
+
     /// <summary>
     /// Marks generic resource factories as dependent on repository content when the module does not declare a project.
     /// </summary>
     IDistributedApplicationModuleBuilder RequiresRepository();
+}
+
+/// <summary>Controls the repository declared by a distributed application module.</summary>
+public sealed class ModuleRepositoryOptions
+{
+    /// <summary>Gets or sets the branch, tag, or commit checked out for this module.</summary>
+    public string? Revision { get; set; }
+
+    /// <summary>
+    /// Gets or sets the direct sibling directory name used for an unpinned remote repository checkout.
+    /// </summary>
+    public string? CheckoutDirectoryName { get; set; }
 }
 
 /// <summary>Describes a resource exported by a distributed application module.</summary>
@@ -283,6 +300,11 @@ public sealed class ModuleImageCommandOptions(
     /// Gets or sets the branch, tag, or commit checked out from <see cref="BuildRepository"/> before publishing.
     /// </summary>
     public string? BuildRepositoryRevision { get; set; }
+
+    /// <summary>
+    /// Gets or sets the direct sibling directory name used for an unpinned remote build repository checkout.
+    /// </summary>
+    public string? CheckoutDirectoryName { get; set; }
 }
 
 /// <summary>Describes the effective image assigned to a factory-created container resource.</summary>

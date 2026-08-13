@@ -88,16 +88,22 @@ Initialization locates the AppHost Git root without executing Git and assigns ma
 
 ```text
 <workspace>/consumer/                         # AppHost Git root
-<workspace>/orders-<remote-hash>/             # unpinned checkout
+<workspace>/orders/                           # canonical unpinned checkout
 <workspace>/orders-<remote-hash>-rev-.../     # isolated pinned checkout
 ~/.aspire/deployments/<apphost-sha>/modular-apphosts.json
 ```
 
-Equivalent repositories share one initialization step. Pinned revisions receive distinct paths and are checked out detached after fetch. Initialization validates existing origins, preserves dirty worktrees, fast-forwards clean unpinned branches when enabled, updates submodules, and writes credential-free repository state to the fixed machine-local file above. The state is independent of the AppHost environment and Aspire execution mode. Repeating the command is idempotent.
+The canonical name is derived from the normalized remote repository name: `https://github.com/example/orders.git` becomes `<workspace>/orders`. If that directory is missing, initialization clones it and records `Created` ownership. Created checkouts are initializer-managed: later initialization runs may fast-forward a clean branch according to `UpdateRepositoriesOnInitialize`, retain the existing dirty-worktree protection, and preserve `Created` ownership in state.
+
+If the canonical directory already exists, initialization requires a Git checkout and compares its normalized `origin` with the planned repository. A match is recorded as `Adopted`; initialization records its current commit but never fetches, pulls, checks out, resets, cleans, updates submodules, or fast-forwards it. Developers update adopted checkouts themselves, and later initialization runs preserve `Adopted` ownership even when the checkout is dirty. A different origin fails with the canonical path, expected and actual normalized identities, and the exact `CheckoutDirectoryName` key.
+
+Equivalent normalized repositories share one initialization step. Two different identities that derive the same canonical path fail during planning; set distinct `CheckoutDirectoryName` values rather than relying on a hashed fallback. Pinned revisions receive distinct hashed paths and are checked out detached after fetch. They never adopt, detach, reset, or move a developer's canonical checkout. Initialization writes credential-free repository state to the fixed machine-local file above, independent of the AppHost environment and Aspire execution mode.
 
 Versions through 11.0 stored repository records in environment deployment-state files or user secrets. Those records are not read from the fixed store; after upgrading, run `aspire do initialize --apphost . --non-interactive` once to recreate them.
 
-An existing unpinned local repository path is used directly and is excluded from initialization. A local repository paired with a revision is treated as a clone source for an initializer-owned sibling, protecting the developer checkout. Repository values can come from `WithRepository`, `DistributedApplicationModuleOptions.Repository`, or the standard `Aspire:ModularAppHosts:Modules:<module>:Repository` configuration key. Use `GetRepositoryConfigurationKey(moduleName)` to construct that key.
+Unpinned remote checkouts used a `<name>-<hash>` sibling before this release. Those legacy clones are not discovered automatically. Rerun `initialize` to create the canonical sibling, or set `Aspire:ModularAppHosts:Modules:<module>:CheckoutDirectoryName` to the legacy directory name so a matching checkout can be adopted. Resolve same-name conflicts with distinct overrides. An override must be one safe filename segment beneath the AppHost Git root's sibling parent; paths, traversal, separators, empty names, invalid filename characters, and use with `RepositoryRevision` are rejected.
+
+An existing unpinned local repository path is used directly and is excluded from initialization. A local repository paired with a revision is treated as a clone source for an initializer-owned hashed sibling, protecting the developer checkout. Local-path behavior is unchanged. Repository values can come from `WithRepository`, `DistributedApplicationModuleOptions.Repository`, or the standard `Aspire:ModularAppHosts:Modules:<module>:Repository` configuration key. `ModuleRepositoryOptions.CheckoutDirectoryName` supplies the declaration-time override, while `DistributedApplicationModuleOptions.CheckoutDirectoryName` supplies it through `IOptions`. Use `GetRepositoryConfigurationKey(moduleName)` to construct the repository key.
 
 Normal `aspire run` validates required sibling directories, `.git` metadata, initialization state, project files, and build directories without cloning, fetching, pulling, or checking out. State failures name the exact fixed file that was consulted and end with an `aspire do initialize --apphost <path> --non-interactive` recovery command. Build repositories made optional by an explicit tagged-image fallback are not inspected at run time, even when their checkout directory exists. Set `RefreshBuildRepositoriesOnRun` globally or `RefreshBuildRepositoryOnRun` per resource to explicitly permit a clean, unpinned, source-required build checkout to fast-forward during image preparation.
 
@@ -360,7 +366,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
       "Modules": {
         "orders": {
           "Repository": "https://github.com/example/orders.git",
-          "RepositoryRevision": "release/2026-08",
+          "CheckoutDirectoryName": "orders-source",
           "UpdateRepositoryOnInitialize": false,
           "ProjectMode": "Container",
           "Projects": {
@@ -385,7 +391,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
               ],
               "PublishWorkingDirectory": "src/Orders.Api",
               "BuildRepository": "https://github.com/example/orders-api-images.git",
-              "BuildRepositoryRevision": "release/2026-08",
+              "CheckoutDirectoryName": "orders-api-images",
               "RefreshBuildRepositoryOnRun": true,
               "ImagePullPolicy": "Never"
             }
@@ -406,7 +412,7 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 }
 ```
 
-`ProjectMode` is honored only in Aspire run mode. Its `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Image, command, build-repository, and build-revision settings can override an already-declared publisher, but configuration cannot introduce a publisher that is absent from the module contract.
+`ProjectMode` is honored only in Aspire run mode. Its `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Image, command, build-repository, build-revision, and checkout-directory settings can override an already-declared publisher, but configuration cannot introduce a publisher that is absent from the module contract. `CheckoutDirectoryName` is valid only for an unpinned remote: remove it before setting `RepositoryRevision` or `BuildRepositoryRevision`.
 
 ### Developer-local mode switching
 

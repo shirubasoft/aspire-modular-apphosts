@@ -12,6 +12,187 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class RepositoryInitializationContractTests
 {
     [Fact]
+    public async Task Missing_canonical_checkout_is_created_and_preserves_created_ownership()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "catalog-source");
+        var firstCommit = await InitializeRepositoryAsync(sourcePath, "first");
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        const string repository = "https://example.test/acme/catalog.git";
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "catalog",
+            repository,
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var stateStore = new InMemoryModuleRepositoryStateStore();
+        var settings = new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1));
+        var synchronizationCalls = 0;
+
+        async Task SynchronizeCreatedAsync(
+            ModuleRepositoryRequirement planned,
+            ModuleRepositoryInitializationSettings _,
+            Action<string> __,
+            Action<RepositorySyncLifecycleEvent> ___,
+            CancellationToken ____)
+        {
+            synchronizationCalls++;
+            if (!Directory.Exists(planned.RepositoryPath))
+            {
+                await RunGitAsync(
+                    Path.GetDirectoryName(planned.RepositoryPath)!,
+                    "clone",
+                    sourcePath,
+                    planned.RepositoryPath);
+                await RunGitAsync(planned.RepositoryPath, "remote", "set-url", "origin", repository);
+                return;
+            }
+
+            await RunGitAsync(planned.RepositoryPath, "fetch", sourcePath, "HEAD");
+            await RunGitAsync(planned.RepositoryPath, "merge", "--ff-only", "FETCH_HEAD");
+        }
+
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            requirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            SynchronizeCreatedAsync);
+
+        Assert.Equal("catalog", Path.GetFileName(requirement.RepositoryPath));
+        Assert.Equal(firstCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
+        var firstState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Created, firstState!.Ownership);
+
+        var secondCommit = await CommitAsync(sourcePath, "second");
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            requirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            SynchronizeCreatedAsync);
+
+        Assert.Equal(2, synchronizationCalls);
+        Assert.Equal(secondCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
+        var repeatedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Created, repeatedState!.Ownership);
+    }
+
+    [Fact]
+    public async Task Matching_canonical_checkout_is_adopted_and_never_synchronized_even_when_dirty()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "orders-source");
+        var firstCommit = await InitializeRepositoryAsync(sourcePath, "first");
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        const string repository = "https://example.test/acme/orders.git";
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "orders",
+            repository,
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        await RunGitAsync(
+            Path.GetDirectoryName(requirement.RepositoryPath)!,
+            "clone",
+            sourcePath,
+            requirement.RepositoryPath);
+        await RunGitAsync(requirement.RepositoryPath, "remote", "set-url", "origin", repository);
+        _ = await CommitAsync(sourcePath, "upstream-second");
+        var stateStore = new InMemoryModuleRepositoryStateStore();
+        var settings = new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1));
+
+        static Task FailIfSynchronizedAsync(
+            ModuleRepositoryRequirement _,
+            ModuleRepositoryInitializationSettings __,
+            Action<string> ___,
+            Action<RepositorySyncLifecycleEvent> ____,
+            CancellationToken _____) =>
+            throw new InvalidOperationException("An adopted checkout must not be synchronized.");
+
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            requirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            FailIfSynchronizedAsync);
+
+        Assert.Equal(firstCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
+        var adoptedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Adopted, adoptedState!.Ownership);
+
+        var dirtyPath = Path.Combine(requirement.RepositoryPath, "developer-note.txt");
+        await File.WriteAllTextAsync(
+            dirtyPath,
+            "developer-owned",
+            TestContext.Current.CancellationToken);
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            requirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            FailIfSynchronizedAsync);
+
+        Assert.Equal(firstCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
+        Assert.True(File.Exists(dirtyPath));
+        var repeatedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Adopted, repeatedState!.Ownership);
+    }
+
+    [Fact]
+    public async Task Canonical_checkout_with_mismatched_origin_fails_without_a_hashed_fallback()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        const string repository = "https://example.test/acme/catalog.git";
+        const string configurationKey =
+            "Aspire:ModularAppHosts:Modules:catalog:CheckoutDirectoryName";
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "catalog",
+            repository,
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryNameConfigurationKey: configurationKey).Requirement;
+        await InitializeRepositoryAsync(requirement.RepositoryPath, "conflicting");
+        await RunGitAsync(
+            requirement.RepositoryPath,
+            "remote",
+            "add",
+            "origin",
+            "https://other-user:secret@example.test/other/catalog.git?token=secret");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+                requirement,
+                new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                new InMemoryModuleRepositoryStateStore(),
+                reportingStep: null,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains(requirement.RepositoryPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(requirement.NormalizedRepository, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("example.test/other/catalog", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(configurationKey, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("distinct sibling name", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(
+            Directory.EnumerateDirectories(workspace.Path),
+            path => PathSafety.AreEqual(path, requirement.RepositoryPath));
+    }
+
+    [Fact]
     public async Task Initialization_clones_the_planned_revision_and_emits_structured_events()
     {
         using var workspace = TemporaryDirectory.Create();
@@ -340,13 +521,13 @@ public sealed class RepositoryInitializationContractTests
 
         Assert.Contains(expectedSource, exception.Message, StringComparison.Ordinal);
         Assert.Contains(
-            mismatchedSource ?? "(missing)",
+            mismatchedSource ?? "(missing or unavailable)",
             exception.Message,
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Repository_mismatch_errors_report_configured_origins_unchanged()
+    public async Task Repository_mismatch_errors_report_normalized_origins_without_credentials()
     {
         using var workspace = TemporaryDirectory.Create();
         var checkoutPath = Path.Combine(workspace.Path, "checkout");
@@ -364,8 +545,13 @@ public sealed class RepositoryInitializationContractTests
                 updateRepository: false,
                 cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains(actualRepository, exception.Message, StringComparison.Ordinal);
-        Assert.Contains(expectedRepository, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("example.test/acme/actual", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("example.test/acme/expected", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("actual-user", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("actual-password", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expected-user", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("expected-password", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("auth=", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -517,6 +703,7 @@ public sealed class RepositoryInitializationContractTests
                 "stale-configuration-fingerprint",
                 requirement.NormalizedRepository,
                 "0123456789abcdef0123456789abcdef01234567",
+                ModuleRepositoryCheckoutOwnership.Created,
                 DateTimeOffset.UtcNow),
             TestContext.Current.CancellationToken);
         var stale = await Assert.ThrowsAsync<InvalidOperationException>(() =>

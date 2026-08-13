@@ -82,7 +82,9 @@ internal sealed class ModuleApplicationRegistry(
         string repository,
         string? revision,
         bool updateRepository,
-        bool requiredOnRun = true)
+        bool requiredOnRun = true,
+        string? checkoutDirectoryName = null,
+        string? checkoutDirectoryNameConfigurationKey = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         if (_repositoryPlans is null)
@@ -97,7 +99,9 @@ internal sealed class ModuleApplicationRegistry(
             repository,
             revision,
             updateRepository,
-            requiredOnRun);
+            requiredOnRun,
+            checkoutDirectoryName,
+            checkoutDirectoryNameConfigurationKey);
         if (registration.IsNew)
         {
             var settings = new ModuleRepositoryInitializationSettings(

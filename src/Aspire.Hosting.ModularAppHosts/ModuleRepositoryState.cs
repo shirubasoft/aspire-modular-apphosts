@@ -7,6 +7,13 @@ using System.Text.Json.Serialization;
 
 namespace Aspire.Hosting;
 
+[JsonConverter(typeof(JsonStringEnumConverter<ModuleRepositoryCheckoutOwnership>))]
+internal enum ModuleRepositoryCheckoutOwnership
+{
+    Created,
+    Adopted
+}
+
 internal sealed record ModuleRepositoryInitializationState(
     int SchemaVersion,
     string Repository,
@@ -15,9 +22,10 @@ internal sealed record ModuleRepositoryInitializationState(
     string ConfigurationFingerprint,
     string Origin,
     string ResolvedCommit,
+    ModuleRepositoryCheckoutOwnership Ownership,
     DateTimeOffset InitializedAtUtc)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public bool Matches(ModuleRepositoryRequirement requirement) =>
         SchemaVersion == CurrentSchemaVersion &&
@@ -25,6 +33,13 @@ internal sealed record ModuleRepositoryInitializationState(
         PathSafety.AreEqual(Destination, requirement.RepositoryPath) &&
         string.Equals(Revision, requirement.Revision, StringComparison.Ordinal) &&
         string.Equals(ConfigurationFingerprint, requirement.ConfigurationFingerprint, StringComparison.Ordinal);
+
+    public bool RefersTo(ModuleRepositoryRequirement requirement) =>
+        SchemaVersion == CurrentSchemaVersion &&
+        Enum.IsDefined(Ownership) &&
+        string.Equals(Repository, requirement.NormalizedRepository, StringComparison.Ordinal) &&
+        PathSafety.AreEqual(Destination, requirement.RepositoryPath) &&
+        string.Equals(Revision, requirement.Revision, StringComparison.Ordinal);
 }
 
 internal interface IModuleRepositoryStateStore
@@ -232,6 +247,8 @@ internal sealed class FileModuleRepositoryStateStore(string stateFilePath)
 
     private sealed class ModuleRepositoryStateDocument
     {
+        // Repository records have their own schema version, so the envelope stays
+        // compatible with state files written by the repository-state preflight feature.
         public const int CurrentSchemaVersion = 1;
 
         public int SchemaVersion { get; init; } = CurrentSchemaVersion;

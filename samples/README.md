@@ -132,7 +132,8 @@ the [sample README](ImagePushE2E/README.md) for commands.
 [`MultiRepoE2E`](MultiRepoE2E/README.md) contains a consumer AppHost that imports and runs Spire's
 sample API from a contract package while its image build inputs live in a separately initialized
 local Git repository derived from `ResourceBuildRepository`. CI validates a pinned managed checkout
-and a second local-registry producer-to-consumer module image workflow document handoff; it does not depend
+plus adopted and initializer-created canonical remote siblings, and a second local-registry
+producer-to-consumer module image workflow document handoff; it does not depend
 on an external `Shirubasoft/spire` checkout.
 
 ## Remote initialization sample
@@ -140,6 +141,7 @@ on an external `Shirubasoft/spire` checkout.
 [`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
 flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
 which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
-starts the imported service; later initialization runs can fast-forward its clean checkout. The
+starts the imported service from the human-readable `spire-external-repo-sample` sibling; later
+initialization runs can fast-forward its clean `Created` checkout. The
 imported `notification-service` is a specialized project export, so its native project/container
 mode can also be selected through the generated `aspire do use-*-notification-service` steps.

@@ -83,6 +83,160 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
+    public void Module_configuration_changes_the_canonical_checkout_directory_name()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options =>
+            options.Modules["orders"] = new DistributedApplicationModuleOptions
+            {
+                CheckoutDirectoryName = "orders-module"
+            });
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository("https://example.test/acme/orders.git");
+            definition.RequiresRepository();
+            definition.AddContainer("orders-api", "busybox");
+        });
+
+        builder.ImportModule("orders");
+
+        var requirement = Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+        Assert.Equal("orders-module", Path.GetFileName(requirement.RepositoryPath));
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName",
+            requirement.CheckoutDirectoryNameConfigurationKeys);
+    }
+
+    [Fact]
+    public void Module_declaration_options_change_the_canonical_checkout_directory_name()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(
+                "https://example.test/acme/orders.git",
+                new ModuleRepositoryOptions { CheckoutDirectoryName = "orders-declared" });
+            definition.RequiresRepository();
+            definition.AddContainer("orders-api", "busybox");
+        });
+
+        builder.ImportModule("orders");
+
+        var requirement = Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+        Assert.Equal("orders-declared", Path.GetFileName(requirement.RepositoryPath));
+    }
+
+    [Theory]
+    [InlineData("../orders")]
+    [InlineData("orders/subdirectory")]
+    [InlineData(" ")]
+    public void Invalid_module_configuration_reports_the_exact_checkout_key(string value)
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ConfigureModularAppHosts(options =>
+                options.Modules["orders"] = new DistributedApplicationModuleOptions
+                {
+                    CheckoutDirectoryName = value
+                }));
+
+        Assert.Contains(value, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pinned_module_configuration_rejects_a_checkout_directory_name()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            builder.ConfigureModularAppHosts(options =>
+                options.Modules["orders"] = new DistributedApplicationModuleOptions
+                {
+                    RepositoryRevision = "v2",
+                    CheckoutDirectoryName = "orders-v2"
+                }));
+
+        Assert.Contains("orders-v2", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("pinned repository revision 'v2'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Build_repository_configuration_changes_the_canonical_checkout_directory_name()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.ConfigureModularAppHosts(options =>
+            options.Modules["orders"] = new DistributedApplicationModuleOptions
+            {
+                Containers =
+                {
+                    ["orders-api"] = new DistributedApplicationModuleContainerOptions
+                    {
+                        CheckoutDirectoryName = "orders-images"
+                    }
+                }
+            });
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddContainer("orders-api", "orders-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "orders-api",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = "https://example.test/acme/images.git"
+                });
+        });
+
+        builder.AddModule(module);
+
+        var requirement = Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+        Assert.Equal("orders-images", Path.GetFileName(requirement.RepositoryPath));
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:Containers:orders-api:CheckoutDirectoryName",
+            requirement.CheckoutDirectoryNameConfigurationKeys);
+    }
+
+    [Fact]
+    public void Build_repository_declaration_options_change_the_canonical_checkout_directory_name()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddContainer("orders-api", "orders-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "orders-api",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = "https://example.test/acme/images.git",
+                    CheckoutDirectoryName = "declared-images"
+                });
+        });
+
+        builder.AddModule(module);
+
+        var requirement = Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+        Assert.Equal("declared-images", Path.GetFileName(requirement.RepositoryPath));
+    }
+
+    [Fact]
     public async Task Explicit_tag_pull_publisher_keeps_its_separate_checkout_optional_on_run()
     {
         using var appHost = CreateGitAppHost();

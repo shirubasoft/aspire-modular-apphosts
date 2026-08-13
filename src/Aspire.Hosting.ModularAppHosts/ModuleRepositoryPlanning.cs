@@ -9,6 +9,7 @@ namespace Aspire.Hosting;
 internal sealed class ModuleRepositoryRequirement
 {
     private readonly HashSet<string> _moduleNames = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _checkoutDirectoryNameConfigurationKeys = new(StringComparer.Ordinal);
 
     internal ModuleRepositoryRequirement(
         string moduleName,
@@ -18,9 +19,11 @@ internal sealed class ModuleRepositoryRequirement
         string? revision,
         bool updateOnInitialize,
         string stepKey,
-        bool requiredOnRun = true)
+        bool requiredOnRun,
+        bool usesCanonicalCheckout,
+        string checkoutDirectoryNameConfigurationKey)
     {
-        AddModule(moduleName);
+        AddConsumer(moduleName, checkoutDirectoryNameConfigurationKey);
         Repository = repository;
         NormalizedRepository = normalizedRepository;
         RepositoryPath = Path.GetFullPath(repositoryPath);
@@ -28,6 +31,7 @@ internal sealed class ModuleRepositoryRequirement
         UpdateOnInitialize = Revision is null && updateOnInitialize;
         StepKey = stepKey;
         RequiredOnRun = requiredOnRun;
+        UsesCanonicalCheckout = usesCanonicalCheckout;
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
@@ -36,6 +40,9 @@ internal sealed class ModuleRepositoryRequirement
     }
 
     public IReadOnlyCollection<string> ModuleNames => _moduleNames;
+
+    public IReadOnlyCollection<string> CheckoutDirectoryNameConfigurationKeys =>
+        _checkoutDirectoryNameConfigurationKeys;
 
     public string Repository { get; }
 
@@ -53,10 +60,19 @@ internal sealed class ModuleRepositoryRequirement
 
     public bool RequiredOnRun { get; private set; }
 
+    public bool UsesCanonicalCheckout { get; }
+
     internal void AddModule(string moduleName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         _moduleNames.Add(moduleName.Trim());
+    }
+
+    internal void AddConsumer(string moduleName, string checkoutDirectoryNameConfigurationKey)
+    {
+        AddModule(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(checkoutDirectoryNameConfigurationKey);
+        _checkoutDirectoryNameConfigurationKeys.Add(checkoutDirectoryNameConfigurationKey.Trim());
     }
 
     internal void RequireOnRun() => RequiredOnRun = true;
@@ -110,6 +126,8 @@ internal sealed class ModuleRepositoryPlanRegistry
 {
     private readonly Dictionary<string, ModuleRepositoryRequirement> _requirements =
         new(PathSafety.Comparer);
+    private readonly Dictionary<string, ModuleRepositoryRequirement> _requirementsByIdentity =
+        new(StringComparer.Ordinal);
 
     public ModuleRepositoryPlanRegistry(string appHostDirectory)
     {
@@ -135,21 +153,30 @@ internal sealed class ModuleRepositoryPlanRegistry
         string repository,
         string? revision,
         bool updateOnInitialize,
-        bool requiredOnRun = true)
+        bool requiredOnRun = true,
+        string? checkoutDirectoryName = null,
+        string? checkoutDirectoryNameConfigurationKey = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        var configurationKey = GetConfigurationKey(
+            moduleName,
+            checkoutDirectoryNameConfigurationKey);
         var repositoryPath = RepositoryIdentity.GetSiblingPath(
             SiblingParent,
             repository,
             revision,
-            AppHostDirectory);
+            AppHostDirectory,
+            checkoutDirectoryName,
+            configurationKey);
         return Register(
             moduleName,
             repository,
             repositoryPath,
             revision,
             updateOnInitialize,
-            requiredOnRun);
+            requiredOnRun,
+            checkoutDirectoryName,
+            configurationKey);
     }
 
     public ModuleRepositoryPlanRegistration Register(
@@ -158,11 +185,28 @@ internal sealed class ModuleRepositoryPlanRegistry
         string repositoryPath,
         string? revision,
         bool updateOnInitialize,
-        bool requiredOnRun = true)
+        bool requiredOnRun = true,
+        string? checkoutDirectoryName = null,
+        string? checkoutDirectoryNameConfigurationKey = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+
+        var configurationKey = GetConfigurationKey(
+            moduleName,
+            checkoutDirectoryNameConfigurationKey);
+        var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+        var usesCanonicalCheckout = normalizedRevision is null &&
+            RepositoryIdentity.IsRemoteRepository(repository, AppHostDirectory);
+        if (checkoutDirectoryName is not null)
+        {
+            _ = RepositoryIdentity.ValidateCheckoutDirectoryName(
+                checkoutDirectoryName,
+                configurationKey,
+                normalizedRevision,
+                SiblingParent);
+        }
 
         var fullRepositoryPath = Path.GetFullPath(repositoryPath);
         RepositoryIdentity.EnsureDirectSibling(
@@ -173,10 +217,44 @@ internal sealed class ModuleRepositoryPlanRegistry
         var normalizedRepository = RepositoryIdentity.NormalizeRepositoryIdentity(
             repository,
             AppHostDirectory);
+        var identityKey = CreateIdentityKey(normalizedRepository, normalizedRevision);
+        if (_requirementsByIdentity.TryGetValue(identityKey, out var equivalent))
+        {
+            if (!PathSafety.AreEqual(equivalent.RepositoryPath, fullRepositoryPath))
+            {
+                throw CreateEquivalentIdentityPathException(
+                    equivalent,
+                    normalizedRepository,
+                    fullRepositoryPath,
+                    configurationKey);
+            }
+
+            equivalent.EnsureCompatible(normalizedRepository, normalizedRevision, updateOnInitialize);
+            equivalent.AddConsumer(moduleName, configurationKey);
+            if (requiredOnRun)
+            {
+                equivalent.RequireOnRun();
+            }
+
+            return new ModuleRepositoryPlanRegistration(equivalent, IsNew: false);
+        }
+
         if (_requirements.TryGetValue(fullRepositoryPath, out var existing))
         {
+            if (!string.Equals(
+                    existing.NormalizedRepository,
+                    normalizedRepository,
+                    StringComparison.Ordinal))
+            {
+                throw CreateCanonicalPathCollisionException(
+                    existing,
+                    normalizedRepository,
+                    fullRepositoryPath,
+                    configurationKey);
+            }
+
             existing.EnsureCompatible(normalizedRepository, revision, updateOnInitialize);
-            existing.AddModule(moduleName);
+            existing.AddConsumer(moduleName, configurationKey);
             if (requiredOnRun)
             {
                 existing.RequireOnRun();
@@ -197,10 +275,56 @@ internal sealed class ModuleRepositoryPlanRegistry
             revision,
             updateOnInitialize,
             stepKey,
-            requiredOnRun);
+            requiredOnRun,
+            usesCanonicalCheckout,
+            configurationKey);
         _requirements.Add(fullRepositoryPath, requirement);
+        _requirementsByIdentity.Add(identityKey, requirement);
         return new ModuleRepositoryPlanRegistration(requirement, IsNew: true);
     }
+
+    private static string GetConfigurationKey(string moduleName, string? configurationKey) =>
+        string.IsNullOrWhiteSpace(configurationKey)
+            ? $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:{moduleName}:CheckoutDirectoryName"
+            : configurationKey.Trim();
+
+    private static string CreateIdentityKey(string normalizedRepository, string? revision) =>
+        $"{normalizedRepository}\n{revision ?? string.Empty}";
+
+    private static InvalidOperationException CreateCanonicalPathCollisionException(
+        ModuleRepositoryRequirement existing,
+        string normalizedRepository,
+        string repositoryPath,
+        string configurationKey)
+    {
+        var existingKeys = FormatConfigurationKeys(existing.CheckoutDirectoryNameConfigurationKeys);
+        return new InvalidOperationException(
+            $"Repository identities '{existing.NormalizedRepository}' ({existingKeys}) and " +
+            $"'{normalizedRepository}' (configuration key '{configurationKey}') resolve to the same canonical " +
+            $"checkout path '{repositoryPath}'. Configure an explicit distinct CheckoutDirectoryName using " +
+            $"{existingKeys} or configuration key '{configurationKey}'.");
+    }
+
+    private static InvalidOperationException CreateEquivalentIdentityPathException(
+        ModuleRepositoryRequirement existing,
+        string normalizedRepository,
+        string repositoryPath,
+        string configurationKey)
+    {
+        var existingKeys = FormatConfigurationKeys(existing.CheckoutDirectoryNameConfigurationKeys);
+        return new InvalidOperationException(
+            $"Equivalent repository identity '{normalizedRepository}' resolves to both " +
+            $"'{existing.RepositoryPath}' ({existingKeys}) and '{repositoryPath}' " +
+            $"(configuration key '{configurationKey}'). Equivalent repositories must share one repository plan; " +
+            "configure the same CheckoutDirectoryName for every use.");
+    }
+
+    private static string FormatConfigurationKeys(IEnumerable<string> configurationKeys) =>
+        string.Join(
+            ", ",
+            configurationKeys
+                .Order(StringComparer.Ordinal)
+                .Select(key => $"configuration key '{key}'"));
 }
 
 internal static class RepositoryIdentity
@@ -250,16 +374,37 @@ internal static class RepositoryIdentity
         string siblingParent,
         string repository,
         string? revision,
-        string baseDirectory)
+        string baseDirectory,
+        string? checkoutDirectoryName = null,
+        string? checkoutDirectoryNameConfigurationKey = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(siblingParent);
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
         var normalizedRepository = NormalizeRepositoryIdentity(repository, baseDirectory);
+        var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+        var configurationKey = string.IsNullOrWhiteSpace(checkoutDirectoryNameConfigurationKey)
+            ? $"{ModularAppHostsOptions.ConfigurationSectionName}:Modules:<module>:CheckoutDirectoryName"
+            : checkoutDirectoryNameConfigurationKey.Trim();
+        if (checkoutDirectoryName is not null)
+        {
+            checkoutDirectoryName = ValidateCheckoutDirectoryName(
+                checkoutDirectoryName,
+                configurationKey,
+                normalizedRevision,
+                siblingParent);
+        }
+
+        if (normalizedRevision is null && IsRemoteRepository(repository, baseDirectory))
+        {
+            var canonicalDirectoryName = checkoutDirectoryName ??
+                CreateSlug(GetRepositoryName(normalizedRepository), MaximumDirectoryNameLength);
+            return Path.Combine(Path.GetFullPath(siblingParent), canonicalDirectoryName);
+        }
+
         var repositorySlug = CreateSlug(GetRepositoryName(normalizedRepository), 30);
         var repositoryHash = GetStableHash(normalizedRepository);
         var directoryName = $"{repositorySlug}-{repositoryHash}";
-        var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
         if (normalizedRevision is not null)
         {
             var revisionSlug = CreateSlug(normalizedRevision, 18);
@@ -275,6 +420,35 @@ internal static class RepositoryIdentity
         }
 
         return Path.Combine(Path.GetFullPath(siblingParent), directoryName);
+    }
+
+    public static string ValidateCheckoutDirectoryName(
+        string value,
+        string configurationKey,
+        string? revision,
+        string siblingParent)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentException.ThrowIfNullOrWhiteSpace(configurationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(siblingParent);
+        var reason = GetInvalidCheckoutDirectoryNameReason(value, revision);
+        if (reason is not null)
+        {
+            throw new InvalidOperationException(
+                $"Checkout directory name '{FormatDiagnosticValue(value)}' from configuration key " +
+                $"'{configurationKey}' is invalid: {reason}.");
+        }
+
+        var siblingParentPath = Path.GetFullPath(siblingParent);
+        var destination = Path.GetFullPath(Path.Combine(siblingParentPath, value));
+        if (!PathSafety.AreEqual(Path.GetDirectoryName(destination), siblingParentPath))
+        {
+            throw new InvalidOperationException(
+                $"Checkout directory name '{FormatDiagnosticValue(value)}' from configuration key " +
+                $"'{configurationKey}' is invalid: it resolves outside sibling parent '{siblingParentPath}'.");
+        }
+
+        return value;
     }
 
     public static string NormalizeRepositoryIdentity(string repository, string baseDirectory)
@@ -462,6 +636,78 @@ internal static class RepositoryIdentity
         var separator = normalizedRepository.LastIndexOf('/');
         return separator < 0 ? normalizedRepository : normalizedRepository[(separator + 1)..];
     }
+
+    private static string? GetInvalidCheckoutDirectoryNameReason(string value, string? revision)
+    {
+        if (!string.IsNullOrWhiteSpace(revision))
+        {
+            return $"it cannot be used with pinned repository revision '{FormatDiagnosticValue(revision)}'";
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "it must contain exactly one non-empty filename segment";
+        }
+
+        if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        {
+            return "leading or trailing whitespace is not allowed";
+        }
+
+        if (value.Length > 255)
+        {
+            return "filename segments longer than 255 characters are not allowed";
+        }
+
+        if (value is "." or "..")
+        {
+            return "'.' and '..' are traversal segments";
+        }
+
+        if (Path.IsPathRooted(value) ||
+            (value.Length >= 3 && char.IsAsciiLetter(value[0]) && value[1] == ':' &&
+                value[2] is '/' or '\\'))
+        {
+            return "rooted paths are not allowed";
+        }
+
+        if (value.IndexOfAny(['/', '\\']) >= 0)
+        {
+            return "directory separators and multi-segment paths are not allowed";
+        }
+
+        if (value.Any(character =>
+                char.IsControl(character) ||
+                character is '<' or '>' or ':' or '"' or '|' or '?' or '*' ||
+                Path.GetInvalidFileNameChars().Contains(character)))
+        {
+            return "invalid filename characters are not allowed";
+        }
+
+        if (value.EndsWith('.'))
+        {
+            return "filename segments ending in a period are not portable";
+        }
+
+        var stem = value.Split('.', 2)[0];
+        if (stem.Equals("CON", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("PRN", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) ||
+            stem.Equals("NUL", StringComparison.OrdinalIgnoreCase) ||
+            (stem.Length == 4 &&
+                (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+                 stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+                stem[3] is >= '1' and <= '9'))
+        {
+            return "reserved filename segments are not allowed";
+        }
+
+        return null;
+    }
+
+    private static string FormatDiagnosticValue(string value) =>
+        value.Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
 
     private static string CreateSlug(string value, int maximumLength)
     {

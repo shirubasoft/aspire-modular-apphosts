@@ -3,6 +3,7 @@
 
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Xunit;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
@@ -42,6 +43,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             updateOnInitialize: true).Requirement;
 
         Assert.Equal(workspace.Path, Path.GetDirectoryName(branch.RepositoryPath));
+        Assert.Equal("services", Path.GetFileName(branch.RepositoryPath));
         Assert.Equal(workspace.Path, Path.GetDirectoryName(revision.RepositoryPath));
         Assert.NotEqual(branch.RepositoryPath, revision.RepositoryPath);
         Assert.Contains("-rev-", revision.RepositoryPath, StringComparison.Ordinal);
@@ -49,7 +51,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
-    public void Distinct_remotes_with_the_same_repository_name_get_distinct_deterministic_siblings()
+    public void Distinct_remotes_with_the_same_repository_name_require_explicit_distinct_siblings()
     {
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
@@ -58,24 +60,108 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             "catalog",
             "https://github.com/acme/services.git",
             revision: null,
-            updateOnInitialize: true).Requirement;
+            updateOnInitialize: true,
+            checkoutDirectoryNameConfigurationKey:
+                "Aspire:ModularAppHosts:Modules:catalog:CheckoutDirectoryName").Requirement;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "orders",
+            "https://gitlab.example.test/acme/services.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryNameConfigurationKey:
+                "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName"));
+
+        Assert.Contains(github.NormalizedRepository, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("gitlab.example.test/acme/services", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(github.RepositoryPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:catalog:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("explicit distinct CheckoutDirectoryName", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Explicit_names_resolve_same_repository_name_collisions()
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var github = registry.Register(
+            "catalog",
+            "https://github.com/acme/services.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryName: "services-github").Requirement;
         var gitlab = registry.Register(
             "orders",
             "https://gitlab.example.test/acme/services.git",
             revision: null,
-            updateOnInitialize: true).Requirement;
-        var repeatedPlan = new ModuleRepositoryPlanRegistry(workspace.AppHostPath).Register(
-            "catalog",
-            "https://github.com/acme/services.git",
-            revision: null,
-            updateOnInitialize: true).Requirement;
+            updateOnInitialize: true,
+            checkoutDirectoryName: "services-gitlab").Requirement;
 
         Assert.NotEqual(github.NormalizedRepository, gitlab.NormalizedRepository);
         Assert.NotEqual(github.RepositoryPath, gitlab.RepositoryPath);
-        Assert.StartsWith("services-", Path.GetFileName(github.RepositoryPath), StringComparison.Ordinal);
-        Assert.StartsWith("services-", Path.GetFileName(gitlab.RepositoryPath), StringComparison.Ordinal);
-        Assert.Equal(github.RepositoryPath, repeatedPlan.RepositoryPath);
+        Assert.Equal("services-github", Path.GetFileName(github.RepositoryPath));
+        Assert.Equal("services-gitlab", Path.GetFileName(gitlab.RepositoryPath));
         Assert.Equal(2, registry.Requirements.Count);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("../services")]
+    [InlineData("nested/services")]
+    [InlineData("nested\\services")]
+    [InlineData("/absolute")]
+    [InlineData("C:\\absolute")]
+    [InlineData("services*invalid")]
+    public void Invalid_checkout_directory_names_report_the_value_and_configuration_key(string value)
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+        const string configurationKey =
+            "Aspire:ModularAppHosts:Modules:catalog:CheckoutDirectoryName";
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "catalog",
+            "https://github.com/acme/services.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryName: value,
+            checkoutDirectoryNameConfigurationKey: configurationKey));
+
+        Assert.Contains(value.Replace("\r", "\\r").Replace("\n", "\\n"), exception.Message, StringComparison.Ordinal);
+        Assert.Contains(configurationKey, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("invalid", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Pinned_repository_rejects_checkout_directory_name_override()
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+        const string configurationKey =
+            "Aspire:ModularAppHosts:Modules:catalog:CheckoutDirectoryName";
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "catalog",
+            "https://github.com/acme/services.git",
+            revision: "v2",
+            updateOnInitialize: true,
+            checkoutDirectoryName: "services-v2",
+            checkoutDirectoryNameConfigurationKey: configurationKey));
+
+        Assert.Contains("services-v2", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(configurationKey, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("pinned repository revision 'v2'", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -188,15 +274,19 @@ public sealed class ModuleRepositoryInitializationPipelineTests
         Assert.Contains(ModuleRepositoryInitializationPipeline.RepositoryStepTag, repository.Tags);
     }
 
-    [Fact]
-    public async Task Repository_state_file_round_trips_credential_free_initialization_state()
+    [Theory]
+    [InlineData(nameof(ModuleRepositoryCheckoutOwnership.Created))]
+    [InlineData(nameof(ModuleRepositoryCheckoutOwnership.Adopted))]
+    public async Task Repository_state_file_round_trips_credential_free_initialization_state(
+        string ownershipName)
     {
+        var ownership = Enum.Parse<ModuleRepositoryCheckoutOwnership>(ownershipName);
         using var workspace = CreateGitWorkspace();
         var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
         var requirement = registry.Register(
             "catalog",
             "https://build-user:secret@github.com/acme/services.git?token=secret",
-            revision: "v2.0.0",
+            revision: null,
             updateOnInitialize: true).Requirement;
         var statePath = Path.Combine(workspace.Path, "modular-apphosts.json");
         using var store = new FileModuleRepositoryStateStore(statePath);
@@ -208,6 +298,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             requirement.ConfigurationFingerprint,
             requirement.NormalizedRepository,
             "0123456789abcdef0123456789abcdef01234567",
+            ownership,
             DateTimeOffset.UtcNow);
 
         await store.WriteAsync(
@@ -224,11 +315,66 @@ public sealed class ModuleRepositoryInitializationPipelineTests
 
         Assert.Equal(state, restored);
         Assert.True(restored!.Matches(requirement));
-        Assert.Contains("\"schemaVersion\": 1", serialized, StringComparison.Ordinal);
+        Assert.Contains("\"schemaVersion\": 2", serialized, StringComparison.Ordinal);
+        Assert.Contains($"\"ownership\": \"{ownership}\"", serialized, StringComparison.Ordinal);
         Assert.Contains("\"repositories\"", serialized, StringComparison.Ordinal);
         Assert.Contains(requirement.StepKey, serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("secret", serialized, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("build-user", serialized, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Repository_state_records_upgrade_inside_the_existing_state_file_envelope()
+    {
+        using var workspace = CreateGitWorkspace();
+        var requirement = new ModuleRepositoryPlanRegistry(workspace.AppHostPath).Register(
+            "catalog",
+            "acme/services",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var statePath = Path.Combine(workspace.Path, "modular-apphosts.json");
+        var legacyRecord = new
+        {
+            schemaVersion = 1,
+            repository = requirement.NormalizedRepository,
+            destination = requirement.RepositoryPath,
+            revision = requirement.Revision,
+            configurationFingerprint = requirement.ConfigurationFingerprint,
+            origin = requirement.NormalizedRepository,
+            resolvedCommit = "0123456789abcdef0123456789abcdef01234567",
+            initializedAtUtc = DateTimeOffset.UtcNow
+        };
+        var legacyDocument = new
+        {
+            schemaVersion = 1,
+            repositories = new Dictionary<string, object>
+            {
+                [requirement.StepKey] = legacyRecord
+            }
+        };
+        await File.WriteAllTextAsync(
+            statePath,
+            JsonSerializer.Serialize(legacyDocument),
+            TestContext.Current.CancellationToken);
+        using var store = new FileModuleRepositoryStateStore(statePath);
+        var expected = CreateState(requirement) with
+        {
+            Ownership = ModuleRepositoryCheckoutOwnership.Adopted
+        };
+
+        await store.WriteAsync(requirement, expected, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            expected,
+            await store.ReadAsync(requirement, TestContext.Current.CancellationToken));
+        using var upgradedDocument = JsonDocument.Parse(
+            await File.ReadAllTextAsync(statePath, TestContext.Current.CancellationToken));
+        Assert.Equal(1, upgradedDocument.RootElement.GetProperty("schemaVersion").GetInt32());
+        var upgradedRecord = upgradedDocument.RootElement
+            .GetProperty("repositories")
+            .GetProperty(requirement.StepKey);
+        Assert.Equal(2, upgradedRecord.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("Adopted", upgradedRecord.GetProperty("ownership").GetString());
     }
 
     [Fact]
@@ -445,6 +591,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             requirement.ConfigurationFingerprint,
             requirement.NormalizedRepository,
             "0123456789abcdef0123456789abcdef01234567",
+            ModuleRepositoryCheckoutOwnership.Created,
             DateTimeOffset.UtcNow);
 
     private sealed class GitWorkspace(TemporaryDirectory temporaryDirectory, string appHostPath)

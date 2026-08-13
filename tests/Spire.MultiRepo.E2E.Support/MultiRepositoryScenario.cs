@@ -13,6 +13,7 @@ internal static partial class Program
     private const string ResourceName = "multi-repo-api";
     private const string PinnedMarker = "multi-repo-resource-pinned-revision";
     private const string LatestMarker = "multi-repo-resource-unpinned-latest";
+    private const string AdoptedUpstreamMarker = "multi-repo-resource-adopted-upstream";
     private const string InitializedMarker = "multi-repo-resource-initialized-update";
     private const string RefreshMarker = "multi-repo-resource-runtime-refresh";
     private const string DirtyMarker = "multi-repo-resource-dirty-rebuild";
@@ -126,6 +127,14 @@ internal static partial class Program
                     ["remote", "get-url", "origin"],
                     cancellationToken).ConfigureAwait(false)),
                 "The pinned checkout has the wrong producer origin.");
+            AssertContains(
+                Path.GetFileName(pinnedCheckout),
+                "-rev-",
+                "The pinned checkout did not use an isolated hashed revision sibling.");
+            AssertRepositoryState(
+                pinnedCheckout,
+                "Created",
+                normalizedRepository: null);
             AssertInitializationLifecycle(
                 pinnedInitialization.CombinedOutput,
                 pinnedCheckout,
@@ -159,6 +168,57 @@ internal static partial class Program
             AssertNoRepositoryMutation(ReadGitProxyOperations());
             AssertConfiguredContainerRuntimeUsed(ReadRuntimeProxyOperations());
 
+            await WritePhaseAsync("Adopt an existing matching canonical sibling without moving it")
+                .ConfigureAwait(false);
+            var adoptedCheckout = Path.Combine(temporaryRoot, "resource-build-adopted");
+            await RunGitAsync(
+                temporaryRoot,
+                ["clone", _resourceRepository, adoptedCheckout],
+                cancellationToken).ConfigureAwait(false);
+            await RunGitAsync(
+                adoptedCheckout,
+                ["remote", "set-url", "origin", _remoteRepository],
+                cancellationToken).ConfigureAwait(false);
+            var adoptedRevision = await GetRevisionAsync(adoptedCheckout, cancellationToken)
+                .ConfigureAwait(false);
+            _latestRevision = await CommitMarkerAsync(
+                AdoptedUpstreamMarker,
+                "Advance upstream before adopting the canonical checkout",
+                cancellationToken).ConfigureAwait(false);
+            var adoptedEnvironment = CreateAppHostEnvironment(
+                _remoteRepository,
+                revision: null,
+                GitProxyPolicy.Initialize,
+                checkoutDirectoryName: Path.GetFileName(adoptedCheckout));
+            DeleteGitProxyLog();
+            await RunInitializeAsync(adoptedEnvironment, cancellationToken).ConfigureAwait(false);
+            AssertEqual(
+                adoptedRevision,
+                await GetRevisionAsync(adoptedCheckout, cancellationToken).ConfigureAwait(false),
+                "Initialization moved an adopted developer checkout after upstream advanced.");
+            AssertNoRepositoryMutation(ReadGitProxyOperations());
+            AssertRepositoryState(adoptedCheckout, "Adopted");
+
+            var adoptedDeveloperFile = Path.Combine(adoptedCheckout, "developer-note.txt");
+            await File.WriteAllTextAsync(
+                adoptedDeveloperFile,
+                "developer-owned",
+                cancellationToken).ConfigureAwait(false);
+            DeleteGitProxyLog();
+            await RunInitializeAsync(adoptedEnvironment, cancellationToken).ConfigureAwait(false);
+            AssertEqual(
+                adoptedRevision,
+                await GetRevisionAsync(adoptedCheckout, cancellationToken).ConfigureAwait(false),
+                "Repeated initialization moved an adopted dirty checkout.");
+            if (!File.Exists(adoptedDeveloperFile))
+            {
+                throw new InvalidOperationException(
+                    "Repeated initialization removed a developer-owned file from the adopted checkout.");
+            }
+
+            AssertNoRepositoryMutation(ReadGitProxyOperations());
+            AssertRepositoryState(adoptedCheckout, "Adopted");
+
             await WritePhaseAsync("Fail fast and initialize a remote repository")
                 .ConfigureAwait(false);
             DeleteGitProxyLog();
@@ -171,8 +231,12 @@ internal static partial class Program
             var remoteInitialization = await RunInitializeAsync(remoteEnvironment, cancellationToken)
                 .ConfigureAwait(false);
             var remoteCheckout = GetNewSiblingGitDirectory(remoteDirectoriesBefore);
+            AssertEqual(
+                Path.Combine(temporaryRoot, "resource-build"),
+                remoteCheckout,
+                "The missing unpinned remote was not cloned into its canonical human-readable sibling.");
             AssertInitializationLifecycle(remoteInitialization.CombinedOutput, remoteCheckout, "clone");
-            AssertRepositoryStateUsesNormalizedOrigin();
+            AssertRepositoryState(remoteCheckout, "Created");
             AssertEqual(
                 _latestRevision,
                 await GetRevisionAsync(remoteCheckout, cancellationToken).ConfigureAwait(false),
@@ -601,7 +665,8 @@ internal static partial class Program
             string buildRepository,
             string? revision,
             GitProxyPolicy proxyPolicy,
-            bool refreshBuildRepositories = false)
+            bool refreshBuildRepositories = false,
+            string? checkoutDirectoryName = null)
         {
             var environment = CreatePackageEnvironment();
             var section = "Aspire__ModularAppHosts";
@@ -610,6 +675,7 @@ internal static partial class Program
             environment[$"{module}__Repository"] = _contractRepository;
             environment[$"{container}__BuildRepository"] = buildRepository;
             environment[$"{container}__BuildRepositoryRevision"] = revision;
+            environment[$"{container}__CheckoutDirectoryName"] = checkoutDirectoryName;
             environment[$"{section}__GitExecutablePath"] = _driverExecutable;
             environment[$"{section}__GitHubCliPath"] = _driverExecutable;
             environment[$"{section}__RefreshBuildRepositoriesOnRun"] = refreshBuildRepositories.ToString();
@@ -681,7 +747,10 @@ internal static partial class Program
             return added[0];
         }
 
-        private void AssertRepositoryStateUsesNormalizedOrigin()
+        private void AssertRepositoryState(
+            string repositoryPath,
+            string ownership,
+            string? normalizedRepository = "example.invalid/modular/resource-build")
         {
             var appHostIdentity = Path.GetFullPath(_appHost);
             var appHostHash = Convert.ToHexString(
@@ -702,10 +771,33 @@ internal static partial class Program
                 state,
                 "\"repositories\"",
                 "Initialization did not write the repository-state document.");
-            AssertContains(
-                state,
-                "example.invalid/modular/resource-build",
-                "Initialization state did not retain the normalized repository identity.");
+            if (normalizedRepository is not null)
+            {
+                AssertContains(
+                    state,
+                    normalizedRepository,
+                    "Initialization state did not retain the normalized repository identity.");
+            }
+            using var document = JsonDocument.Parse(state);
+            var matchingState = document.RootElement
+                .GetProperty("repositories")
+                .EnumerateObject()
+                .Select(property => property.Value)
+                .SingleOrDefault(value =>
+                    value.TryGetProperty("destination", out var destination) &&
+                    PathComparer.Equals(
+                        Path.GetFullPath(destination.GetString()!),
+                        Path.GetFullPath(repositoryPath)));
+            if (matchingState.ValueKind == JsonValueKind.Undefined)
+            {
+                throw new InvalidOperationException(
+                    $"Initialization state did not contain checkout '{repositoryPath}'.");
+            }
+
+            AssertEqual(
+                ownership,
+                matchingState.GetProperty("ownership").GetString(),
+                $"Initialization state recorded the wrong ownership for '{repositoryPath}'.");
 
             var legacyEnvironmentStateFile = Path.Combine(
                 Path.GetDirectoryName(stateFile)!,
