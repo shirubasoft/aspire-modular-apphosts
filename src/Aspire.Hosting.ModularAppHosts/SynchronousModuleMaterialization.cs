@@ -97,6 +97,11 @@ public static partial class DistributedApplicationModuleExtensions
         var moduleOptions = options.FindModule(module.Name);
         ValidateModuleConfiguration(module, moduleOptions);
         var resourceNames = new ModuleResourceNameMap(module, imported ? importOptions : null);
+        foreach (var project in module.ProjectDefinitions)
+        {
+            registry.ProjectModeSwitching?.RegisterProject(resourceNames[project.Name]);
+        }
+
         ValidateSynchronousResourceNames(
             builder,
             module,
@@ -109,9 +114,11 @@ public static partial class DistributedApplicationModuleExtensions
         var requiresRepository = RequiresRepositoryForSynchronousMaterialization(
             builder,
             module,
+            registry,
             options,
             moduleOptions,
-            imported);
+            imported,
+            resourceNames);
         var definitionRepository = ModuleMaterializationPlanning.ResolveDefinitionRepository(
             builder,
             module,
@@ -182,7 +189,40 @@ public static partial class DistributedApplicationModuleExtensions
     {
         var projectOptions = moduleOptions?.FindProject(project.Name);
         ValidatePublisherDigest(project.Name, project.IsExportedAsContainer, projectOptions);
-        if (project.Export.CommandOptions is null && !UsesExternalImage(projectOptions))
+        if (!builder.ExecutionContext.IsRunMode &&
+            project.Export.CommandOptions is null &&
+            !UsesExternalImage(projectOptions) &&
+            definitionRepository.InitializerOwned)
+        {
+            var projectPath = PathSafety.GetContainedPath(
+                definitionRepository.RepositoryPath,
+                project.GetRepositoryRelativeProjectPath(),
+                nameof(project.ProjectPath));
+            if (!File.Exists(projectPath))
+            {
+                MaterializeDeferredProjectResource(
+                    builder,
+                    module,
+                    project,
+                    resourceName,
+                    definitionRepository.RepositoryPath,
+                    imported,
+                    registry);
+                return;
+            }
+        }
+
+        var runAsContainer = builder.ExecutionContext.IsRunMode &&
+            ResolveProjectMode(
+                options,
+                moduleOptions,
+                projectOptions,
+                imported,
+                resourceName,
+                registry.ProjectModeSwitching) == ModuleProjectMode.Container;
+        if (project.Export.CommandOptions is null &&
+            !UsesExternalImage(projectOptions) &&
+            !runAsContainer)
         {
             MaterializeNativeProjectResource(
                 builder,
@@ -196,11 +236,23 @@ public static partial class DistributedApplicationModuleExtensions
             return;
         }
 
-        var runAsContainer = !builder.ExecutionContext.IsRunMode ||
-            ResolveProjectMode(options, moduleOptions, projectOptions, imported) == ModuleProjectMode.Container;
-        if (!runAsContainer)
+        if (!runAsContainer && builder.ExecutionContext.IsRunMode)
         {
             MaterializeProjectResourceSynchronously(
+                builder,
+                module,
+                project,
+                resourceName,
+                projectOptions,
+                definitionRepository.RepositoryPath,
+                imported,
+                registry);
+            return;
+        }
+
+        if (project.Export.CommandOptions is null && !UsesExternalImage(projectOptions))
+        {
+            MaterializeNativeProjectContainerResource(
                 builder,
                 module,
                 project,
@@ -860,6 +912,67 @@ public static partial class DistributedApplicationModuleExtensions
         module.TrackMaterializedResource(builder, project.Name, resource.Resource);
     }
 
+    private static void MaterializeDeferredProjectResource(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        DistributedApplicationModuleProject project,
+        string resourceName,
+        string repositoryPath,
+        bool imported,
+        ModuleApplicationRegistry registry)
+    {
+        var resource = builder
+            .AddResource(new ProjectResource(resourceName))
+            .WithAnnotation(new DistributedApplicationModuleResourceAnnotation(
+                module.Name,
+                project.Name,
+                repositoryPath,
+                imported,
+                module.PackageId));
+        ConfigureRepositoryLifecycle(builder, resource, registry);
+        registry.TrackResource(resource.Resource);
+        module.TrackMaterializedResource(builder, project.Name, resource.Resource);
+    }
+
+    private static void MaterializeNativeProjectContainerResource(
+        IDistributedApplicationBuilder builder,
+        DistributedApplicationModule module,
+        DistributedApplicationModuleProject project,
+        string resourceName,
+        DistributedApplicationModuleProjectOptions? options,
+        string repositoryPath,
+        bool imported,
+        ModuleApplicationRegistry registry)
+    {
+        var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
+        var imageName = GetConfiguredValue(options?.ImageName) ?? project.Export.ImageName;
+        var imageTag = workflow.ResolveTag(module.Name, project.Name) ??
+            GetConfiguredValue(options?.ImageTag) ??
+            "latest";
+        var imageRegistry = GetConfiguredValue(options?.ImageRegistry);
+        var container = builder.AddContainer(resourceName, imageName, imageTag);
+        ApplyImageRegistry(container, imageRegistry);
+        var image = new ModuleResourceImage(imageRegistry, imageName, imageTag);
+        FinalizeContainerResource(
+            builder,
+            container,
+            new NormalizedContainerDescriptor(
+                new ModuleContainerIdentity(
+                    module,
+                    project.Name,
+                    resourceName,
+                    repositoryPath,
+                    imported),
+                new ModuleContainerImagePlan(
+                    Publisher: null,
+                    Configured: options,
+                    ContextImage: image,
+                    OwnedImage: image),
+                project.Export.ConfigureContainer,
+                ModuleAnnotationAlreadyApplied: false),
+            registry);
+    }
+
     private static ModuleImageCommandOptions ApplyImageRecipeOptions(
         ModuleImageCommandOptions declared,
         DistributedApplicationModuleImageOptions? configured,
@@ -989,9 +1102,11 @@ public static partial class DistributedApplicationModuleExtensions
     private static bool RequiresRepositoryForSynchronousMaterialization(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
+        ModuleApplicationRegistry registry,
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
-        bool imported)
+        bool imported,
+        ModuleResourceNameMap resourceNames)
     {
         if (module.ExplicitlyRequiresRepositoryContent)
         {
@@ -1002,7 +1117,13 @@ public static partial class DistributedApplicationModuleExtensions
         {
             var configured = moduleOptions?.FindProject(project.Name);
             var runAsProject = builder.ExecutionContext.IsRunMode &&
-                ResolveProjectMode(options, moduleOptions, configured, imported) == ModuleProjectMode.Project;
+                ResolveProjectMode(
+                    options,
+                    moduleOptions,
+                    configured,
+                    imported,
+                    resourceNames[project.Name],
+                    registry.ProjectModeSwitching) == ModuleProjectMode.Project;
             if (runAsProject ||
                 (!UsesExternalImage(configured) &&
                  GetConfiguredValue(configured?.BuildRepository) is null &&

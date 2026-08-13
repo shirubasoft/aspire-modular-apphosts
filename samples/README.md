@@ -66,7 +66,19 @@ aspire
 
 AppHost A materializes its local module and opts into the module-declared image publishers. Development
 configuration sets `sample-api`'s `ProjectMode` to `Project`, so Aspire runs the project directly for
-debugging while publish mode retains its container representation. The `sample-generated-static`
+debugging while publish mode retains its container representation. Its AppHost project has a stable
+`UserSecretsId`, so the mode can also be changed without editing the checked-in setting:
+
+```bash
+aspire do build-sample-api --apphost ModularSample.AppHostA.csproj --non-interactive
+aspire do use-containers --apphost ModularSample.AppHostA.csproj --non-interactive
+# Restart with `aspire`; sample-api is now a container.
+aspire do use-project-sample-api --apphost ModularSample.AppHostA.csproj --non-interactive
+aspire do use-configured-modes --apphost ModularSample.AppHostA.csproj --non-interactive
+```
+
+The native image is built explicitly before selecting container mode; the switch itself only persists
+the next model choice. The `sample-generated-static`
 resource builds its Dockerfile-based image immediately before it starts, and `sample-static` runs directly
 from `busybox:1.37`, serving the message obtained from the module-owned parameter. Clean images are
 reused after their first build; dirty worktrees always rebuild the branch-and-commit tag with `-dirty`.
@@ -82,7 +94,7 @@ cd ../AppHostB
 aspire
 ```
 
-AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
+AppHost B supplies the existing local AppHost A repository through standard module configuration. Because that checkout is an explicit unpinned local path, no initialization step is needed. Its checked-in configuration keeps `sample-api` in project mode so a fresh checkout remains runnable without prebuilding the native image. It imports the complete module, injects the exported message parameter, and starts its own `dependency-gateway` container. In another terminal, verify readiness through Aspire:
 
 ```bash
 aspire wait sample-api
@@ -93,7 +105,7 @@ aspire wait dependency-gateway
 aspire describe --include-hidden
 ```
 
-The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported containers. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
+The dashboard graph shows `Reference` and `WaitFor` relationships from `dependency-gateway` to all three imported services. Open the gateway endpoint shown by the dashboard; `/health` returns HTTP 200 only while all three upstreams respond successfully.
 
 After confirming Docker or Podman is running, execute
 `MODULAR_SAMPLES_E2E=true dotnet test samples/ModularSamples.Tests/ModularSamples.Tests.csproj` from
@@ -128,4 +140,6 @@ on an external `Shirubasoft/spire` checkout.
 [`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
 flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
 which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
-starts the imported service; later initialization runs can fast-forward its clean checkout.
+starts the imported service; later initialization runs can fast-forward its clean checkout. The
+imported `notification-service` is a specialized project export, so its native project/container
+mode can also be selected through the generated `aspire do use-*-notification-service` steps.

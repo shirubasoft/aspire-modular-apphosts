@@ -226,6 +226,9 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
+
       - name: Restore the modular sample graph
         run: dotnet restore samples/ModularSamples.Tests/ModularSamples.Tests.csproj
 
@@ -389,6 +392,30 @@ jobs:
           --apphost samples/RemoteInitialization
           --non-interactive
 
+      - name: Select project mode
+        run: >-
+          dotnet tool run aspire -- "do" use-projects
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
+      - name: Verify the notification service resource step
+        run: >-
+          dotnet tool run aspire -- "do" use-project-notification-service
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
+      - name: Build the notification service image
+        run: >-
+          dotnet tool run aspire -- "do" build-notification-service
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
+      - name: Select container mode
+        run: >-
+          dotnet tool run aspire -- "do" use-containers
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
       - name: Start the initialized sample
         run: >-
           dotnet tool run aspire -- start
@@ -407,5 +434,12 @@ jobs:
         if: always()
         run: >-
           dotnet tool run aspire -- stop
+          --apphost samples/RemoteInitialization
+          --non-interactive
+
+      - name: Reset developer-local mode overrides
+        if: always()
+        run: >-
+          dotnet tool run aspire -- "do" use-configured-modes
           --apphost samples/RemoteInitialization
           --non-interactive

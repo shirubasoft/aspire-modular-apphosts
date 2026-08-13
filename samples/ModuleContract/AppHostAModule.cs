@@ -48,7 +48,15 @@ public static partial class AppHostAModule
                         .WithHttpEndpoint(name: "http")
                         .WithHttpHealthCheck("/health");
                 })
-                .ExportAsContainer("modular-sample-api");
+                .ExportAsContainer(
+                    "modular-sample-api",
+                    (context, container) =>
+                    {
+                        var message = context.GetResource<ParameterResource>(MessageResourceName);
+                        container
+                            .WithEnvironment("MODULE_MESSAGE", message)
+                            .WithHttpEndpoint(targetPort: 8080, name: "http");
+                    });
 
             module.AddResource<ProjectResource>(ProjectResourceName, context =>
                 context.ApplicationBuilder

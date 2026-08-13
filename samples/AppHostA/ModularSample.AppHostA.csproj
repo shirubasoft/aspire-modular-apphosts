@@ -1,6 +1,7 @@
 <Project Sdk="Aspire.AppHost.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <UserSecretsId>aspire-modular-apphosts-sample-a</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ModuleContract/ModularSample.ModuleContract.csproj" IsAspireProjectResource="false" />

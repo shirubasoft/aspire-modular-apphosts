@@ -15,7 +15,8 @@ public interface IDistributedApplicationModuleCatalog
 
 internal sealed class ModuleApplicationRegistry(
     ModularAppHostsOptions? options = null,
-    ModuleRepositoryPlanRegistry? repositoryPlans = null)
+    ModuleRepositoryPlanRegistry? repositoryPlans = null,
+    ModuleProjectModeSwitchingPipeline? projectModeSwitching = null)
     : IDistributedApplicationModuleCatalog
 {
     private readonly Dictionary<string, DistributedApplicationModule> _modules =
@@ -34,6 +35,8 @@ internal sealed class ModuleApplicationRegistry(
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
 
     internal ModuleRepositoryPlanRegistry? RepositoryPlans => _repositoryPlans;
+
+    internal ModuleProjectModeSwitchingPipeline? ProjectModeSwitching { get; } = projectModeSwitching;
 
     public IReadOnlyCollection<IDistributedApplicationModule> Modules => _modules.Values;
 

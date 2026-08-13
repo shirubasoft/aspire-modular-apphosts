@@ -406,6 +406,37 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 
 `ProjectMode` is honored only in Aspire run mode. Its `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Image, command, build-repository, and build-revision settings can override an already-declared publisher, but configuration cannot introduce a publisher that is absent from the module contract.
 
+### Developer-local mode switching
+
+Every specialized module project contributes pipeline steps for changing its next run without editing
+AppHost code or configuration. Enable .NET user secrets on the AppHost once:
+
+```bash
+dotnet user-secrets init --project src/MyApp.AppHost/MyApp.AppHost.csproj
+```
+
+Then select a mode from any directory by supplying the AppHost explicitly:
+
+```bash
+aspire do use-containers --apphost src/MyApp.AppHost --non-interactive
+aspire do use-project-orders-api --apphost src/MyApp.AppHost --non-interactive
+aspire do use-configured-orders-api --apphost src/MyApp.AppHost --non-interactive
+aspire do use-configured-modes --apphost src/MyApp.AppHost --non-interactive
+```
+
+`use-projects` and `use-containers` force every exported module project and clear prior resource
+exceptions. Each project also exposes `use-project-<resource>`, `use-container-<resource>`, and
+`use-configured-<resource>` using its effective Aspire name after import prefixes and aliases. A
+resource's `use-configured` step bypasses a temporary global choice and restores the ordinary
+project → module → global → `Auto` configuration hierarchy for that resource.
+
+Selections are stored as one versioned value named `Aspire:ModularAppHosts:ModeSwitch` in the
+AppHost's user-secrets file. They affect only run mode and never change publish output. Because the
+resource type is chosen while the AppHost model is constructed, stop and restart the AppHost after
+running a switch step. The step does not stop running resources. For native `ExportAsContainer(...)`
+projects, run `aspire do build-<resource>` first when the selected image is not already available to
+the configured Docker or Podman runtime.
+
 A complete external image identity—registry, repository name, and exactly one tag or digest with `PublishImage: false`—removes that resource's source dependency. When every source-backed publisher is overridden and the module has no project or repository-backed factory, the imported module remains checkout-free. `images apply` configures this mode for workflow images.
 
 Configured module, project, and container names are validated against exported definitions. A typo fails synchronously with the missing name and available names. Missing initialized repositories, initialization state records, project files, and build directories are aggregated by normal-run preflight into one actionable error.
