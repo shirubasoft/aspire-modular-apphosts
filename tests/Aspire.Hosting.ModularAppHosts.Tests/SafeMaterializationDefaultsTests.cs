@@ -77,6 +77,57 @@ public sealed class SafeMaterializationDefaultsTests
     }
 
     [Fact]
+    public void Native_exports_materialize_as_containers_when_container_mode_is_selected()
+    {
+        using var source = TemporaryDirectory.Create();
+        var projectPath = CreateProject(source.Path);
+        var builder = CreateBuilder(source.Path).UseModuleContainers();
+        ModuleResourceImage? callbackImage = null;
+        var module = builder.ExportModule("orders", definition =>
+            definition.AddProject("orders-api", projectPath)
+                .ExportAsContainer(
+                    "example/orders-api",
+                    (context, container) =>
+                    {
+                        callbackImage = context.Image;
+                        container.WithArgs("--container-mode");
+                    }));
+
+        builder.AddModule(module);
+
+        Assert.Empty(builder.Resources.OfType<ProjectResource>());
+        var container = Assert.Single(builder.Resources.OfType<ContainerResource>());
+        var image = Assert.Single(container.Annotations.OfType<ContainerImageAnnotation>());
+        Assert.Equal("example/orders-api", image.Image);
+        Assert.Equal("latest", image.Tag);
+        Assert.Equal("example/orders-api:latest", callbackImage?.Reference);
+        Assert.Empty(container.Annotations.OfType<ModuleNativeImagePublisherAnnotation>());
+        Assert.Contains(
+            container.Annotations.OfType<CommandLineArgsCallbackAnnotation>(),
+            annotation => annotation.Callback is not null);
+    }
+
+    [Fact]
+    public void Auto_mode_materializes_imported_native_exports_as_containers()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var appHost = TemporaryDirectory.Create();
+        var projectPath = CreateProject(source.Path);
+        var builder = CreateBuilder(appHost.Path);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(source.Path);
+            definition.AddProject("orders-api", projectPath)
+                .ExportAsContainer("example/orders-api");
+        });
+
+        builder.ImportModule(module.Name);
+
+        Assert.Empty(builder.Resources.OfType<ProjectResource>());
+        Assert.Single(builder.Resources.OfType<ContainerResource>());
+    }
+
+    [Fact]
     public void Fluent_container_mode_selects_containers_with_deferred_preparation()
     {
         using var source = TemporaryDirectory.Create();

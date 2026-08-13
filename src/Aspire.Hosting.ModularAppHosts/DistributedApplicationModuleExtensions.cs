@@ -218,7 +218,9 @@ public static partial class DistributedApplicationModuleExtensions
         var options = optionsModel.CreateSnapshot(builder.Configuration);
         ValidateOptions(options);
         optionsModel.Freeze();
-        var registry = new ModuleApplicationRegistry(options);
+        var registry = new ModuleApplicationRegistry(
+            options,
+            projectModeSwitching: new ModuleProjectModeSwitchingPipeline(builder));
         builder.Services.AddSingleton(_ => new ModuleRepositoryDeploymentStateManager(
             ModuleRepositoryDeploymentStateManager.ResolveStateFilePath(
                 builder.Configuration["AppHost:PathSha256"],
@@ -362,15 +364,17 @@ public static partial class DistributedApplicationModuleExtensions
         ModularAppHostsOptions options,
         DistributedApplicationModuleOptions? moduleOptions,
         DistributedApplicationModuleProjectOptions? projectOptions,
-        bool imported)
+        bool imported,
+        string effectiveResourceName,
+        ModuleProjectModeSwitchingPipeline? switching)
     {
         var mode = projectOptions?.ProjectMode ??
             moduleOptions?.ProjectMode ??
             options.ProjectMode;
 
-        return mode == ModuleProjectMode.Auto
+        return switching?.Resolve(effectiveResourceName, mode, imported) ?? (mode == ModuleProjectMode.Auto
             ? imported ? ModuleProjectMode.Container : ModuleProjectMode.Project
-            : mode;
+            : mode);
     }
 
     private static string? GetConfiguredValue(string? value) =>

@@ -226,6 +226,9 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Restore the pinned Aspire CLI
+        run: dotnet tool restore
+
       - name: Restore the modular sample graph
         run: dotnet restore samples/ModularSamples.Tests/ModularSamples.Tests.csproj
 
