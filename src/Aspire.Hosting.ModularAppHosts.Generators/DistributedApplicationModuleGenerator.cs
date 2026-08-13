@@ -117,7 +117,8 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         var modules = context.SyntaxProvider.ForAttributeWithMetadataName(
             AttributeMetadataName,
             static (node, _) => node is ClassDeclarationSyntax,
-            static (attributeContext, cancellationToken) => CreateModel(attributeContext, cancellationToken));
+            static (attributeContext, cancellationToken) => CreateModel(attributeContext, cancellationToken))
+            .WithTrackingName("ModuleModels");
 
         context.RegisterSourceOutput(modules, static (sourceContext, module) => Generate(sourceContext, module));
     }
@@ -859,7 +860,7 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         return builder.Append(".Module.g.cs").ToString();
     }
 
-    private sealed class ModuleModel
+    private sealed class ModuleModel : IEquatable<ModuleModel>
     {
         public ModuleModel(
             string? @namespace,
@@ -912,9 +913,51 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public ImmutableArray<DiagnosticInfo> Diagnostics { get; }
 
         public bool CanGenerate { get; }
+
+        public bool Equals(ModuleModel? other) =>
+            other is not null &&
+            string.Equals(Namespace, other.Namespace, StringComparison.Ordinal) &&
+            string.Equals(TypeName, other.TypeName, StringComparison.Ordinal) &&
+            string.Equals(AddExtensionMethodName, other.AddExtensionMethodName, StringComparison.Ordinal) &&
+            string.Equals(ImportExtensionMethodName, other.ImportExtensionMethodName, StringComparison.Ordinal) &&
+            string.Equals(Accessibility, other.Accessibility, StringComparison.Ordinal) &&
+            string.Equals(ModuleName, other.ModuleName, StringComparison.Ordinal) &&
+            string.Equals(ModuleVersion, other.ModuleVersion, StringComparison.Ordinal) &&
+            string.Equals(PackageId, other.PackageId, StringComparison.Ordinal) &&
+            HasConventionalDefineMethod == other.HasConventionalDefineMethod &&
+            Resources.SequenceEqual(other.Resources) &&
+            Diagnostics.SequenceEqual(other.Diagnostics) &&
+            CanGenerate == other.CanGenerate;
+
+        public override bool Equals(object? obj) => Equals(obj as ModuleModel);
+
+        public override int GetHashCode()
+        {
+            var hashCode = 17;
+            hashCode = CombineHashCode(hashCode, Namespace);
+            hashCode = CombineHashCode(hashCode, TypeName);
+            hashCode = CombineHashCode(hashCode, AddExtensionMethodName);
+            hashCode = CombineHashCode(hashCode, ImportExtensionMethodName);
+            hashCode = CombineHashCode(hashCode, Accessibility);
+            hashCode = CombineHashCode(hashCode, ModuleName);
+            hashCode = CombineHashCode(hashCode, ModuleVersion);
+            hashCode = CombineHashCode(hashCode, PackageId);
+            hashCode = CombineHashCode(hashCode, HasConventionalDefineMethod);
+            foreach (var resource in Resources)
+            {
+                hashCode = CombineHashCode(hashCode, resource);
+            }
+
+            foreach (var diagnostic in Diagnostics)
+            {
+                hashCode = CombineHashCode(hashCode, diagnostic);
+            }
+
+            return CombineHashCode(hashCode, CanGenerate);
+        }
     }
 
-    private sealed class ResourceModel
+    private sealed class ResourceModel : IEquatable<ResourceModel>
     {
         public ResourceModel(
             string resourceName,
@@ -947,9 +990,37 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public int SpanStart { get; }
 
         public Location Location { get; }
+
+        public bool Equals(ResourceModel? other) =>
+            other is not null &&
+            string.Equals(ResourceName, other.ResourceName, StringComparison.Ordinal) &&
+            string.Equals(PropertyName, other.PropertyName, StringComparison.Ordinal) &&
+            string.Equals(TypeName, other.TypeName, StringComparison.Ordinal) &&
+            ExperimentalDiagnosticIds.SequenceEqual(other.ExperimentalDiagnosticIds, StringComparer.Ordinal) &&
+            string.Equals(FilePath, other.FilePath, StringComparison.Ordinal) &&
+            SpanStart == other.SpanStart &&
+            LocationsEqual(Location, other.Location);
+
+        public override bool Equals(object? obj) => Equals(obj as ResourceModel);
+
+        public override int GetHashCode()
+        {
+            var hashCode = 17;
+            hashCode = CombineHashCode(hashCode, ResourceName);
+            hashCode = CombineHashCode(hashCode, PropertyName);
+            hashCode = CombineHashCode(hashCode, TypeName);
+            foreach (var diagnosticId in ExperimentalDiagnosticIds)
+            {
+                hashCode = CombineHashCode(hashCode, diagnosticId);
+            }
+
+            hashCode = CombineHashCode(hashCode, FilePath);
+            hashCode = CombineHashCode(hashCode, SpanStart);
+            return CombineHashCode(hashCode, GetLocationHashCode(Location));
+        }
     }
 
-    private sealed class DiagnosticInfo
+    private sealed class DiagnosticInfo : IEquatable<DiagnosticInfo>
     {
         public DiagnosticInfo(DiagnosticDescriptor descriptor, Location location, params object[] messageArguments)
         {
@@ -963,5 +1034,49 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         public Location Location { get; }
 
         public object[] MessageArguments { get; }
+
+        public bool Equals(DiagnosticInfo? other) =>
+            other is not null &&
+            ReferenceEquals(Descriptor, other.Descriptor) &&
+            LocationsEqual(Location, other.Location) &&
+            MessageArguments.SequenceEqual(other.MessageArguments);
+
+        public override bool Equals(object? obj) => Equals(obj as DiagnosticInfo);
+
+        public override int GetHashCode()
+        {
+            var hashCode = CombineHashCode(17, Descriptor.Id);
+            hashCode = CombineHashCode(hashCode, GetLocationHashCode(Location));
+            foreach (var messageArgument in MessageArguments)
+            {
+                hashCode = CombineHashCode(hashCode, messageArgument);
+            }
+
+            return hashCode;
+        }
     }
+
+    private static bool LocationsEqual(Location left, Location right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        return left.Kind == right.Kind &&
+            left.SourceSpan.Equals(right.SourceSpan) &&
+            string.Equals(left.SourceTree?.FilePath, right.SourceTree?.FilePath, StringComparison.Ordinal) &&
+            left.GetMappedLineSpan().Equals(right.GetMappedLineSpan());
+    }
+
+    private static int GetLocationHashCode(Location location)
+    {
+        var hashCode = CombineHashCode(17, location.Kind);
+        hashCode = CombineHashCode(hashCode, location.SourceSpan);
+        hashCode = CombineHashCode(hashCode, location.SourceTree?.FilePath);
+        return CombineHashCode(hashCode, location.GetMappedLineSpan());
+    }
+
+    private static int CombineHashCode(int hashCode, object? value) =>
+        unchecked((hashCode * 31) + (value?.GetHashCode() ?? 0));
 }

@@ -9,6 +9,96 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class DistributedApplicationModuleGeneratorTests
 {
     [Fact]
+    public void Generator_caches_equivalent_models_and_invalidates_changed_models()
+    {
+        const string moduleSource = """
+            using Aspire.Hosting;
+
+            [GenerateDistributedApplicationModule("orders")]
+            public static partial class OrdersModule
+            {
+                public static void Define(IDistributedApplicationModuleBuilder module)
+                {
+                    module.AddContainer("cache", "redis");
+                }
+            }
+            """;
+        const string initialUnrelatedSource = """
+            public static class Unrelated
+            {
+                public const int Value = 1;
+            }
+            """;
+        const string updatedUnrelatedSource = """
+            public static class Unrelated
+            {
+                public const int Value = 2;
+            }
+            """;
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Latest);
+        var moduleTree = CSharpSyntaxTree.ParseText(
+            moduleSource,
+            parseOptions,
+            path: "OrdersModule.cs",
+            cancellationToken: cancellationToken);
+        var unrelatedTree = CSharpSyntaxTree.ParseText(
+            initialUnrelatedSource,
+            parseOptions,
+            path: "Unrelated.cs",
+            cancellationToken: cancellationToken);
+        var compilation = CSharpCompilation.Create(
+            "GeneratorCachingTests",
+            [moduleTree, unrelatedTree],
+            GetMetadataReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(
+            [new DistributedApplicationModuleGenerator().AsSourceGenerator()],
+            additionalTexts: [],
+            parseOptions: parseOptions,
+            optionsProvider: null,
+            driverOptions: new GeneratorDriverOptions(
+                IncrementalGeneratorOutputKind.None,
+                trackIncrementalGeneratorSteps: true));
+
+        driver = driver.RunGenerators(compilation, cancellationToken);
+        var updatedUnrelatedTree = CSharpSyntaxTree.ParseText(
+            updatedUnrelatedSource,
+            parseOptions,
+            path: "Unrelated.cs",
+            cancellationToken: cancellationToken);
+        compilation = compilation.ReplaceSyntaxTree(unrelatedTree, updatedUnrelatedTree);
+        driver = driver.RunGenerators(compilation, cancellationToken);
+
+        var generatorResult = Assert.Single(driver.GetRunResult().Results);
+        var modelStep = Assert.Single(generatorResult.TrackedSteps["ModuleModels"]);
+        var modelOutput = Assert.Single(modelStep.Outputs);
+        Assert.Equal(IncrementalStepRunReason.Unchanged, modelOutput.Reason);
+        var sourceOutputs = generatorResult.TrackedOutputSteps
+            .SelectMany(step => step.Value)
+            .SelectMany(step => step.Outputs)
+            .ToArray();
+        Assert.NotEmpty(sourceOutputs);
+        Assert.All(sourceOutputs, output => Assert.Equal(IncrementalStepRunReason.Cached, output.Reason));
+
+        var updatedModuleTree = CSharpSyntaxTree.ParseText(
+            moduleSource.Replace("\"cache\"", "\"database\"", StringComparison.Ordinal),
+            parseOptions,
+            path: "OrdersModule.cs",
+            cancellationToken: cancellationToken);
+        compilation = compilation.ReplaceSyntaxTree(moduleTree, updatedModuleTree);
+        driver = driver.RunGenerators(compilation, cancellationToken);
+
+        generatorResult = Assert.Single(driver.GetRunResult().Results);
+        modelStep = Assert.Single(generatorResult.TrackedSteps["ModuleModels"]);
+        modelOutput = Assert.Single(modelStep.Outputs);
+        Assert.Equal(IncrementalStepRunReason.Modified, modelOutput.Reason);
+        var generatedSource = Assert.Single(generatorResult.GeneratedSources).SourceText.ToString();
+        Assert.Contains("> Database =>", generatedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("> Cache =>", generatedSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Generator_creates_a_typed_module_for_every_declared_resource()
     {
         const string source = """
