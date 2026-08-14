@@ -397,9 +397,42 @@ internal static class RepositoryIdentity
 
         if (normalizedRevision is null && IsRemoteRepository(repository, baseDirectory))
         {
-            var canonicalDirectoryName = checkoutDirectoryName ??
+            var siblingParentPath = Path.GetFullPath(siblingParent);
+            if (checkoutDirectoryName is not null)
+            {
+                return Path.Combine(siblingParentPath, checkoutDirectoryName);
+            }
+
+            var canonicalDirectoryName =
                 CreateSlug(GetRepositoryName(normalizedRepository), MaximumDirectoryNameLength);
-            return Path.Combine(Path.GetFullPath(siblingParent), canonicalDirectoryName);
+            var canonicalPath = Path.Combine(siblingParentPath, canonicalDirectoryName);
+            if (Directory.Exists(canonicalPath) || File.Exists(canonicalPath))
+            {
+                return canonicalPath;
+            }
+
+            if (!Directory.Exists(siblingParentPath))
+            {
+                return canonicalPath;
+            }
+
+            var appHostRepositoryRoot = TryFindRepositoryRoot(baseDirectory);
+            var matchingSibling = Directory
+                .EnumerateDirectories(siblingParentPath)
+                .Where(path => !PathSafety.AreEqual(path, appHostRepositoryRoot))
+                .Select(path => new
+                {
+                    Path = path,
+                    Name = Path.GetFileName(path)
+                })
+                .Where(candidate => string.Equals(
+                    CreateSlug(candidate.Name, MaximumDirectoryNameLength),
+                    canonicalDirectoryName,
+                    StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
+                .Select(candidate => candidate.Path)
+                .FirstOrDefault();
+            return matchingSibling ?? canonicalPath;
         }
 
         var repositorySlug = CreateSlug(GetRepositoryName(normalizedRepository), 30);

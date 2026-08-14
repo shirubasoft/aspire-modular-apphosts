@@ -51,6 +51,83 @@ public sealed class ModuleRepositoryInitializationPipelineTests
     }
 
     [Fact]
+    public void Existing_slug_equivalent_sibling_is_selected_for_an_unpinned_remote()
+    {
+        using var workspace = CreateGitWorkspace();
+        var existingCheckout = Path.Combine(workspace.Path, "Repo_A");
+        Directory.CreateDirectory(existingCheckout);
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var requirement = registry.Register(
+            "catalog",
+            "https://example.test/acme/Repo_A.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+
+        Assert.Equal(existingCheckout, requirement.RepositoryPath);
+    }
+
+    [Fact]
+    public void Explicit_checkout_directory_name_wins_over_a_slug_equivalent_sibling()
+    {
+        using var workspace = CreateGitWorkspace();
+        Directory.CreateDirectory(Path.Combine(workspace.Path, "Repo_A"));
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var requirement = registry.Register(
+            "catalog",
+            "https://example.test/acme/Repo_A.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryName: "catalog-source").Requirement;
+
+        Assert.Equal("catalog-source", Path.GetFileName(requirement.RepositoryPath));
+    }
+
+    [Fact]
+    public void Pinned_remote_ignores_a_slug_equivalent_sibling()
+    {
+        using var workspace = CreateGitWorkspace();
+        var existingCheckout = Path.Combine(workspace.Path, "Repo_A");
+        Directory.CreateDirectory(existingCheckout);
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var requirement = registry.Register(
+            "catalog",
+            "https://example.test/acme/Repo_A.git",
+            revision: "v2",
+            updateOnInitialize: true).Requirement;
+
+        Assert.NotEqual(existingCheckout, requirement.RepositoryPath);
+        Assert.Contains("-rev-", requirement.RepositoryPath, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Slug_equivalent_sibling_preserves_same_name_repository_collision_diagnostic()
+    {
+        using var workspace = CreateGitWorkspace();
+        var existingCheckout = Path.Combine(workspace.Path, "Repo_A");
+        Directory.CreateDirectory(existingCheckout);
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var first = registry.Register(
+            "catalog",
+            "https://github.com/acme/Repo_A.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "orders",
+            "https://gitlab.example.test/acme/repo-a.git",
+            revision: null,
+            updateOnInitialize: true));
+
+        Assert.Equal(existingCheckout, first.RepositoryPath);
+        Assert.Contains("resolve to the same canonical checkout path", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("explicit distinct CheckoutDirectoryName", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Distinct_remotes_with_the_same_repository_name_require_explicit_distinct_siblings()
     {
         using var workspace = CreateGitWorkspace();
