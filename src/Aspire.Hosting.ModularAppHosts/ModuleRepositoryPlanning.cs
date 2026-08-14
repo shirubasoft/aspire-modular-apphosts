@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
-#pragma warning disable CA1308 // Remote identities and filesystem slugs use conventional lowercase canonical forms.
+#pragma warning disable CA1308 // Remote identities and filesystem lookup slugs use lowercase normalized forms.
 
 namespace Aspire.Hosting;
 
@@ -21,6 +21,7 @@ internal sealed class ModuleRepositoryRequirement
         string stepKey,
         bool requiredOnRun,
         bool usesCanonicalCheckout,
+        bool usesDefaultCanonicalDirectoryName,
         string checkoutDirectoryNameConfigurationKey)
     {
         AddConsumer(moduleName, checkoutDirectoryNameConfigurationKey);
@@ -32,6 +33,7 @@ internal sealed class ModuleRepositoryRequirement
         StepKey = stepKey;
         RequiredOnRun = requiredOnRun;
         UsesCanonicalCheckout = usesCanonicalCheckout;
+        UsesDefaultCanonicalDirectoryName = usesDefaultCanonicalDirectoryName;
         ConfigurationFingerprint = CreateConfigurationFingerprint(
             NormalizedRepository,
             RepositoryPath,
@@ -61,6 +63,8 @@ internal sealed class ModuleRepositoryRequirement
     public bool RequiredOnRun { get; private set; }
 
     public bool UsesCanonicalCheckout { get; }
+
+    public bool UsesDefaultCanonicalDirectoryName { get; }
 
     internal void AddModule(string moduleName)
     {
@@ -128,6 +132,8 @@ internal sealed class ModuleRepositoryPlanRegistry
         new(PathSafety.Comparer);
     private readonly Dictionary<string, ModuleRepositoryRequirement> _requirementsByIdentity =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ModuleRepositoryRequirement> _requirementsByCanonicalSlug =
+        new(StringComparer.Ordinal);
 
     public ModuleRepositoryPlanRegistry(string appHostDirectory)
     {
@@ -161,6 +167,31 @@ internal sealed class ModuleRepositoryPlanRegistry
         var configurationKey = GetConfigurationKey(
             moduleName,
             checkoutDirectoryNameConfigurationKey);
+        var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+        var usesDefaultCanonicalDirectoryName = normalizedRevision is null &&
+            checkoutDirectoryName is null &&
+            RepositoryIdentity.IsRemoteRepository(repository, AppHostDirectory);
+        if (usesDefaultCanonicalDirectoryName)
+        {
+            var normalizedRepository = RepositoryIdentity.NormalizeRepositoryIdentity(
+                repository,
+                AppHostDirectory);
+            var identityKey = CreateIdentityKey(normalizedRepository, normalizedRevision);
+            if (_requirementsByIdentity.TryGetValue(identityKey, out var equivalent) &&
+                equivalent.UsesDefaultCanonicalDirectoryName)
+            {
+                return Register(
+                    moduleName,
+                    repository,
+                    equivalent.RepositoryPath,
+                    revision,
+                    updateOnInitialize,
+                    requiredOnRun,
+                    checkoutDirectoryName,
+                    configurationKey);
+            }
+        }
+
         var repositoryPath = RepositoryIdentity.GetSiblingPath(
             SiblingParent,
             repository,
@@ -199,6 +230,7 @@ internal sealed class ModuleRepositoryPlanRegistry
         var normalizedRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
         var usesCanonicalCheckout = normalizedRevision is null &&
             RepositoryIdentity.IsRemoteRepository(repository, AppHostDirectory);
+        var usesDefaultCanonicalDirectoryName = usesCanonicalCheckout && checkoutDirectoryName is null;
         if (checkoutDirectoryName is not null)
         {
             _ = RepositoryIdentity.ValidateCheckoutDirectoryName(
@@ -263,6 +295,21 @@ internal sealed class ModuleRepositoryPlanRegistry
             return new ModuleRepositoryPlanRegistration(existing, IsNew: false);
         }
 
+        string? canonicalSlug = null;
+        if (usesDefaultCanonicalDirectoryName)
+        {
+            canonicalSlug = RepositoryIdentity.GetCanonicalCheckoutSlug(repository, AppHostDirectory);
+            if (_requirementsByCanonicalSlug.TryGetValue(canonicalSlug, out var slugCollision))
+            {
+                throw CreateCanonicalSlugCollisionException(
+                    slugCollision,
+                    normalizedRepository,
+                    fullRepositoryPath,
+                    canonicalSlug,
+                    configurationKey);
+            }
+        }
+
         var stepKey = RepositoryIdentity.GetStepKey(
             normalizedRepository,
             revision,
@@ -277,9 +324,15 @@ internal sealed class ModuleRepositoryPlanRegistry
             stepKey,
             requiredOnRun,
             usesCanonicalCheckout,
+            usesDefaultCanonicalDirectoryName,
             configurationKey);
         _requirements.Add(fullRepositoryPath, requirement);
         _requirementsByIdentity.Add(identityKey, requirement);
+        if (canonicalSlug is not null)
+        {
+            _requirementsByCanonicalSlug.Add(canonicalSlug, requirement);
+        }
+
         return new ModuleRepositoryPlanRegistration(requirement, IsNew: true);
     }
 
@@ -317,6 +370,22 @@ internal sealed class ModuleRepositoryPlanRegistry
             $"'{existing.RepositoryPath}' ({existingKeys}) and '{repositoryPath}' " +
             $"(configuration key '{configurationKey}'). Equivalent repositories must share one repository plan; " +
             "configure the same CheckoutDirectoryName for every use.");
+    }
+
+    private static InvalidOperationException CreateCanonicalSlugCollisionException(
+        ModuleRepositoryRequirement existing,
+        string normalizedRepository,
+        string repositoryPath,
+        string canonicalSlug,
+        string configurationKey)
+    {
+        var existingKeys = FormatConfigurationKeys(existing.CheckoutDirectoryNameConfigurationKeys);
+        return new InvalidOperationException(
+            $"Repository identities '{existing.NormalizedRepository}' ({existingKeys}) and " +
+            $"'{normalizedRepository}' (configuration key '{configurationKey}') use directory names " +
+            $"'{Path.GetFileName(existing.RepositoryPath)}' and '{Path.GetFileName(repositoryPath)}' that " +
+            $"resolve to the same canonical checkout slug '{canonicalSlug}'. Configure an explicit distinct " +
+            $"CheckoutDirectoryName using {existingKeys} or configuration key '{configurationKey}'.");
     }
 
     private static string FormatConfigurationKeys(IEnumerable<string> configurationKeys) =>
@@ -403,21 +472,28 @@ internal static class RepositoryIdentity
                 return Path.Combine(siblingParentPath, checkoutDirectoryName);
             }
 
-            var canonicalDirectoryName =
-                CreateSlug(GetRepositoryName(normalizedRepository), MaximumDirectoryNameLength);
-            var canonicalPath = Path.Combine(siblingParentPath, canonicalDirectoryName);
-            if (Directory.Exists(canonicalPath) || File.Exists(canonicalPath))
+            var canonicalDirectoryName = GetRemoteRepositoryName(repository);
+            var invalidDirectoryNameReason = GetInvalidCheckoutDirectoryNameReason(
+                canonicalDirectoryName,
+                revision: null);
+            if (invalidDirectoryNameReason is not null)
             {
-                return canonicalPath;
+                throw new InvalidOperationException(
+                    $"Remote repository '{normalizedRepository}' has repository name " +
+                    $"'{FormatDiagnosticValue(canonicalDirectoryName)}', which cannot be used as a checkout " +
+                    $"directory name: {invalidDirectoryNameReason}. Configure CheckoutDirectoryName at " +
+                    $"configuration key '{configurationKey}'.");
             }
 
+            var canonicalSlug = CreateSlug(canonicalDirectoryName, MaximumDirectoryNameLength);
+            var canonicalPath = Path.Combine(siblingParentPath, canonicalDirectoryName);
             if (!Directory.Exists(siblingParentPath))
             {
                 return canonicalPath;
             }
 
             var appHostRepositoryRoot = TryFindRepositoryRoot(baseDirectory);
-            var matchingSibling = Directory
+            var matchingSiblings = Directory
                 .EnumerateDirectories(siblingParentPath)
                 .Where(path => !PathSafety.AreEqual(path, appHostRepositoryRoot))
                 .Select(path => new
@@ -427,12 +503,21 @@ internal static class RepositoryIdentity
                 })
                 .Where(candidate => string.Equals(
                     CreateSlug(candidate.Name, MaximumDirectoryNameLength),
-                    canonicalDirectoryName,
+                    canonicalSlug,
                     StringComparison.Ordinal))
                 .OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
                 .Select(candidate => candidate.Path)
-                .FirstOrDefault();
-            return matchingSibling ?? canonicalPath;
+                .ToArray();
+            if (matchingSiblings.Length > 1)
+            {
+                var matches = string.Join(", ", matchingSiblings.Select(path => $"'{path}'"));
+                throw new InvalidOperationException(
+                    $"Multiple sibling directories {matches} normalize to the same canonical checkout slug " +
+                    $"'{canonicalSlug}' for repository '{normalizedRepository}'. Configure CheckoutDirectoryName " +
+                    $"at configuration key '{configurationKey}' to select the intended checkout explicitly.");
+            }
+
+            return matchingSiblings.FirstOrDefault() ?? canonicalPath;
         }
 
         var repositorySlug = CreateSlug(GetRepositoryName(normalizedRepository), 30);
@@ -482,6 +567,19 @@ internal static class RepositoryIdentity
         }
 
         return value;
+    }
+
+    public static string GetCanonicalCheckoutSlug(string repository, string baseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        if (!IsRemoteRepository(repository, baseDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Repository '{repository}' is not a recognizable remote repository identity.");
+        }
+
+        return CreateSlug(GetRemoteRepositoryName(repository), MaximumDirectoryNameLength);
     }
 
     public static string NormalizeRepositoryIdentity(string repository, string baseDirectory)
@@ -668,6 +766,37 @@ internal static class RepositoryIdentity
     {
         var separator = normalizedRepository.LastIndexOf('/');
         return separator < 0 ? normalizedRepository : normalizedRepository[(separator + 1)..];
+    }
+
+    private static string GetRemoteRepositoryName(string repository)
+    {
+        var value = repository.Trim().TrimEnd('/', '\\');
+        string path;
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            path = uri.AbsolutePath;
+        }
+        else
+        {
+            var queryOrFragment = value.IndexOfAny(['?', '#']);
+            if (queryOrFragment >= 0)
+            {
+                value = value[..queryOrFragment];
+            }
+
+            var colon = value.IndexOf(':', StringComparison.Ordinal);
+            path = colon > 0 && value[..colon].IndexOfAny(['/', '\\']) < 0
+                ? value[(colon + 1)..]
+                : value;
+        }
+
+        path = path.Replace('\\', '/').Trim('/');
+        var separator = path.LastIndexOf('/');
+        var repositoryName = Uri.UnescapeDataString(
+            separator < 0 ? path : path[(separator + 1)..]);
+        return repositoryName.EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? repositoryName[..^4]
+            : repositoryName;
     }
 
     private static string? GetInvalidCheckoutDirectoryNameReason(string value, string? revision)

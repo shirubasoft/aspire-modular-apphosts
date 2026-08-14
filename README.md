@@ -94,14 +94,15 @@ canonical tag. Named Aspire steps operate on one resource; repeatable `images pu
 `--resource` options select a validated graph. `aspire do describe-images --output-path artifacts`
 writes effective identities without preparing images.
 
-Initialization places an unpinned remote in a human-readable sibling named from the normalized
-repository, such as `<workspace>/orders`. Before creating that slug, planning adopts an existing sibling
-whose directory name normalizes to the same slug, so names such as `Repo_A` remain usable by default.
-A matching existing sibling is adopted as developer-owned and is never updated by initialization;
-a missing sibling is cloned as initializer-managed and may be fast-forwarded on later initialization
-runs. Name or origin conflicts fail with the exact
-`CheckoutDirectoryName` key instead of falling back to a hash. Pinned revisions continue to receive
-collision-resistant hashed siblings that protect developer worktrees. Advanced command
+Initialization places an unpinned remote in a human-readable sibling named exactly after the remote
+repository, so `DB-orders_bo.git` clones to `<workspace>/DB-orders_bo`. A normalized slug is used only
+to find equivalent sibling names and detect collisions. One matching existing sibling is adopted as
+developer-owned and is never updated by initialization; multiple matches fail with the exact
+`CheckoutDirectoryName` key instead of being selected by directory-name sort order. A missing sibling
+is cloned as initializer-managed and may be fast-forwarded on later initialization runs. Deleting an
+adopted checkout releases that ownership: the next initialization recreates it and records `Created`.
+Name or origin conflicts likewise fail instead of falling back to a hash. Pinned revisions continue to
+receive collision-resistant hashed siblings that protect developer worktrees. Advanced command
 publishers inspect branch, commit, and dirty state immediately before their container starts, reuse
 or optionally pull a clean canonical image, build when needed, and retag the result to a deterministic
 `aspire-run` alias. Explicit-start resources remain lazy. Each advanced publisher can select a

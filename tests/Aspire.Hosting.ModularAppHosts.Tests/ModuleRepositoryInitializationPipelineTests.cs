@@ -43,11 +43,26 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             updateOnInitialize: true).Requirement;
 
         Assert.Equal(workspace.Path, Path.GetDirectoryName(branch.RepositoryPath));
-        Assert.Equal("services", Path.GetFileName(branch.RepositoryPath));
+        Assert.Equal("Services", Path.GetFileName(branch.RepositoryPath));
         Assert.Equal(workspace.Path, Path.GetDirectoryName(revision.RepositoryPath));
         Assert.NotEqual(branch.RepositoryPath, revision.RepositoryPath);
         Assert.Contains("-rev-", revision.RepositoryPath, StringComparison.Ordinal);
         Assert.False(revision.UpdateOnInitialize);
+    }
+
+    [Fact]
+    public void Missing_unpinned_remote_preserves_the_repository_name_for_its_sibling()
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var requirement = registry.Register(
+            "orders-database",
+            "https://github.com/acme/DB-orders_bo.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+
+        Assert.Equal("DB-orders_bo", Path.GetFileName(requirement.RepositoryPath));
     }
 
     [Fact]
@@ -65,6 +80,80 @@ public sealed class ModuleRepositoryInitializationPipelineTests
             updateOnInitialize: true).Requirement;
 
         Assert.Equal(existingCheckout, requirement.RepositoryPath);
+    }
+
+    [Fact]
+    public void Multiple_slug_equivalent_siblings_require_an_explicit_checkout_directory_name()
+    {
+        using var workspace = CreateGitWorkspace();
+        var underscoreCheckout = Path.Combine(workspace.Path, "DB-orders_bo");
+        var hyphenCheckout = Path.Combine(workspace.Path, "DB-orders-bo");
+        Directory.CreateDirectory(underscoreCheckout);
+        Directory.CreateDirectory(hyphenCheckout);
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+        const string configurationKey =
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName";
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "orders",
+            "https://github.com/acme/DB-orders_bo.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryNameConfigurationKey: configurationKey));
+
+        Assert.Contains(underscoreCheckout, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(hyphenCheckout, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("db-orders-bo", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(configurationKey, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("CheckoutDirectoryName", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Distinct_repository_names_with_the_same_slug_require_explicit_distinct_siblings()
+    {
+        using var workspace = CreateGitWorkspace();
+        var registry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+
+        var first = registry.Register(
+            "orders",
+            "https://github.com/acme/DB-orders_bo.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+
+        var exception = Assert.Throws<InvalidOperationException>(() => registry.Register(
+            "billing",
+            "https://github.com/acme/DB-orders-bo.git",
+            revision: null,
+            updateOnInitialize: true));
+
+        Assert.Equal("DB-orders_bo", Path.GetFileName(first.RepositoryPath));
+        Assert.Contains("same canonical checkout slug 'db-orders-bo'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:orders:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Aspire:ModularAppHosts:Modules:billing:CheckoutDirectoryName",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Contains("explicit distinct CheckoutDirectoryName", exception.Message, StringComparison.Ordinal);
+
+        var explicitRegistry = new ModuleRepositoryPlanRegistry(workspace.AppHostPath);
+        var underscore = explicitRegistry.Register(
+            "orders",
+            "https://github.com/acme/DB-orders_bo.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryName: "orders-underscore").Requirement;
+        var hyphen = explicitRegistry.Register(
+            "billing",
+            "https://github.com/acme/DB-orders-bo.git",
+            revision: null,
+            updateOnInitialize: true,
+            checkoutDirectoryName: "orders-hyphen").Requirement;
+
+        Assert.Equal("orders-underscore", Path.GetFileName(underscore.RepositoryPath));
+        Assert.Equal("orders-hyphen", Path.GetFileName(hyphen.RepositoryPath));
     }
 
     [Fact]
@@ -284,6 +373,7 @@ public sealed class ModuleRepositoryInitializationPipelineTests
         Assert.Same(first.Requirement, second.Requirement);
         Assert.Equal(2, first.Requirement.ModuleNames.Count);
         Assert.Equal("github.com/acme/services", first.Requirement.NormalizedRepository);
+        Assert.Equal("Services", Path.GetFileName(first.Requirement.RepositoryPath));
         Assert.Single(registry.Requirements);
     }
 
