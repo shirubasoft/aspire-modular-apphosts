@@ -237,6 +237,34 @@ public sealed class SynchronousModuleMaterializationTests
     }
 
     [Fact]
+    public void Build_repository_adopts_an_existing_slug_equivalent_sibling()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var existingCheckout = Path.Combine(workspace.Path, "Images_A");
+        Directory.CreateDirectory(existingCheckout);
+        var builder = CreateBuilder(appHostPath);
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHostPath);
+            definition.AddContainer("orders-api", "orders-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "orders-api",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = "https://example.test/acme/Images_A.git"
+                });
+        });
+
+        builder.AddModule(module);
+
+        var requirement = Assert.Single(GetRegistry(builder).RepositoryPlans!.Requirements);
+        Assert.Equal(existingCheckout, requirement.RepositoryPath);
+    }
+
+    [Fact]
     public async Task Explicit_tag_pull_publisher_keeps_its_separate_checkout_optional_on_run()
     {
         using var appHost = CreateGitAppHost();

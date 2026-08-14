@@ -95,9 +95,11 @@ canonical tag. Named Aspire steps operate on one resource; repeatable `images pu
 writes effective identities without preparing images.
 
 Initialization places an unpinned remote in a human-readable sibling named from the normalized
-repository, such as `<workspace>/orders`. A matching existing sibling is adopted as developer-owned
-and is never updated by initialization; a missing sibling is cloned as initializer-managed and may
-be fast-forwarded on later initialization runs. Name or origin conflicts fail with the exact
+repository, such as `<workspace>/orders`. Before creating that slug, planning adopts an existing sibling
+whose directory name normalizes to the same slug, so names such as `Repo_A` remain usable by default.
+A matching existing sibling is adopted as developer-owned and is never updated by initialization;
+a missing sibling is cloned as initializer-managed and may be fast-forwarded on later initialization
+runs. Name or origin conflicts fail with the exact
 `CheckoutDirectoryName` key instead of falling back to a hash. Pinned revisions continue to receive
 collision-resistant hashed siblings that protect developer worktrees. Advanced command
 publishers inspect branch, commit, and dirty state immediately before their container starts, reuse
