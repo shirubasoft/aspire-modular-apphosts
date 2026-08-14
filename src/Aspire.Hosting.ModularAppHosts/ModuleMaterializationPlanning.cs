@@ -27,6 +27,8 @@ internal static class ModuleMaterializationPlanning
             GetConfiguredValue(module.Repository);
         var revision = GetConfiguredValue(moduleOptions?.RepositoryRevision) ??
             GetConfiguredValue(module.RepositoryRevision);
+        var checkoutDirectoryName = moduleOptions?.CheckoutDirectoryName ??
+            module.CheckoutDirectoryName;
 
         if (!imported)
         {
@@ -63,6 +65,7 @@ internal static class ModuleMaterializationPlanning
         var isRemote = RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory);
         if (!isRemote && revision is null)
         {
+            RejectLocalCheckoutDirectoryName(checkoutDirectoryName, configurationKey);
             var localPath = Path.GetFullPath(repository, builder.AppHostDirectory);
             registry.RequireDirectory(module.Name, "repository checkout", localPath);
             return new ModuleRepositoryContext(
@@ -80,7 +83,9 @@ internal static class ModuleMaterializationPlanning
             module.Name,
             isRemote ? repository : Path.GetFullPath(repository, builder.AppHostDirectory),
             revision,
-            updateRepository);
+            updateRepository,
+            checkoutDirectoryName: checkoutDirectoryName,
+            checkoutDirectoryNameConfigurationKey: GetCheckoutDirectoryNameConfigurationKey(module.Name));
         return new ModuleRepositoryContext(
             requirement.RepositoryPath,
             requirement.Repository,
@@ -98,7 +103,8 @@ internal static class ModuleMaterializationPlanning
         ModuleRepositoryContext definitionRepository,
         ModuleApplicationRegistry registry,
         DistributedApplicationModuleOptions? moduleOptions,
-        bool allowMissingBuildRepository = false)
+        bool allowMissingBuildRepository = false,
+        ModuleResourceKind resourceKind = ModuleResourceKind.Container)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(module);
@@ -111,7 +117,12 @@ internal static class ModuleMaterializationPlanning
             GetConfiguredValue(declared.BuildRepository);
         var requestedRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
             GetConfiguredValue(declared.BuildRepositoryRevision);
-        if (requestedRepository is null && requestedRevision is null)
+        var checkoutDirectoryName = declared.CheckoutDirectoryName;
+        var checkoutDirectoryNameConfigurationKey = GetBuildRepositoryCheckoutDirectoryNameConfigurationKey(
+            module.Name,
+            resourceName,
+            resourceKind);
+        if (requestedRepository is null && requestedRevision is null && checkoutDirectoryName is null)
         {
             return definitionRepository;
         }
@@ -128,7 +139,8 @@ internal static class ModuleMaterializationPlanning
                 normalizedRepository,
                 definitionRepository.Repository ?? definitionRepository.RepositoryPath,
                 builder.AppHostDirectory) &&
-            string.Equals(requestedRevision, definitionRepository.Revision, StringComparison.Ordinal))
+            string.Equals(requestedRevision, definitionRepository.Revision, StringComparison.Ordinal) &&
+            checkoutDirectoryName is null)
         {
             return definitionRepository;
         }
@@ -138,6 +150,9 @@ internal static class ModuleMaterializationPlanning
             builder.AppHostDirectory);
         if (!isRemote && requestedRevision is null)
         {
+            RejectLocalCheckoutDirectoryName(
+                checkoutDirectoryName,
+                checkoutDirectoryNameConfigurationKey);
             registry.RequireDirectory(
                 module.Name,
                 $"build repository for resource '{resourceName}'",
@@ -159,7 +174,9 @@ internal static class ModuleMaterializationPlanning
             normalizedRepository,
             requestedRevision,
             updateRepository,
-            requiredOnRun: !allowMissingBuildRepository);
+            requiredOnRun: !allowMissingBuildRepository,
+            checkoutDirectoryName: checkoutDirectoryName,
+            checkoutDirectoryNameConfigurationKey: checkoutDirectoryNameConfigurationKey);
         return new ModuleRepositoryContext(
             requirement.RepositoryPath,
             requirement.Repository,
@@ -188,4 +205,38 @@ internal static class ModuleMaterializationPlanning
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string GetCheckoutDirectoryNameConfigurationKey(string moduleName) =>
+        $"{DistributedApplicationModuleExtensions.GetModuleConfigurationKey(moduleName)}:" +
+        $"{nameof(DistributedApplicationModuleOptions.CheckoutDirectoryName)}";
+
+    private static string GetBuildRepositoryCheckoutDirectoryNameConfigurationKey(
+        string moduleName,
+        string resourceName,
+        ModuleResourceKind resourceKind)
+    {
+        var collection = resourceKind == ModuleResourceKind.Project
+            ? nameof(DistributedApplicationModuleOptions.Projects)
+            : nameof(DistributedApplicationModuleOptions.Containers);
+        return $"{DistributedApplicationModuleExtensions.GetModuleConfigurationKey(moduleName)}:" +
+            $"{collection}:{resourceName}:{nameof(DistributedApplicationModuleImageOptions.CheckoutDirectoryName)}";
+    }
+
+    private static void RejectLocalCheckoutDirectoryName(string? value, string repositoryConfigurationKey)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        var configurationKey = repositoryConfigurationKey.EndsWith(
+            $":{nameof(DistributedApplicationModuleOptions.Repository)}",
+            StringComparison.Ordinal)
+                ? repositoryConfigurationKey[..^nameof(DistributedApplicationModuleOptions.Repository).Length] +
+                    nameof(DistributedApplicationModuleOptions.CheckoutDirectoryName)
+                : repositoryConfigurationKey;
+        throw new InvalidOperationException(
+            $"Checkout directory name '{value}' from configuration key '{configurationKey}' is invalid: " +
+            "CheckoutDirectoryName applies only to unpinned remote repositories; local-path repository behavior is unchanged.");
+    }
 }

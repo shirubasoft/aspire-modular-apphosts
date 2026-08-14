@@ -131,6 +131,11 @@ public sealed class DistributedApplicationModuleOptions
     /// <summary>Gets or sets the branch, tag, or commit checked out for this module.</summary>
     public string? RepositoryRevision { get; set; }
 
+    /// <summary>
+    /// Gets or sets the direct sibling directory name used for this unpinned remote repository checkout.
+    /// </summary>
+    public string? CheckoutDirectoryName { get; set; }
+
     /// <summary>Gets or sets whether this repository is fast-forwarded by <c>aspire do initialize</c>.</summary>
     public bool? UpdateRepositoryOnInitialize { get; set; }
 
@@ -193,6 +198,11 @@ public abstract class DistributedApplicationModuleImageOptions
 
     /// <summary>Gets or sets the branch, tag, or commit checked out from the build repository.</summary>
     public string? BuildRepositoryRevision { get; set; }
+
+    /// <summary>
+    /// Gets or sets the direct sibling directory name used for this resource's unpinned remote build repository.
+    /// </summary>
+    public string? CheckoutDirectoryName { get; set; }
 
     /// <summary>
     /// Gets or sets whether image preparation may fetch and fast-forward this clean unpinned build repository.

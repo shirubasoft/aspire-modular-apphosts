@@ -37,6 +37,8 @@ internal sealed class DistributedApplicationModule(
 
     internal string? RepositoryRevision { get; set; }
 
+    internal string? CheckoutDirectoryName { get; set; }
+
     internal IDistributedApplicationBuilder DefinitionApplicationBuilder { get; } = definitionApplicationBuilder;
 
     internal bool RequiresRepositoryContent { get; set; }

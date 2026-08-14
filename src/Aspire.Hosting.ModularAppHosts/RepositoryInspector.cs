@@ -343,9 +343,11 @@ internal static class RepositorySynchronizer
                 if (!string.IsNullOrWhiteSpace(repository) &&
                     RepositoryIdentity.IsRemoteRepository(repository, baseDirectory))
                 {
+                    var normalizedRepository = TryNormalizeDiagnosticIdentity(repository, baseDirectory) ??
+                        "(unavailable)";
                     throw new InvalidOperationException(
                         $"Repository path '{repositoryPath}' already exists, but it is not a Git checkout of " +
-                        $"configured repository '{repository}'. " +
+                        $"configured normalized repository identity '{normalizedRepository}'. " +
                         "Move that directory or correct the module configuration.");
                 }
 
@@ -513,8 +515,13 @@ internal static class RepositorySynchronizer
                     var error = string.IsNullOrWhiteSpace(result.StandardError)
                         ? result.StandardOutput
                         : result.StandardError;
+                    var diagnostic = CreateCredentialFreeCommandDiagnostic(
+                        error.Trim(),
+                        repository,
+                        Path.GetDirectoryName(repositoryPath) ?? repositoryPath);
                     throw new InvalidOperationException(
-                        $"Repository synchronization failed for '{repositoryPath}' with exit code {result.ExitCode}: {error.Trim()}");
+                        $"Repository synchronization failed for '{repositoryPath}' with exit code " +
+                        $"{result.ExitCode}: {diagnostic}");
                 }
 
                 if (reportingTask is not null)
@@ -642,14 +649,53 @@ internal static class RepositorySynchronizer
              LocalRepositoriesMatch(expectedRepository, actualRepository, baseDirectory));
         if (!matches)
         {
+            var expectedIdentity = TryNormalizeDiagnosticIdentity(expectedRepository, baseDirectory) ??
+                "(unavailable)";
+            var actualIdentity = TryNormalizeDiagnosticIdentity(actualRepository, baseDirectory) ??
+                "(missing or unavailable)";
             throw new InvalidOperationException(
-                $"Repository '{repositoryPath}' has origin " +
-                $"'{actualRepository ?? "(missing)"}', which does not match " +
-                $"configured repository '{expectedRepository}'. " +
+                $"Repository '{repositoryPath}' has normalized origin '{actualIdentity}', which does not match " +
+                $"configured normalized repository identity '{expectedIdentity}'. " +
                 "Move the checkout or correct the module configuration.");
         }
 
         return actualRepository;
+    }
+
+    private static string? TryNormalizeDiagnosticIdentity(string? repository, string baseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(repository))
+        {
+            return null;
+        }
+
+        try
+        {
+            return RepositoryIdentity.NormalizeRepositoryIdentity(repository, baseDirectory);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                          or ArgumentException
+                                          or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static string CreateCredentialFreeCommandDiagnostic(
+        string output,
+        string? repository,
+        string baseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(repository) ||
+            !RepositoryIdentity.IsRemoteRepository(repository, baseDirectory))
+        {
+            return output;
+        }
+
+        var normalizedRepository = TryNormalizeDiagnosticIdentity(repository, baseDirectory) ??
+            "the configured repository";
+        return $"Git could not synchronize normalized repository identity '{normalizedRepository}'. " +
+            "Verify repository access and configured credentials.";
     }
 
     private static bool LocalRepositoriesMatch(string first, string second, string baseDirectory)

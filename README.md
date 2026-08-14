@@ -81,7 +81,7 @@ For a repository-backed module, supply its repository through configuration or `
 
 Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
 
-By default, local modules run as projects and imported modules run as containers. Module declaration is synchronous and performs no Git or image operations. Remote and pinned repositories are acquired from the AppHost directory with `aspire do initialize --apphost . --non-interactive`; normal run fails fast with the exact AppHost-aware recovery command when a sibling checkout, initialization state record, project, or build directory is missing. Use `UseLocalModuleProjects()` or `UseModuleContainers()` for checked-in AppHost-wide intent. AppHosts with a `UserSecretsId` also expose `aspire do use-projects`, `use-containers`, and per-resource steps such as `use-project-catalog-api`; these persist a developer-local override and take effect after the next AppHost start. Run `aspire do use-configured-modes` to remove every temporary override.
+By default, local modules run as projects and imported modules run as containers. Module declaration is synchronous and performs no Git or image operations. Remote and pinned repositories are acquired from the AppHost directory with `aspire do initialize --apphost . --non-interactive`; their machine-local state is stored independently of the AppHost environment. Normal run fails fast with the exact state path and AppHost-aware recovery command when a required sibling checkout, initialization record, project, or build directory is missing. Optional tagged-image build repositories are not inspected at run time. Use `UseLocalModuleProjects()` or `UseModuleContainers()` for checked-in AppHost-wide intent. AppHosts with a `UserSecretsId` also expose `aspire do use-projects`, `use-containers`, and per-resource steps such as `use-project-catalog-api`; these persist a developer-local override and take effect after the next AppHost start. Run `aspire do use-configured-modes` to remove every temporary override.
 
 Projects use Aspire's native container publisher through `ExportAsContainer(imageName)` by default,
 and module-owned `AddDockerfile` resources retain Aspire's Dockerfile build and push operations.
@@ -94,8 +94,12 @@ canonical tag. Named Aspire steps operate on one resource; repeatable `images pu
 `--resource` options select a validated graph. `aspire do describe-images --output-path artifacts`
 writes effective identities without preparing images.
 
-Initialization places remote checkouts in collision-resistant directories beside the AppHost Git
-root; pinned revisions receive distinct siblings that protect developer worktrees. Advanced command
+Initialization places an unpinned remote in a human-readable sibling named from the normalized
+repository, such as `<workspace>/orders`. A matching existing sibling is adopted as developer-owned
+and is never updated by initialization; a missing sibling is cloned as initializer-managed and may
+be fast-forwarded on later initialization runs. Name or origin conflicts fail with the exact
+`CheckoutDirectoryName` key instead of falling back to a hash. Pinned revisions continue to receive
+collision-resistant hashed siblings that protect developer worktrees. Advanced command
 publishers inspect branch, commit, and dirty state immediately before their container starts, reuse
 or optionally pull a clean canonical image, build when needed, and retag the result to a deterministic
 `aspire-run` alias. Explicit-start resources remain lazy. Each advanced publisher can select a

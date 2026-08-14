@@ -1,4 +1,17 @@
 #nullable enable
+Aspire.Hosting.ModuleRepositoryOptions
+Aspire.Hosting.ModuleRepositoryOptions.ModuleRepositoryOptions() -> void
+Aspire.Hosting.ModuleRepositoryOptions.CheckoutDirectoryName.get -> string?
+Aspire.Hosting.ModuleRepositoryOptions.CheckoutDirectoryName.set -> void
+Aspire.Hosting.ModuleRepositoryOptions.Revision.get -> string?
+Aspire.Hosting.ModuleRepositoryOptions.Revision.set -> void
+Aspire.Hosting.DistributedApplicationModuleOptions.CheckoutDirectoryName.get -> string?
+Aspire.Hosting.DistributedApplicationModuleOptions.CheckoutDirectoryName.set -> void
+Aspire.Hosting.DistributedApplicationModuleImageOptions.CheckoutDirectoryName.get -> string?
+Aspire.Hosting.DistributedApplicationModuleImageOptions.CheckoutDirectoryName.set -> void
+Aspire.Hosting.ModuleImageCommandOptions.CheckoutDirectoryName.get -> string?
+Aspire.Hosting.ModuleImageCommandOptions.CheckoutDirectoryName.set -> void
+Aspire.Hosting.IDistributedApplicationModuleBuilder.WithRepository(string! repository, Aspire.Hosting.ModuleRepositoryOptions! options) -> Aspire.Hosting.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.ModuleImageBuildDescription
 Aspire.Hosting.ModuleImageBuildDescription.Arguments.get -> System.Collections.Generic.IList<string!>!
 Aspire.Hosting.ModuleImageBuildDescription.Command.get -> string!

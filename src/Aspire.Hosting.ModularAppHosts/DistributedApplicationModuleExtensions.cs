@@ -147,6 +147,7 @@ public static partial class DistributedApplicationModuleExtensions
             configured.PullBeforeBuild is not null ||
             configured.BuildRepository is not null ||
             configured.BuildRepositoryRevision is not null ||
+            configured.CheckoutDirectoryName is not null ||
             configured.RefreshBuildRepositoryOnRun is not null ||
             configured.PublishImage is true)
         {
@@ -221,14 +222,11 @@ public static partial class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(
             options,
             projectModeSwitching: new ModuleProjectModeSwitchingPipeline(builder));
-        builder.Services.AddSingleton(_ => new ModuleRepositoryDeploymentStateManager(
-            ModuleRepositoryDeploymentStateManager.ResolveStateFilePath(
-                builder.Configuration["AppHost:PathSha256"],
-                builder.Environment.EnvironmentName)));
-        builder.Services.AddSingleton<IModuleRepositoryStateStore>(services =>
-            new AspireModuleRepositoryStateStore(
-                services.GetRequiredService<IDeploymentStateManager>(),
-                services.GetRequiredService<ModuleRepositoryDeploymentStateManager>()));
+        builder.Services.AddSingleton<IModuleRepositoryStateStore>(_ =>
+            new FileModuleRepositoryStateStore(
+                FileModuleRepositoryStateStore.ResolveStateFilePath(
+                    builder.Configuration["AppHost:PathSha256"],
+                    builder.AppHostDirectory)));
         ModuleImagePullPipeline.Configure(builder);
         ModuleImageDescriptionPipeline.Configure(builder);
         ModuleImageWorkflowPipeline.Configure(builder);
@@ -457,6 +455,10 @@ public static partial class DistributedApplicationModuleExtensions
         foreach (var (moduleName, module) in options.Modules)
         {
             var moduleKey = $"{ModularAppHostsOptions.ConfigurationSectionName}:{nameof(options.Modules)}:{moduleName}";
+            ValidateCheckoutDirectoryName(
+                module.CheckoutDirectoryName,
+                module.RepositoryRevision,
+                $"{moduleKey}:{nameof(module.CheckoutDirectoryName)}");
             if (module.ProjectMode is { } moduleMode)
             {
                 ValidateEnum(moduleMode, $"{moduleKey}:{nameof(module.ProjectMode)}");
@@ -465,6 +467,10 @@ public static partial class DistributedApplicationModuleExtensions
             foreach (var (projectName, project) in module.Projects)
             {
                 var projectKey = $"{moduleKey}:{nameof(module.Projects)}:{projectName}";
+                ValidateCheckoutDirectoryName(
+                    project.CheckoutDirectoryName,
+                    project.BuildRepositoryRevision,
+                    $"{projectKey}:{nameof(project.CheckoutDirectoryName)}");
                 ValidateImageSHA256(project.ImageSHA256, $"{projectKey}:{nameof(project.ImageSHA256)}");
                 ValidateExternalImage(project, projectKey);
                 if (project.ProjectMode is { } projectMode)
@@ -481,6 +487,10 @@ public static partial class DistributedApplicationModuleExtensions
             foreach (var (containerName, container) in module.Containers)
             {
                 var containerKey = $"{moduleKey}:{nameof(module.Containers)}:{containerName}";
+                ValidateCheckoutDirectoryName(
+                    container.CheckoutDirectoryName,
+                    container.BuildRepositoryRevision,
+                    $"{containerKey}:{nameof(container.CheckoutDirectoryName)}");
                 ValidateImageSHA256(container.ImageSHA256, $"{containerKey}:{nameof(container.ImageSHA256)}");
                 ValidateExternalImage(container, containerKey);
                 if (container.ImagePullPolicy is { } containerPullPolicy)
@@ -525,6 +535,23 @@ public static partial class DistributedApplicationModuleExtensions
                 $"{configurationKey}:{nameof(options.ImageSHA256)} when " +
                 $"{configurationKey}:{nameof(options.PublishImage)} is false.");
         }
+    }
+
+    private static void ValidateCheckoutDirectoryName(
+        string? checkoutDirectoryName,
+        string? revision,
+        string configurationKey)
+    {
+        if (checkoutDirectoryName is null)
+        {
+            return;
+        }
+
+        _ = RepositoryIdentity.ValidateCheckoutDirectoryName(
+            checkoutDirectoryName,
+            configurationKey,
+            revision,
+            Directory.GetCurrentDirectory());
     }
 
     private static void ValidateImageSHA256(string? sha256, string configurationKey)

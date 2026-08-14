@@ -605,7 +605,8 @@ public static partial class DistributedApplicationModuleExtensions
             definitionRepository,
             registry,
             moduleOptions,
-            allowMissingBuildRepository: canPrepareWithoutBuildRepository);
+            allowMissingBuildRepository: canPrepareWithoutBuildRepository,
+            resourceKind: resourceKind);
         var allowsUnavailableSource =
             canPrepareWithoutBuildRepository &&
             !buildRepository.UsesModuleRepository;
@@ -998,7 +999,8 @@ public static partial class DistributedApplicationModuleExtensions
             BuildRepository = GetConfiguredValue(configured?.BuildRepository) ??
                 GetConfiguredValue(declared.BuildRepository),
             BuildRepositoryRevision = GetConfiguredValue(configured?.BuildRepositoryRevision) ??
-                GetConfiguredValue(declared.BuildRepositoryRevision)
+                GetConfiguredValue(declared.BuildRepositoryRevision),
+            CheckoutDirectoryName = configured?.CheckoutDirectoryName ?? declared.CheckoutDirectoryName
         };
     }
 

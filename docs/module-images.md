@@ -204,12 +204,14 @@ module.AddContainer("orders-database", "example/orders-database")
         ])
     {
         BuildRepository = "https://github.com/example/orders-database.git",
-        BuildRepositoryRevision = "main",
+        CheckoutDirectoryName = "orders-database-images",
         WorkingDirectory = "."
     });
 ```
 
-The AppHost plans that checkout independently of the module repository and uses its branch, commit, and dirty state for the canonical image tag. From the AppHost directory, run `aspire do initialize --apphost . --non-interactive` when a source build is required. When `PullBeforeBuild` and an explicit tag allow the published image to satisfy preparation, normal run and build do not require an absent separate checkout. Initialization still acquires it for later source builds. An exact `BuildRepositoryRevision` is initialized in a distinct sibling, so selecting a database commit never detaches or moves a developer checkout. This optionality applies only to the separate image build repository; a module definition repository required by projects or factories remains mandatory.
+The AppHost plans that checkout independently of the module repository and uses its branch, commit, and dirty state for the canonical image tag. An unpinned remote defaults to the human-readable `<sibling-parent>/orders-database`; `ModuleImageCommandOptions.CheckoutDirectoryName` or the resource-level `CheckoutDirectoryName` configuration shown below changes that one filename segment. From the AppHost directory, run `aspire do initialize --apphost . --non-interactive` when a source build is required. A missing canonical checkout is cloned with `Created` ownership and retains the configured initialization update behavior. A matching existing sibling is adopted with `Adopted` ownership and initialization never moves or updates it. A mismatched origin or same-name planning collision fails and requires a distinct explicit name; no hashed fallback is used.
+
+When `PullBeforeBuild` and an explicit tag allow the published image to satisfy preparation, normal run and build do not inspect or require the separate checkout, whether it is absent or already initialized. Initialization still acquires it for later source builds. An exact `BuildRepositoryRevision` is initialized in a distinct hashed sibling, so selecting a database commit never detaches or moves a developer checkout; `CheckoutDirectoryName` is rejected when a revision is configured. This optionality applies only to the separate image build repository; a module definition repository required by projects or factories remains mandatory.
 
 The receiving AppHost can replace the declaration for one environment without changing the shared contract:
 
@@ -231,4 +233,6 @@ builder.ConfigureModularAppHosts(options =>
 });
 ```
 
-Relative local build-repository paths are resolved from the AppHost directory. An existing unpinned local path is used directly. A remote repository, or any repository paired with a revision, is assigned a collision-resistant direct sibling of the AppHost Git root and acquired only by `initialize`. `RefreshBuildRepositoryOnRun` can opt a clean, unpinned build checkout into a run-time fast-forward; it defaults to `false`, and dirty checkouts are never moved.
+Relative local build-repository paths are resolved from the AppHost directory. An existing unpinned local path is used directly. An unpinned remote uses its canonical repository-name sibling; a repository paired with a revision uses a collision-resistant hashed sibling. Both are acquired only by `initialize`. `RefreshBuildRepositoryOnRun` can opt a clean, unpinned build checkout into a run-time fast-forward; it defaults to `false`, and dirty checkouts are never moved.
+
+Legacy hashed unpinned build clones are not reused automatically. Rerun initialization to create the canonical checkout, or set `Aspire:ModularAppHosts:Modules:<module>:Containers:<resource>:CheckoutDirectoryName` (or the corresponding `Projects` key) to the legacy directory name. The value must be exactly one safe filename segment beneath the AppHost Git root's sibling parent.

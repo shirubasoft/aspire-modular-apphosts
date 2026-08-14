@@ -145,13 +145,21 @@ internal sealed class DistributedApplicationModuleBuilder(
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository)
     {
-        return SetRepository(repository, revision: null);
+        return SetRepository(repository, revision: null, checkoutDirectoryName: null);
     }
 
     public IDistributedApplicationModuleBuilder WithRepository(string repository, string revision)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(revision);
-        return SetRepository(repository, revision);
+        return SetRepository(repository, revision, checkoutDirectoryName: null);
+    }
+
+    public IDistributedApplicationModuleBuilder WithRepository(
+        string repository,
+        ModuleRepositoryOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return SetRepository(repository, options.Revision, options.CheckoutDirectoryName);
     }
 
     public IDistributedApplicationModuleBuilder RequiresRepository()
@@ -161,11 +169,15 @@ internal sealed class DistributedApplicationModuleBuilder(
         return this;
     }
 
-    private DistributedApplicationModuleBuilder SetRepository(string repository, string? revision)
+    private DistributedApplicationModuleBuilder SetRepository(
+        string repository,
+        string? revision,
+        string? checkoutDirectoryName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
         module.Repository = repository;
         module.RepositoryRevision = string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+        module.CheckoutDirectoryName = checkoutDirectoryName;
         return this;
     }
 }
@@ -218,7 +230,8 @@ internal sealed class DistributedApplicationModuleProjectBuilder(DistributedAppl
             ImageTag = options.ImageTag,
             WorkingDirectory = options.WorkingDirectory,
             BuildRepository = options.BuildRepository,
-            BuildRepositoryRevision = options.BuildRepositoryRevision
+            BuildRepositoryRevision = options.BuildRepositoryRevision,
+            CheckoutDirectoryName = options.CheckoutDirectoryName
         };
     }
 }

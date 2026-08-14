@@ -1,11 +1,18 @@
-#pragma warning disable ASPIREPIPELINES002
-#pragma warning disable CA1308 // Aspire deployment state uses lowercase environment file names.
-
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Aspire.Hosting.Pipelines;
+using System.Text.Json.Serialization;
+
+#pragma warning disable CA1308 // Aspire hashes normalized AppHost paths using lowercase text.
 
 namespace Aspire.Hosting;
+
+[JsonConverter(typeof(JsonStringEnumConverter<ModuleRepositoryCheckoutOwnership>))]
+internal enum ModuleRepositoryCheckoutOwnership
+{
+    Created,
+    Adopted
+}
 
 internal sealed record ModuleRepositoryInitializationState(
     int SchemaVersion,
@@ -15,9 +22,10 @@ internal sealed record ModuleRepositoryInitializationState(
     string ConfigurationFingerprint,
     string Origin,
     string ResolvedCommit,
+    ModuleRepositoryCheckoutOwnership Ownership,
     DateTimeOffset InitializedAtUtc)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public bool Matches(ModuleRepositoryRequirement requirement) =>
         SchemaVersion == CurrentSchemaVersion &&
@@ -25,10 +33,19 @@ internal sealed record ModuleRepositoryInitializationState(
         PathSafety.AreEqual(Destination, requirement.RepositoryPath) &&
         string.Equals(Revision, requirement.Revision, StringComparison.Ordinal) &&
         string.Equals(ConfigurationFingerprint, requirement.ConfigurationFingerprint, StringComparison.Ordinal);
+
+    public bool RefersTo(ModuleRepositoryRequirement requirement) =>
+        SchemaVersion == CurrentSchemaVersion &&
+        Enum.IsDefined(Ownership) &&
+        string.Equals(Repository, requirement.NormalizedRepository, StringComparison.Ordinal) &&
+        PathSafety.AreEqual(Destination, requirement.RepositoryPath) &&
+        string.Equals(Revision, requirement.Revision, StringComparison.Ordinal);
 }
 
 internal interface IModuleRepositoryStateStore
 {
+    string? StateFilePath { get; }
+
     Task<ModuleRepositoryInitializationState?> ReadAsync(
         ModuleRepositoryRequirement requirement,
         CancellationToken cancellationToken);
@@ -39,31 +56,68 @@ internal interface IModuleRepositoryStateStore
         CancellationToken cancellationToken);
 }
 
-internal sealed class AspireModuleRepositoryStateStore(
-    IDeploymentStateManager stateManager,
-    IDeploymentStateManager? fallbackStateManager = null)
-    : IModuleRepositoryStateStore
+internal sealed class FileModuleRepositoryStateStore(string stateFilePath)
+    : IModuleRepositoryStateStore, IDisposable
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    private const string StateFileName = "modular-apphosts.json";
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true
+    };
+
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly string _stateFilePath = Path.GetFullPath(
+        string.IsNullOrWhiteSpace(stateFilePath)
+            ? throw new ArgumentException("The repository state file path is required.", nameof(stateFilePath))
+            : stateFilePath);
+
+    public string? StateFilePath => _stateFilePath;
+
+    public void Dispose() => _gate.Dispose();
+
+    public static string ResolveStateFilePath(
+        string? appHostPathSha256,
+        string appHostDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
+        var stateDirectoryName = string.IsNullOrWhiteSpace(appHostPathSha256)
+            ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                Path.GetFullPath(appHostDirectory).ToLowerInvariant())))
+            : appHostPathSha256.Trim();
+        if (!string.Equals(
+                Path.GetFileName(stateDirectoryName),
+                stateDirectoryName,
+                StringComparison.Ordinal) ||
+            stateDirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new InvalidOperationException(
+                $"AppHost path SHA '{stateDirectoryName}' is not a valid state-directory name.");
+        }
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".aspire",
+            "deployments",
+            stateDirectoryName,
+            StateFileName);
+    }
 
     public async Task<ModuleRepositoryInitializationState?> ReadAsync(
         ModuleRepositoryRequirement requirement,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(requirement);
-        var state = await ReadSafelyAsync(
-            stateManager,
-            requirement,
-            cancellationToken).ConfigureAwait(false);
-        if (state is not null || !ShouldUseFallback())
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return state;
+            var document = await LoadAsync(repairMalformed: false, cancellationToken).ConfigureAwait(false);
+            return document?.Repositories.GetValueOrDefault(requirement.StepKey);
         }
-
-        return await ReadSafelyAsync(
-            fallbackStateManager!,
-            requirement,
-            cancellationToken).ConfigureAwait(false);
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task WriteAsync(
@@ -73,256 +127,133 @@ internal sealed class AspireModuleRepositoryStateStore(
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ArgumentNullException.ThrowIfNull(state);
-        await WriteAsync(stateManager, requirement, state, cancellationToken).ConfigureAwait(false);
-        if (ShouldUseFallback())
-        {
-            await WriteAsync(fallbackStateManager!, requirement, state, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    internal static string GetSectionName(ModuleRepositoryRequirement requirement) =>
-        $"modular-apphosts:repositories:{requirement.StepKey}";
-
-    private bool ShouldUseFallback()
-    {
-        if (fallbackStateManager is null)
-        {
-            return false;
-        }
-
-        var primaryPath = stateManager.StateFilePath;
-        var fallbackPath = fallbackStateManager.StateFilePath;
-        return string.IsNullOrWhiteSpace(primaryPath) || string.IsNullOrWhiteSpace(fallbackPath)
-            ? !string.Equals(primaryPath, fallbackPath, StringComparison.Ordinal)
-            : !PathSafety.AreEqual(primaryPath, fallbackPath);
-    }
-
-    private static async Task<ModuleRepositoryInitializationState?> ReadAsync(
-        IDeploymentStateManager manager,
-        ModuleRepositoryRequirement requirement,
-        CancellationToken cancellationToken)
-    {
-        var section = await manager.AcquireSectionAsync(
-            GetSectionName(requirement),
-            cancellationToken).ConfigureAwait(false);
-        var json = section.Data[string.Empty]?.GetValue<string>();
-        return string.IsNullOrWhiteSpace(json)
-            ? null
-            : JsonSerializer.Deserialize<ModuleRepositoryInitializationState>(json, SerializerOptions);
-    }
-
-    private static async Task<ModuleRepositoryInitializationState?> ReadSafelyAsync(
-        IDeploymentStateManager manager,
-        ModuleRepositoryRequirement requirement,
-        CancellationToken cancellationToken)
-    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await ReadAsync(manager, requirement, cancellationToken).ConfigureAwait(false);
+            var document = await LoadAsync(repairMalformed: true, cancellationToken).ConfigureAwait(false)
+                ?? new ModuleRepositoryStateDocument();
+            document.Repositories[requirement.StepKey] = state;
+            await SaveAsync(document, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<ModuleRepositoryStateDocument?> LoadAsync(
+        bool repairMalformed,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(_stateFilePath))
+        {
+            return null;
+        }
+
+        ModuleRepositoryStateDocument? document;
+        try
+        {
+            var stream = new FileStream(
+                _stateFilePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using (stream.ConfigureAwait(false))
+            {
+                document = await JsonSerializer.DeserializeAsync<ModuleRepositoryStateDocument>(
+                    stream,
+                    SerializerOptions,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception exception) when (
+            repairMalformed && exception is JsonException or InvalidOperationException)
+        {
+            return null;
         }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
             return null;
         }
-    }
 
-    private static async Task WriteAsync(
-        IDeploymentStateManager manager,
-        ModuleRepositoryRequirement requirement,
-        ModuleRepositoryInitializationState state,
-        CancellationToken cancellationToken)
-    {
-        var section = await manager.AcquireSectionAsync(
-            GetSectionName(requirement),
-            cancellationToken).ConfigureAwait(false);
-        section.SetValue(JsonSerializer.Serialize(state, SerializerOptions));
-        await manager.SaveSectionAsync(section, cancellationToken).ConfigureAwait(false);
-    }
-}
-
-/// <summary>
-/// Provides normal run mode with the same deployment-state file that Aspire pipeline mode uses.
-/// Aspire 13.4 otherwise selects user secrets for run mode, which is unavailable in AppHosts
-/// without a user-secrets ID.
-/// </summary>
-internal sealed class ModuleRepositoryDeploymentStateManager(string? stateFilePath)
-    : IDeploymentStateManager, IDisposable
-{
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        WriteIndented = true
-    };
-
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
-
-    public string? StateFilePath { get; } = stateFilePath;
-
-    public void Dispose() => _gate.Dispose();
-
-    public static string? ResolveStateFilePath(string? appHostPathSha256, string environmentName)
-    {
-        if (string.IsNullOrWhiteSpace(appHostPathSha256))
+        if (document is null || document.Repositories is null)
         {
             return null;
         }
 
-        ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
-        var normalizedEnvironment = environmentName.ToLowerInvariant();
-        if (normalizedEnvironment.Any(character =>
-                !char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-'))
+        if (document.SchemaVersion == ModuleRepositoryStateDocument.CurrentSchemaVersion)
         {
-            throw new ArgumentException(
-                "The environment name must contain only letters, digits, underscores, and hyphens.",
-                nameof(environmentName));
+            return document;
         }
 
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".aspire",
-            "deployments",
-            appHostPathSha256,
-            $"{normalizedEnvironment}.json");
-    }
-
-    public async Task<DeploymentStateSection> AcquireSectionAsync(
-        string sectionName,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sectionName);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
-            var section = new DeploymentStateSection(
-                sectionName,
-                data: null,
-                _versions.GetValueOrDefault(sectionName));
-            if (state[sectionName] is JsonValue value &&
-                value.TryGetValue<string>(out var serialized))
-            {
-                section.SetValue(serialized);
-            }
-
-            return section;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task SaveSectionAsync(
-        DeploymentStateSection section,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(section);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureCurrentVersion(section);
-            var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
-            state[section.SectionName] = section.Data[string.Empty]?.DeepClone();
-            await SaveAsync(state, cancellationToken).ConfigureAwait(false);
-            section.Version++;
-            _versions[section.SectionName] = section.Version;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task DeleteSectionAsync(
-        DeploymentStateSection section,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(section);
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureCurrentVersion(section);
-            var state = await LoadAsync(cancellationToken).ConfigureAwait(false);
-            state.Remove(section.SectionName);
-            await SaveAsync(state, cancellationToken).ConfigureAwait(false);
-            section.Version++;
-            _versions[section.SectionName] = section.Version;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    public async Task ClearAllStateAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await SaveAsync(new JsonObject(), cancellationToken).ConfigureAwait(false);
-            _versions.Clear();
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private void EnsureCurrentVersion(DeploymentStateSection section)
-    {
-        if (_versions.GetValueOrDefault(section.SectionName) != section.Version)
+        if (repairMalformed)
         {
             throw new InvalidOperationException(
-                $"Deployment state section '{section.SectionName}' was modified after it was acquired.");
+                $"Repository state file '{_stateFilePath}' uses unsupported schema version " +
+                $"'{document.SchemaVersion}'.");
         }
+
+        return null;
     }
 
-    private async Task<JsonObject> LoadAsync(CancellationToken cancellationToken)
+    private async Task SaveAsync(
+        ModuleRepositoryStateDocument document,
+        CancellationToken cancellationToken)
     {
-        if (StateFilePath is null || !File.Exists(StateFilePath))
-        {
-            return new JsonObject();
-        }
-
-        var json = await File.ReadAllTextAsync(StateFilePath, cancellationToken).ConfigureAwait(false);
-        return JsonNode.Parse(
-                json,
-                documentOptions: new JsonDocumentOptions
-                {
-                    AllowTrailingCommas = true,
-                    CommentHandling = JsonCommentHandling.Skip
-                })?
-            .AsObject() ?? new JsonObject();
-    }
-
-    private async Task SaveAsync(JsonObject state, CancellationToken cancellationToken)
-    {
-        if (StateFilePath is null)
-        {
-            return;
-        }
-
-        var directory = Path.GetDirectoryName(StateFilePath)
+        var directory = Path.GetDirectoryName(_stateFilePath)
             ?? throw new InvalidOperationException(
-                $"Deployment state path '{StateFilePath}' has no parent directory.");
+                $"Repository state path '{_stateFilePath}' has no parent directory.");
         Directory.CreateDirectory(directory);
         var temporaryPath = Path.Combine(
             directory,
-            $".{Path.GetFileName(StateFilePath)}.{Guid.NewGuid():N}.tmp");
+            $".{Path.GetFileName(_stateFilePath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            await File.WriteAllTextAsync(
+            var stream = new FileStream(
                 temporaryPath,
-                state.ToJsonString(SerializerOptions),
-                cancellationToken).ConfigureAwait(false);
-            File.Move(temporaryPath, StateFilePath, overwrite: true);
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough);
+            await using (stream.ConfigureAwait(false))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    document,
+                    SerializerOptions,
+                    cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, _stateFilePath, overwrite: true);
         }
         finally
         {
-            if (File.Exists(temporaryPath))
+            try
             {
                 File.Delete(temporaryPath);
             }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
+    }
+
+    private sealed class ModuleRepositoryStateDocument
+    {
+        // Repository records have their own schema version, so the envelope stays
+        // compatible with state files written by the repository-state preflight feature.
+        public const int CurrentSchemaVersion = 1;
+
+        public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+
+        public Dictionary<string, ModuleRepositoryInitializationState> Repositories { get; init; } =
+            new(StringComparer.Ordinal);
     }
 }

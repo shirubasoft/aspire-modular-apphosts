@@ -21,8 +21,13 @@ and run it. It has this form:
 aspire do initialize --apphost "<absolute-path-to-this-directory>" --non-interactive
 ```
 
-Initialization clones the external repository into an initializer-owned directory next to this
-repository. Start the sample again:
+Initialization clones the external repository into the human-readable canonical sibling
+`<workspace>/spire-external-repo-sample`, records `Created` ownership in the environment-independent
+`modular-apphosts.json` state file, and can fast-forward that clean initializer-managed checkout on
+later runs. If a matching sibling already exists before the first initialization, it is instead
+recorded as `Adopted` and never moved or updated by initialization. This
+sample deliberately initializes with the pipeline's default Production environment and starts with
+its Development launch profile. Start the sample again:
 
 ```bash
 aspire
