@@ -1,5 +1,9 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
+var git = builder.AddRequiredTool("git-cli", "git")
+    .WithWebsite("https://git-scm.com/downloads")
+    .WithInstallCommand(GetGitInstallOptions());
+
 builder.ExportModule("remote-notifications", module =>
 {
     module.WithRepository("https://github.com/shirubasoft/spire-external-repo-sample.git");
@@ -28,6 +32,32 @@ builder.ExportModule("remote-notifications", module =>
                     .WithExternalHttpEndpoints());
 });
 
-builder.ImportModule("remote-notifications");
+var notifications = builder.ImportModule("remote-notifications");
+notifications
+    .GetResource<IResourceWithWaitSupport>("notification-service")
+    .WaitFor(git);
 
 await builder.Build().RunAsync();
+
+static RequiredToolInstallOptions GetGitInstallOptions()
+{
+    if (OperatingSystem.IsWindows())
+    {
+        return new RequiredToolInstallOptions(
+            "winget",
+            "install",
+            "--id",
+            "Git.Git",
+            "--exact",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements");
+    }
+
+    if (OperatingSystem.IsMacOS())
+    {
+        return new RequiredToolInstallOptions("brew", "install", "git");
+    }
+
+    return new RequiredToolInstallOptions("sudo", "apt-get", "install", "--yes", "git");
+}

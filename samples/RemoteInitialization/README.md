@@ -5,7 +5,15 @@ This minimal sample imports `notification-service` from the existing
 repository. The repository is intentionally remote and unpinned so the initialization workflow is
 required and can later fast-forward a clean checkout when `main` changes.
 
-The sample requires the .NET 10 SDK, Aspire CLI 13.4.6 or later, Git, and the GitHub CLI.
+The sample requires the .NET 10 SDK, Aspire CLI 13.4.6 or later, and the GitHub CLI. Git can already
+be installed or can be supplied by the initialization step described below.
+
+Git is modeled as a required-tool resource instead of only as a startup warning. Its health check
+resolves `git` on the AppHost machine, `notification-service` waits for that health check, and the
+dashboard exposes both the Git downloads page and an **Install** command. The same platform-specific
+installer is registered as a prerequisite of `aspire do initialize`, so Git is installed before the
+repository-clone step when it is missing. The installer uses Winget on Windows, Homebrew on macOS,
+and `sudo apt-get` on Linux.
 
 From this directory, start the AppHost without initializing it:
 
@@ -21,7 +29,8 @@ and run it. It has this form:
 aspire do initialize --apphost "<absolute-path-to-this-directory>" --non-interactive
 ```
 
-Initialization clones the external repository into the human-readable canonical sibling
+Initialization first verifies or installs the required Git CLI, then clones the external repository
+into the human-readable canonical sibling
 `<workspace>/spire-external-repo-sample`, records `Created` ownership in the environment-independent
 `modular-apphosts.json` state file, and can fast-forward that clean initializer-managed checkout on
 later runs. If a matching sibling already exists before the first initialization, it is instead

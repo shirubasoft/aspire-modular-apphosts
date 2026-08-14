@@ -77,6 +77,29 @@ await builder.Build().RunAsync();
 
 From the AppHost directory, run `aspire run`, open the dashboard URL printed by Aspire, and use the `catalog-api` endpoint to verify the module is running.
 
+### Required host tools
+
+Use a required-tool resource when another resource cannot start until a host command is available.
+Unlike Aspire's `WithRequiredCommand`, which adds a startup warning to an existing resource,
+`AddRequiredTool` creates a local-only resource with a live health check. Any wait-capable resource
+can depend on it with `WaitFor`:
+
+```csharp
+var git = builder.AddRequiredTool("git-cli", "git")
+    .WithWebsite("https://git-scm.com/downloads")
+    .WithInstallCommand("brew", "install", "git");
+
+builder.AddProject<Projects.Catalog_Api>("catalog-api")
+    .WaitFor(git);
+```
+
+The dashboard shows the website and install commands. `aspire do initialize` also runs each missing
+tool's installer before every other initialization prerequisite.
+The installer command is passed directly as an executable and argument list; no shell is implied.
+Select the command with normal AppHost configuration or platform checks when installation differs
+between local environments. Required-tool resources are excluded from deployment manifests because
+they describe tools on the AppHost machine.
+
 For a repository-backed module, supply its repository through configuration or `WithRepository(...)` and materialize it with `builder.ImportCatalogModule()`. Packaged contracts can declare specialized projects with `ModuleProjectPathBase.Repository`, preserving local project debugging without coupling the contract to the consumer's source-tree layout. Import options can prefix or alias resources when a receiving AppHost already uses the contract names. The module guide covers repository-aware factories, project/container selection, identity, and image publishing.
 
 Inside another module's `Define` method, `CatalogModule.Reference(module)` returns the same strongly typed API and validates the required contract version. Module definitions can read the AppHost's `IConfiguration`, use their conventional `ConfigurationSection`, or call `GetOptions<T>()` to bind `IOptions<T>` from `Aspire:ModularAppHosts:Modules:<module-name>`.
@@ -171,5 +194,6 @@ for pinned setup, tag precedence, complete workflow files, permissions, and trou
 - [eShop E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/E2ETesting): `catalog` and `orders` modules tested in both modes in CI.
 - [Image pipeline sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/ImagePushE2E): effective image descriptions plus real local-registry build, push, pull, and mapping validation.
 - [Multi-repository E2E sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/MultiRepoE2E): an isolated consumer plus a two-AppHost local-registry workflow image handoff.
+- [Remote initialization sample](https://github.com/Shirubasoft/aspire-modular-apphosts/tree/main/samples/RemoteInitialization): a Git required-tool resource installed before repository initialization and used as a health-gated service dependency.
 
 For repository setup, validation commands, and the release workflow, see [Contributing](https://github.com/Shirubasoft/aspire-modular-apphosts/blob/main/CONTRIBUTING.md).

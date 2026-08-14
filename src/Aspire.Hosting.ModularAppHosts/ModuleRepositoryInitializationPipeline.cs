@@ -43,6 +43,8 @@ internal static class ModuleRepositoryInitializationPipeline
     internal const string StepName = "initialize";
     internal const string RepositoryStepTag = "initialize-module-repository";
 
+    private sealed class InitializationPipelineRegistration;
+
     private static readonly Action<ILogger, string, string, string, Exception?> LogInitializationStarted =
         LoggerMessage.Define<string, string, string>(
             LogLevel.Information,
@@ -77,6 +79,13 @@ internal static class ModuleRepositoryInitializationPipeline
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        if (builder.Services.Any(descriptor =>
+                descriptor.ServiceType == typeof(InitializationPipelineRegistration)))
+        {
+            return;
+        }
+
+        builder.Services.AddSingleton<InitializationPipelineRegistration>();
         builder.Pipeline.AddStep(CreateAggregateStep());
     }
 
@@ -92,7 +101,7 @@ internal static class ModuleRepositoryInitializationPipeline
     internal static PipelineStep CreateAggregateStep() => new()
     {
         Name = StepName,
-        Description = "Initializes all Git repositories required by modular AppHosts.",
+        Description = "Initializes all prerequisites required by the AppHost.",
         Action = _ => Task.CompletedTask
     };
 

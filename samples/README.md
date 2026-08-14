@@ -140,7 +140,9 @@ on an external `Shirubasoft/spire` checkout.
 
 [`RemoteInitialization`](RemoteInitialization/README.md) is the minimal user-facing initialization
 flow. Its first `aspire` run fails with the exact `aspire do initialize` recovery command,
-which clones an existing, unpinned `shirubasoft` repository. After initialization, plain `aspire`
+which first verifies or installs its health-gated Git required-tool resource and then clones an
+existing, unpinned `shirubasoft` repository. The imported service waits for Git just like it waits
+for any other Aspire dependency. After initialization, plain `aspire`
 starts the imported service from the human-readable `spire-external-repo-sample` sibling; later
 initialization runs can fast-forward its clean `Created` checkout. The
 imported `notification-service` is a specialized project export, so its native project/container
