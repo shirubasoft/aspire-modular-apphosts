@@ -18,20 +18,24 @@ internal sealed class TemporaryDirectory : IDisposable
         return new TemporaryDirectory(path);
     }
 
-    public void Dispose()
+    public void Dispose() => DeleteRecursively(Path);
+
+    public static void DeleteRecursively(string path)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var fullPath = System.IO.Path.GetFullPath(path);
         const int maximumAttempts = 5;
         for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
-            if (!Directory.Exists(Path))
+            if (!Directory.Exists(fullPath))
             {
                 return;
             }
 
             try
             {
-                NormalizeAttributes();
-                Directory.Delete(Path, recursive: true);
+                NormalizeAttributes(fullPath);
+                Directory.Delete(fullPath, recursive: true);
                 return;
             }
             catch (Exception exception) when (
@@ -43,18 +47,18 @@ internal sealed class TemporaryDirectory : IDisposable
         }
     }
 
-    private void NormalizeAttributes()
+    private static void NormalizeAttributes(string path)
     {
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = true,
             AttributesToSkip = FileAttributes.ReparsePoint
         };
-        foreach (var entry in Directory.EnumerateFileSystemEntries(Path, "*", options))
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path, "*", options))
         {
             File.SetAttributes(entry, FileAttributes.Normal);
         }
 
-        File.SetAttributes(Path, FileAttributes.Normal);
+        File.SetAttributes(path, FileAttributes.Normal);
     }
 }

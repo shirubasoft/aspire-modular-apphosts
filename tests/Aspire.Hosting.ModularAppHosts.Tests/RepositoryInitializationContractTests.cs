@@ -128,7 +128,7 @@ public sealed class RepositoryInitializationContractTests
         var adoptedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
         Assert.Equal(ModuleRepositoryCheckoutOwnership.Adopted, adoptedState!.Ownership);
 
-        Directory.Delete(requirement.RepositoryPath, recursive: true);
+        TemporaryDirectory.DeleteRecursively(requirement.RepositoryPath);
         var recreatedRequirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
             "orders",
             repository,
