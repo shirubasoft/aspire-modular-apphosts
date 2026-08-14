@@ -190,8 +190,9 @@ internal static class ModuleRepositoryInitializationPipeline
         var previousState = await stateStore.ReadAsync(
             requirement,
             cancellationToken).ConfigureAwait(false);
-        var ownership = ClassifyOwnership(requirement, previousState);
-        if (requirement.UsesCanonicalCheckout && PathExists(requirement.RepositoryPath))
+        var checkoutExists = PathExists(requirement.RepositoryPath);
+        var ownership = ClassifyOwnership(requirement, previousState, checkoutExists);
+        if (requirement.UsesCanonicalCheckout && checkoutExists)
         {
             await ValidateCanonicalCheckoutAsync(
                 requirement,
@@ -201,14 +202,6 @@ internal static class ModuleRepositoryInitializationPipeline
 
         if (ownership == ModuleRepositoryCheckoutOwnership.Adopted)
         {
-            if (!PathExists(requirement.RepositoryPath))
-            {
-                throw new InvalidOperationException(
-                    $"Repository state records canonical checkout '{requirement.RepositoryPath}' for " +
-                    $"'{requirement.NormalizedRepository}' as Adopted, but the developer-owned checkout is missing. " +
-                    "Restore the checkout; initialization will not replace an adopted checkout with an initializer-owned clone.");
-            }
-
             LogRepositoryOperationSkipped(
                 lifecycleLogger,
                 "synchronize",
@@ -452,9 +445,10 @@ internal static class ModuleRepositoryInitializationPipeline
 
     private static ModuleRepositoryCheckoutOwnership ClassifyOwnership(
         ModuleRepositoryRequirement requirement,
-        ModuleRepositoryInitializationState? previousState)
+        ModuleRepositoryInitializationState? previousState,
+        bool checkoutExists)
     {
-        if (!requirement.UsesCanonicalCheckout)
+        if (!requirement.UsesCanonicalCheckout || !checkoutExists)
         {
             return ModuleRepositoryCheckoutOwnership.Created;
         }
@@ -464,9 +458,7 @@ internal static class ModuleRepositoryInitializationPipeline
             return previousState.Ownership;
         }
 
-        return PathExists(requirement.RepositoryPath)
-            ? ModuleRepositoryCheckoutOwnership.Adopted
-            : ModuleRepositoryCheckoutOwnership.Created;
+        return ModuleRepositoryCheckoutOwnership.Adopted;
     }
 
     private static async Task ValidateCanonicalCheckoutAsync(

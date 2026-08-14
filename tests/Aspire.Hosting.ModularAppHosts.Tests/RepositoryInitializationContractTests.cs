@@ -61,7 +61,7 @@ public sealed class RepositoryInitializationContractTests
             TestContext.Current.CancellationToken,
             SynchronizeCreatedAsync);
 
-        Assert.Equal("repo-a", Path.GetFileName(requirement.RepositoryPath));
+        Assert.Equal("Repo_A", Path.GetFileName(requirement.RepositoryPath));
         Assert.Equal(firstCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
         var firstState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
         Assert.Equal(ModuleRepositoryCheckoutOwnership.Created, firstState!.Ownership);
@@ -81,6 +81,98 @@ public sealed class RepositoryInitializationContractTests
         Assert.Equal(secondCommit, await ReadGitAsync(requirement.RepositoryPath, "rev-parse", "HEAD"));
         var repeatedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
         Assert.Equal(ModuleRepositoryCheckoutOwnership.Created, repeatedState!.Ownership);
+    }
+
+    [Fact]
+    public async Task Deleted_adopted_checkout_is_recreated_with_created_ownership()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "orders-source");
+        var sourceCommit = await InitializeRepositoryAsync(sourcePath, "first");
+        var appHostPath = CreateAppHostRepository(workspace.Path);
+        const string repository = "https://example.test/acme/DB-orders.git";
+        var legacyCheckout = Path.Combine(workspace.Path, "db-orders");
+        await RunGitAsync(
+            workspace.Path,
+            "clone",
+            sourcePath,
+            legacyCheckout);
+        await RunGitAsync(legacyCheckout, "remote", "set-url", "origin", repository);
+        var requirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "orders",
+            repository,
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        Assert.Equal(legacyCheckout, requirement.RepositoryPath);
+        var statePath = Path.Combine(workspace.Path, "state", "modular-apphosts.json");
+        using var stateStore = new FileModuleRepositoryStateStore(statePath);
+        var settings = new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1));
+
+        static Task FailIfSynchronizedAsync(
+            ModuleRepositoryRequirement _,
+            ModuleRepositoryInitializationSettings __,
+            Action<string> ___,
+            Action<RepositorySyncLifecycleEvent> ____,
+            CancellationToken _____) =>
+            throw new InvalidOperationException("An adopted checkout must not be synchronized.");
+
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            requirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            FailIfSynchronizedAsync);
+        var adoptedState = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Adopted, adoptedState!.Ownership);
+
+        Directory.Delete(requirement.RepositoryPath, recursive: true);
+        var recreatedRequirement = new ModuleRepositoryPlanRegistry(appHostPath).Register(
+            "orders",
+            repository,
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        Assert.Equal(requirement.StepKey, recreatedRequirement.StepKey);
+        Assert.Equal("DB-orders", Path.GetFileName(recreatedRequirement.RepositoryPath));
+        var synchronizationCalls = 0;
+        async Task RecloneAsync(
+            ModuleRepositoryRequirement planned,
+            ModuleRepositoryInitializationSettings _,
+            Action<string> __,
+            Action<RepositorySyncLifecycleEvent> ___,
+            CancellationToken ____)
+        {
+            synchronizationCalls++;
+            await RunGitAsync(
+                Path.GetDirectoryName(planned.RepositoryPath)!,
+                "clone",
+                sourcePath,
+                planned.RepositoryPath);
+            await RunGitAsync(planned.RepositoryPath, "remote", "set-url", "origin", repository);
+        }
+
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            recreatedRequirement,
+            settings,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            RecloneAsync);
+
+        Assert.Equal(1, synchronizationCalls);
+        Assert.Equal(sourceCommit, await ReadGitAsync(recreatedRequirement.RepositoryPath, "rev-parse", "HEAD"));
+        var recreatedState = await stateStore.ReadAsync(
+            recreatedRequirement,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ModuleRepositoryCheckoutOwnership.Created, recreatedState!.Ownership);
+        Assert.Contains(
+            "\"ownership\": \"Created\"",
+            await File.ReadAllTextAsync(statePath, TestContext.Current.CancellationToken),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -153,7 +245,7 @@ public sealed class RepositoryInitializationContractTests
     public async Task Matching_slug_equivalent_checkout_is_adopted_without_synchronization()
     {
         using var workspace = TemporaryDirectory.Create();
-        var existingCheckout = Path.Combine(workspace.Path, "Repo_A");
+        var existingCheckout = Path.Combine(workspace.Path, "repo-a");
         var existingCommit = await InitializeRepositoryAsync(existingCheckout, "developer-checkout");
         var appHostPath = CreateAppHostRepository(workspace.Path);
         const string repository = "https://example.test/acme/Repo_A.git";
@@ -187,7 +279,7 @@ public sealed class RepositoryInitializationContractTests
         Assert.Equal(existingCommit, await ReadGitAsync(existingCheckout, "rev-parse", "HEAD"));
         var state = await stateStore.ReadAsync(requirement, TestContext.Current.CancellationToken);
         Assert.Equal(ModuleRepositoryCheckoutOwnership.Adopted, state!.Ownership);
-        Assert.False(Directory.Exists(Path.Combine(workspace.Path, "repo-a")));
+        Assert.False(Directory.Exists(Path.Combine(workspace.Path, "Repo_A")));
     }
 
     [Fact]
