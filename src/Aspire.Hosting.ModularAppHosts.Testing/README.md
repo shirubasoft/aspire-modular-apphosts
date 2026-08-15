@@ -18,21 +18,25 @@ compose
     .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
-Then select either testing builder while keeping the application lifecycle and assertions shared:
+Then pass the selected mode into a shared scenario:
 
 ```csharp
-await using IDistributedApplicationTestingBuilder builder = mode switch
+static async Task RunScenarioAsync(string mode)
 {
-    "apphost" => await DistributedApplicationTestingBuilder
-        .CreateAsync<Projects.EShop_E2E_AppHost>(),
-    "compose" => await DockerComposeDeploymentTestingBuilder
-        .DeployAsync<Projects.EShop_E2E_AppHost>(),
-    _ => throw new InvalidOperationException($"Unknown E2E mode '{mode}'.")
-};
+    await using IDistributedApplicationTestingBuilder builder = mode switch
+    {
+        "apphost" => await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.EShop_E2E_AppHost>(),
+        "compose" => await DockerComposeDeploymentTestingBuilder
+            .DeployAsync<Projects.EShop_E2E_AppHost>(),
+        _ => throw new InvalidOperationException($"Unknown E2E mode '{mode}'.")
+    };
 
-await using var app = await builder.BuildAsync();
-await app.StartAsync();
-await app.ResourceNotifications.WaitForResourceHealthyAsync("catalog-api");
+    await using var app = await builder.BuildAsync();
+    await app.StartAsync();
+    await app.ResourceNotifications.WaitForResourceHealthyAsync("catalog-api");
+    // Run shared assertions.
+}
 ```
 
 `DeployAsync` deploys through Aspire, imports the resolved endpoints and configuration, and destroys the deployment when the builder is disposed. It prefers a restored local Aspire tool manifest, retries detected host-port bind conflicts once, and allows both behaviors to be overridden through `DockerComposeDeploymentOptions`. `Create` and `CreateFromEnvironment` import a deployment owned by another system.

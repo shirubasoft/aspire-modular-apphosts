@@ -36,27 +36,33 @@ compose
     .WithTestConnectionString("catalog", catalogDatabase);
 ```
 
-`WithTestEndpoint` requires an external endpoint. When the endpoint omits a host port, the test export selects an available loopback port and applies it to the endpoint before Compose publishing; this avoids hard-coded sample ports and lets independent test deployments run concurrently. `DeployAsync` handles the race between the availability probe and Compose binding by destroying a partial deployment after a bind conflict and retrying once by default. It preserves the endpoint name, so multiple endpoints on one resource and calls such as `CreateHttpClient("catalog-api", "admin")` behave the same in both modes. The optional health path must be a root-relative path on the exported endpoint; network-path references such as `//other-host/health` are rejected. `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters; `WithTestConnectionString` imports a resource under the standard `ConnectionStrings:<name>` configuration key.
+- `WithTestEndpoint` requires an external endpoint and a root-relative health path. It preserves endpoint names and allocates a loopback host port when one is not declared.
+- `WithTestValue` accepts any Aspire `IValueProvider`, including secret parameters.
+- `WithTestConnectionString` imports a resource as `ConnectionStrings:<name>`.
 
 ## Use one test lifecycle
 
-Choose the builder at test startup and share the remaining test code:
+Pass the configured mode into a shared scenario and select only the builder:
 
 ```csharp
-await using IDistributedApplicationTestingBuilder builder = mode switch
+static async Task RunScenarioAsync(string mode)
 {
-    "apphost" => await DistributedApplicationTestingBuilder
-        .CreateAsync<Projects.EShop_E2E_AppHost>(),
-    "compose" => await DockerComposeDeploymentTestingBuilder
-        .DeployAsync<Projects.EShop_E2E_AppHost>(),
-    _ => throw new InvalidOperationException($"Unknown E2E mode '{mode}'.")
-};
+    await using IDistributedApplicationTestingBuilder builder = mode switch
+    {
+        "apphost" => await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.EShop_E2E_AppHost>(),
+        "compose" => await DockerComposeDeploymentTestingBuilder
+            .DeployAsync<Projects.EShop_E2E_AppHost>(),
+        _ => throw new InvalidOperationException($"Unknown E2E mode '{mode}'.")
+    };
 
-await using var app = await builder.BuildAsync();
-await app.StartAsync();
-await app.ResourceNotifications.WaitForResourceHealthyAsync("orders-api");
+    await using var app = await builder.BuildAsync();
+    await app.StartAsync();
+    await app.ResourceNotifications.WaitForResourceHealthyAsync("orders-api");
 
-using var orders = app.CreateHttpClient("orders-api", "http");
+    using var orders = app.CreateHttpClient("orders-api", "http");
+    // Run shared assertions.
+}
 ```
 
 In AppHost mode, Aspire starts the project resources and allocates their endpoints. In Compose mode, `DeployAsync` first runs `aspire deploy`, imports the resolved endpoints and configuration, and returns a builder for the already deployed services. Disposing that builder runs `aspire destroy`.
@@ -87,9 +93,9 @@ var builder = await DockerComposeDeploymentTestingBuilder
     });
 ```
 
-When `AspireCliPath` keeps its `aspire` default, the builder prefers an `aspire` command from the nearest `.config/dotnet-tools.json`. If that manifest has not been restored, it falls back to `aspire` on `PATH`; set an explicit executable path to override discovery. The Aspire CLI output is streamed while deploy and destroy run. A timed-out deploy still receives a best-effort destroy. Temporary output is removed only after destroy succeeds; if cleanup fails, the exception reports both failures and retains the output directory so a developer or CI recovery step still has the deployment state.
+With the default `AspireCliPath`, the builder prefers a restored Aspire command from the nearest .NET tool manifest, then falls back to `aspire` on `PATH`. It streams deploy/destroy output, attempts cleanup after a timeout or port conflict, and retains the output directory when cleanup fails. Compose port conflicts are retried once by default.
 
-When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. These modes import an existing environment's configuration. Imported files use dotenv syntax, including `export`, single- and double-quoted values, escapes, and inline comments. Malformed lines, duplicate keys, orphaned health checks, and endpoint URLs that are not plain HTTP(S) origins fail with the file and line or exported key in the diagnostic.
+When another system owns deployment, use `DockerComposeDeploymentTestingBuilder.Create<TEntryPoint>(filePath)` or set `ASPIRE_TEST_CONFIGURATION_FILE` and call `CreateFromEnvironment<TEntryPoint>()`. Both import a dotenv configuration file and reject malformed, duplicate, or inconsistent endpoint data.
 
 Aspire's environment-specific file can contain resolved secrets. Keep it out of source control and do not publish it as a CI artifact.
 

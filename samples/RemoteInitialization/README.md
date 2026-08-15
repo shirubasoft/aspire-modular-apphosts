@@ -1,62 +1,28 @@
 # Remote repository initialization
 
-This minimal sample imports `notification-service` from the existing
-[`shirubasoft/spire-external-repo-sample`](https://github.com/shirubasoft/spire-external-repo-sample)
-repository. The repository is intentionally remote and unpinned so the initialization workflow is
-required and can later fast-forward a clean checkout when `main` changes.
+This sample imports `notification-service` from the unpinned [`shirubasoft/spire-external-repo-sample`](https://github.com/shirubasoft/spire-external-repo-sample) repository.
 
-The sample requires the .NET 10 SDK, Aspire CLI 13.4.6 or later, and the GitHub CLI. Git can already
-be installed or can be supplied by the initialization step described below.
+Requirements: .NET 10 SDK, Aspire CLI 13.4.6 or later, and GitHub CLI. Git may already be installed or can be installed by the initialization pipeline.
 
-Git is modeled as a required-tool resource instead of only as a startup warning. Its health check
-resolves `git` on the AppHost machine, `notification-service` waits for that health check, and the
-dashboard exposes both the Git downloads page and an **Install** command. The same platform-specific
-installer is registered as a prerequisite of `aspire do initialize`, so Git is installed before the
-repository-clone step when it is missing. The installer uses Winget on Windows, Homebrew on macOS,
-and `sudo apt-get` on Linux.
-
-From this directory, start the AppHost without initializing it:
+From this directory, start the AppHost before initializing it:
 
 ```bash
-aspire
+aspire run
 ```
 
-Aspire cannot discover the missing remote project, so AppHost startup fails with an AppHost-aware
-recovery command instead of only reporting that the project file is absent. Copy that exact command
-and run it. It has this form:
+Startup reports the missing checkout and prints an exact recovery command. Run it, then start the AppHost again:
 
 ```bash
-aspire do initialize --apphost "<absolute-path-to-this-directory>" --non-interactive
+aspire do initialize --apphost . --non-interactive
+aspire run
 ```
 
-Initialization first verifies or installs the required Git CLI, then clones the external repository
-into the human-readable canonical sibling
-`<workspace>/spire-external-repo-sample`, records `Created` ownership in the environment-independent
-`modular-apphosts.json` state file, and can fast-forward that clean initializer-managed checkout on
-later runs. If a matching sibling already exists before the first initialization, it is instead
-recorded as `Adopted` and never moved or updated by initialization. This
-sample deliberately initializes with the pipeline's default Production environment and starts with
-its Development launch profile. Start the sample again:
+Initialization verifies Git, clones the remote to the sibling `<workspace>/spire-external-repo-sample`, and records it as initializer-managed. A matching checkout that already exists is adopted and never updated by initialization. Later initialization runs can fast-forward a clean initializer-managed checkout.
 
-```bash
-aspire
-```
+The `notification-service` resource becomes healthy and exposes `/notifications` through the dashboard.
 
-The resource now becomes healthy, and its `/notifications` endpoint is available from the Aspire
-dashboard. Run the initialization command again whenever you want to fast-forward the clean,
-unpinned checkout to the latest `main` commit.
+## What the sample demonstrates
 
-`notification-service` uses the specialized module project contract, so it also contributes
-developer-local mode-switching steps. Its checked-in configuration keeps a fresh clone
-runnable as a project. To run its .NET SDK container image instead, build it, select container mode,
-and restart the AppHost:
+Git is a required-tool resource with a live health check. The service waits for it, while the dashboard exposes its download page and an **Install** command. The same platform-specific installer runs before repository initialization when Git is missing.
 
-```bash
-aspire do build-notification-service --apphost . --non-interactive
-aspire do use-container-notification-service --apphost . --non-interactive
-aspire
-```
-
-Use `aspire do use-project-notification-service --apphost . --non-interactive` to force direct
-project execution, or `aspire do use-configured-modes --apphost . --non-interactive` to remove all
-developer-local mode overrides.
+The imported project also supports developer-local project/container switching. Its checked-in project mode works after a fresh clone; see [developer-local mode switching](../../docs/modules.md#developer-local-mode-switching) to try its generated `notification-service` steps.

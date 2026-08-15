@@ -1,51 +1,32 @@
 # E2E tests for modular AppHosts
 
-This sample uses two common eShop business modules:
+This sample runs one checkout scenario against either an in-process AppHost or an Aspire-deployed Docker Compose environment. Both modes produce `IDistributedApplicationTestingBuilder`, so lifecycle, health waits, clients, and assertions are shared.
 
-```text
-catalog module ──> catalog-api <── orders-api <── scenario tests
-                                      ^
-                                      |
-                               orders module
-```
-
-`EShop.E2E.AppHost` adds both modules, supplies the orders API key as an Aspire secret parameter, and declares a Docker Compose deployment environment. `OrdersModule.Define` obtains a strongly typed `CatalogModule` reference and owns the orders-to-catalog endpoint and startup relationships. The test project runs one checkout scenario against either a test-managed AppHost or a builder-managed Compose deployment. Both modes produce an `IDistributedApplicationTestingBuilder`, so all test lifecycle and client code is shared.
-
-Both module repositories are configured as explicit local paths in the current Git worktree. The
-AppHost and Compose CI modes therefore require no initialization or GitHub CLI access.
-
-The E2E AppHost and test project reference `Shirubasoft.Aspire.ModularAppHosts.Testing`, which contains the Compose export extensions and deployment builder. The ordinary modular AppHosts package remains free of `Aspire.Hosting.Testing` and Docker hosting dependencies.
+The AppHost adds `catalog` and `orders` modules, supplies a secret API-key parameter, and exports the endpoints and values needed by external deployment tests. Both module repositories use local paths, so the sample does not require initialization.
 
 ## Run through the AppHost
 
-Run these commands from the repository root, starting by entering the sample directory:
+From the repository root:
 
 ```bash
 cd samples/E2ETesting
-```
-
-The default mode starts and disposes the AppHost with `DistributedApplicationTestingBuilder`:
-
-```bash
 ESHOP_E2E_MODE=apphost \
-dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
+  dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
 ```
 
-Aspire allocates the runtime addresses, waits for both project resources to become healthy, and creates the test HTTP clients.
+Aspire starts both project resources, waits for health, and provides their HTTP clients.
 
 ## Run through Docker Compose
 
-Install the Aspire CLI, ensure Docker or Podman is running, and run the test:
+Install Aspire CLI 13.4.6 or later, start Docker or Podman, and run:
 
 ```bash
 ESHOP_E2E_MODE=compose \
-dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
+  dotnet test EShop.E2E.Tests/EShop.E2E.Tests.csproj
 ```
 
-`DockerComposeDeploymentTestingBuilder.DeployAsync` runs `aspire deploy`, imports the generated `.env.<environment>` file, and returns the same testing-builder contract used by AppHost mode. The exported HTTP endpoints allocate available host ports instead of reserving fixed sample ports. Disposing the builder runs `aspire destroy` and removes its temporary output directory after a successful teardown; failed teardown retains deployment state for recovery.
+`DockerComposeDeploymentTestingBuilder.DeployAsync` deploys through Aspire, imports the generated environment file, and returns the same testing-builder contract. Disposing it destroys the deployment; failed cleanup retains the output directory for recovery.
 
-CI uses a known output path so its fallback teardown can locate deployment state if the test process is interrupted. Local runs use an automatically cleaned temporary directory.
+Environment-specific deployment files can contain resolved secrets. The ignored `aspire-output` directory should not be published as a CI artifact.
 
-Environment-specific files can contain resolved secrets. `aspire-output` is ignored by Git and should not be retained as a CI artifact.
-
-For endpoint requirements, externally owned deployments, and CI options, see the [E2E testing guide](../../docs/e2e-testing.md).
+See the [E2E testing guide](../../docs/e2e-testing.md) for endpoint requirements, externally managed deployments, retry behavior, and CI options.

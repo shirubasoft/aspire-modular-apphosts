@@ -1,28 +1,20 @@
 # Modules
 
-`Shirubasoft.Aspire.ModularAppHosts` lets a shared C# contract describe an Aspire resource graph. Each receiving AppHost chooses whether to materialize that graph locally. Repository-backed modules can instead use a managed checkout. Consumers still reference the producer-owned C# contract assembly; the Git repository provides source and build context, not executable module-definition code.
+`Shirubasoft.Aspire.ModularAppHosts` lets a C# contract describe a reusable Aspire resource graph. AppHosts reference that contract directly; an imported module can obtain its projects and build inputs from a configured Git repository.
 
-## Define and materialize a module
+## Define a module
 
-To scaffold the first contract into an existing project that references the core package, install the item-template package and choose the C# type name and stable module identity:
+Install the item template in a project that references the core package:
 
 ```bash
 dotnet new install Shirubasoft.Aspire.ModularAppHosts.Templates
 dotnet new aspire-module --name OrdersModule --moduleName orders --namespace Orders.Modules
 ```
 
-The generated contract starts at version `1` with one container-backed API. Replace that example resource graph with the resources owned by the module.
-
-The generated API defines and materializes a conventional `Define(IDistributedApplicationModuleBuilder)` contract in one call:
-
-- `builder.AddOrdersModule()` uses the definition in the current application.
-- `builder.ImportOrdersModule()` uses a managed checkout when the module configures a repository.
-
-Keep the definition in a project referenced by every participating AppHost:
+The generated contract contains a runnable container. Replace it with the resources owned by the module:
 
 ```csharp
 using Aspire.Hosting;
-using Aspire.Hosting.ApplicationModel;
 
 namespace Orders.Modules;
 
@@ -35,58 +27,83 @@ public static partial class OrdersModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        module.RequiresRepository();
-        module.AddResource<ProjectResource>(ApiResourceName, context =>
-            context.ApplicationBuilder
-                .AddProject(
-                    context.ResourceName,
-                    Path.Combine(
-                        context.RepositoryPath,
-                        "src/Orders.Api/Orders.Api.csproj"))
-                .WithHttpEndpoint(name: "http"));
+        module.AddContainer(ApiResourceName, "nginx", "alpine")
+            .Configure((_, container) => container
+                .WithHttpEndpoint(targetPort: 80, name: "http"));
         module.AddContainer(CacheResourceName, "redis", "8-alpine");
     }
 }
 ```
 
-An AppHost using the local definition adds it directly:
+The generator creates `AddOrdersModule()`, `ImportOrdersModule()`, and an `OrdersModule.Module` wrapper with typed `Api` and `Cache` properties. Add a local definition like any other AppHost resource:
 
 ```csharp
-builder.Configuration[
-    DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] = sourcePath;
 var orders = builder.AddOrdersModule();
-```
 
-An importing AppHost registers the contract and imports by name:
-
-```csharp
-builder.Configuration[
-    DistributedApplicationModuleExtensions.GetRepositoryConfigurationKey(OrdersModule.Name)] =
-    "https://github.com/example/orders.git";
-var orders = builder.ImportOrdersModule();
-```
-
-Both paths return the same generated `OrdersModule.Module` API:
-
-```csharp
 builder.AddContainer("consumer", "example/consumer", "latest")
     .WithReference(orders.Api.GetEndpoint("http"))
     .WaitFor(orders.Api)
     .WaitFor(orders.Cache);
 ```
 
-## Initialize repository-backed imports
+Keep the contract in a project or NuGet package referenced by every participating AppHost. Set `PackageId` to the publishing NuGet package ID when the contract is distributed as a package.
 
-When an imported module needs remote repository content, module declaration registers an `initialize` pipeline step without invoking Git. From the AppHost directory run:
+## Import from a repository
+
+An importing AppHost references the producer's contract package and calls the generated import method:
+
+```csharp
+var orders = builder.ImportOrdersModule();
+```
+
+The container-only contract above needs no source checkout. When a contract declares a repository-relative project or another repository-backed resource, configure the producer repository in the consumer:
+
+```csharp
+module.AddProject(
+        "orders-worker",
+        "src/Orders.Worker/Orders.Worker.csproj",
+        ModuleProjectPathBase.Repository)
+    .ExportAsContainer("orders-worker");
+```
+
+```json
+{
+  "Aspire": {
+    "ModularAppHosts": {
+      "Modules": {
+        "orders": {
+          "Repository": "https://github.com/example/orders.git"
+        }
+      }
+    }
+  }
+}
+```
+
+Remote repository operations are explicit. From the AppHost directory, initialize once, then run normally:
 
 ```bash
 aspire do initialize --apphost . --non-interactive
 aspire run
 ```
 
-AppHosts can declare host commands needed by initialization as required-tool resources. The resource
-is healthy only while its command resolves on the AppHost machine, and its installer becomes a
-prerequisite of the same aggregate `initialize` step:
+If initialization has not run, AppHost startup fails with the state path and the exact recovery command. Module declaration itself does not clone, fetch, or build anything.
+
+Remote imports require Git. GitHub HTTPS repositories also require GitHub CLI because it is used as a process-scoped credential provider.
+
+| Repository declaration | Checkout behavior |
+| --- | --- |
+| Existing unpinned local path | Used directly; initialization does not manage it. |
+| Unpinned remote | Uses a sibling named after the remote repository. An existing matching checkout is adopted and never updated; a newly cloned checkout may be fast-forwarded by later initialization. |
+| Repository plus revision | Uses an isolated hashed sibling so a developer checkout is not moved or detached. |
+
+Initialization records credential-free ownership state under `~/.aspire/deployments/<apphost-sha>/modular-apphosts.json`. Repository-name collisions and origin mismatches fail rather than selecting or overwriting a checkout; set `CheckoutDirectoryName` to a single safe directory name when an unpinned remote needs an explicit sibling. Repository-relative project and build paths cannot escape the selected checkout.
+
+Repository values can come from `WithRepository(...)`, `DistributedApplicationModuleOptions`, or normal .NET configuration. Use `GetRepositoryConfigurationKey(moduleName)` when constructing the configuration key in code.
+
+## Require host tools
+
+Use a required-tool resource when another resource must wait for a command on the AppHost machine:
 
 ```csharp
 var git = builder.AddRequiredTool("git-cli", "git")
@@ -97,75 +114,35 @@ var orders = builder.ImportOrdersModule();
 orders.Api.WaitFor(git);
 ```
 
-`WithWebsite` and `WithInstallCommand` also add dashboard commands. Use explicit executable and
-argument values because installer commands do not run through a shell. Required-tool resources are
-local-only and do not appear in deployment manifests.
+The resource's health reflects whether the command resolves. Its website and installer appear as dashboard commands, and `aspire do initialize` runs the installer before repository steps. Installer commands receive an executable and argument list directly; they do not run through a shell. Required-tool resources are excluded from deployment manifests.
 
-Initialization locates the AppHost Git root without executing Git and assigns managed checkouts as direct siblings of that root:
+See the [remote initialization sample](../samples/RemoteInitialization/README.md) for a runnable, platform-aware setup.
 
-```text
-<workspace>/consumer/                         # AppHost Git root
-<workspace>/DB-orders_bo/                     # canonical unpinned checkout, preserving the remote name
-<workspace>/orders-<remote-hash>-rev-.../     # isolated pinned checkout
-~/.aspire/deployments/<apphost-sha>/modular-apphosts.json
-```
+## Generated API
 
-The canonical name preserves the remote repository's final name: `https://github.com/example/DB-orders_bo.git` becomes `<workspace>/DB-orders_bo`, matching a plain `git clone`. The lowercase, punctuation-normalized slug (`db-orders-bo` here) is only an equivalence and collision key. Planning probes sibling directory names with that slug before cloning. Exactly one match is used, including a differently cased or punctuated name; more than one match fails with every candidate path and the exact `CheckoutDirectoryName` key instead of selecting by directory-name sort order. Two different planned repository identities whose default names have the same slug also fail. `CheckoutDirectoryName` remains the explicit override, skips the probe, and resolves either kind of ambiguity. With no match, initialization clones to the case- and punctuation-preserving canonical name and records `Created` ownership. Created checkouts are initializer-managed: later initialization runs may fast-forward a clean branch according to `UpdateRepositoriesOnInitialize`, retain the existing dirty-worktree protection, and preserve `Created` ownership in state.
-
-If the resolved canonical directory already exists, initialization requires a Git checkout and compares its normalized `origin` with the planned repository. A match is recorded as `Adopted`; initialization records its current commit but never fetches, pulls, checks out, resets, cleans, updates submodules, or fast-forwards it. Developers update adopted checkouts themselves, and later initialization runs preserve `Adopted` ownership even when the checkout is dirty. If that directory is deleted, its persisted `Adopted` record no longer reserves developer ownership: the next initialization clones the planned checkout and replaces the record with `Created` ownership. A different origin fails with the canonical path, expected and actual normalized identities, and the exact `CheckoutDirectoryName` key.
-
-Equivalent normalized repositories share one initialization step. Two different identities that derive the same canonical path or slug fail during planning; set distinct `CheckoutDirectoryName` values rather than relying on a hashed fallback. Pinned revisions receive distinct hashed paths and are checked out detached after fetch. They never adopt, detach, reset, or move a developer's canonical checkout. Initialization writes credential-free repository state to the fixed machine-local file above, independent of the AppHost environment and Aspire execution mode.
-
-Versions through 11.0 stored repository records in environment deployment-state files or user secrets. Those records are not read from the fixed store; after upgrading, run `aspire do initialize --apphost . --non-interactive` once to recreate them.
-
-Unpinned remote checkouts used a `<name>-<hash>` sibling before this release. Those legacy clones are not discovered automatically. Rerun `initialize` to create the canonical sibling, or set `Aspire:ModularAppHosts:Modules:<module>:CheckoutDirectoryName` to the legacy directory name so a matching checkout can be adopted. Resolve same-name conflicts with distinct overrides. An override must be one safe filename segment beneath the AppHost Git root's sibling parent; paths, traversal, separators, empty names, invalid filename characters, and use with `RepositoryRevision` are rejected.
-
-An existing unpinned local repository path is used directly and is excluded from initialization. A local repository paired with a revision is treated as a clone source for an initializer-owned hashed sibling, protecting the developer checkout. Local-path behavior is unchanged. Repository values can come from `WithRepository`, `DistributedApplicationModuleOptions.Repository`, or the standard `Aspire:ModularAppHosts:Modules:<module>:Repository` configuration key. `ModuleRepositoryOptions.CheckoutDirectoryName` supplies the declaration-time override, while `DistributedApplicationModuleOptions.CheckoutDirectoryName` supplies it through `IOptions`. Use `GetRepositoryConfigurationKey(moduleName)` to construct the repository key.
-
-Normal `aspire run` validates required sibling directories, `.git` metadata, initialization state, project files, and build directories without cloning, fetching, pulling, or checking out. State failures name the exact fixed file that was consulted and end with an `aspire do initialize --apphost <path> --non-interactive` recovery command. Build repositories made optional by an explicit tagged-image fallback are not inspected at run time, even when their checkout directory exists. Set `RefreshBuildRepositoriesOnRun` globally or `RefreshBuildRepositoryOnRun` per resource to explicitly permit a clean, unpinned, source-required build checkout to fast-forward during image preparation.
-
-Project paths declared with `ModuleProjectPathBase.Repository` and repository-relative publish paths are compared with the operating system's path rules. Parent traversal and symbolic links that escape the repository are rejected.
-
-See the [Two-AppHost sample](../samples/README.md) for a complete local and imported module.
-
-## Generated resource API
-
-`GenerateDistributedApplicationModule` generates synchronous module-specific builder extensions such as `AddOrdersModule` and `ImportOrdersModule`, plus a `Module` wrapper with one typed property per declared resource. The wrapper inherits the shared module contract delegation, so generated code only contains contract-specific resource properties. A constant ending in `ResourceName` becomes a property without that suffix, so `ApiResourceName` produces `Api`. The optional attribute `Version` identifies the contract with an exact, ordinal string comparison; defining the same module name with another version fails with both versions in the diagnostic. Bump it when resource names, exposed resource types, required configuration, endpoints, or materialization semantics change incompatibly. A repository branch, commit, or image rebuild does not by itself change the contract version. `PackageId` identifies the NuGet package that publishes the contract. Publish the updated contract package and update participating AppHosts together when a version changes.
-
-| Contract declaration | Generated member |
+| Contract declaration | Generated API |
 | --- | --- |
-| `[GenerateDistributedApplicationModule("orders")]` on `OrdersModule` | Nested `OrdersModule.Module` typed wrapper and module identity validation. |
-| Conventional `Define(IDistributedApplicationModuleBuilder)` | `builder.AddOrdersModule()` and both `builder.ImportOrdersModule(...)` overloads. |
-| An exported definition without conventional `Define` | `builder.AddOrdersModule(IDistributedApplicationModule)` advanced overload. |
-| `OrdersModule.Reference(moduleBuilder)` | Version-checked typed reference for another module definition. |
-| `ApiResourceName` passed to a recognized `Add...` call | `OrdersModule.Module.Api` with the declared Aspire resource type. |
+| `[GenerateDistributedApplicationModule("orders")]` on `OrdersModule` | Typed `OrdersModule.Module` wrapper and identity validation. |
+| Conventional `Define(IDistributedApplicationModuleBuilder)` | `AddOrdersModule()` and `ImportOrdersModule(...)`. |
+| `ApiResourceName` used in a supported resource call | `OrdersModule.Module.Api` with the declared Aspire resource type. |
+| `OrdersModule.Reference(module)` | Version-checked typed reference from another module definition. |
 
-Contracts need `using Aspire.Hosting;`; add `using Aspire.Hosting.ApplicationModel;` when the
-definition names application-model resource types. Consuming AppHosts also import the contract's own
-namespace, such as `using Orders.Modules;`. IDEs expose generated members under the analyzer's
-generated files. The hint name is `<contract-namespace>_<type>.Module.g.cs`; to inspect a physical
-copy, enable `EmitCompilerGeneratedFiles` and set `CompilerGeneratedFilesOutputPath` in the contract
-project, conventionally to `$(BaseIntermediateOutputPath)generated`.
+The annotated type must be a top-level, non-generic, static partial class. Resource names must be compile-time strings in recognized `AddProject`, `AddContainer`, or `AddResource<TResource>` calls. The generator reports invalid declarations, unsupported names, generated-member collisions, and inaccessible custom resource types as build diagnostics.
 
-Advanced contracts that need inputs beyond configuration can omit the conventional `Define` method, register with `DefineModule`/`ExportModule`, and pass the resulting definition to the generated `builder.AddOrdersModule(definition)` overload. Use the overload whose third argument is the package ID when the contract is distributed as a package.
+`Version` is an exact contract identifier. Change it when resource names, exposed types, required configuration, endpoints, or materialization behavior become incompatible; a source revision or image rebuild alone does not change the contract. The generator requires .NET SDK 10.0.100 or later.
 
-The annotated type must be a top-level, non-generic, static partial class. The generator recognizes `AddProject`, `AddContainer`, and `AddResource<TResource>` calls whose resource names are compile-time strings inside the conventional `Define` method. Advanced contracts are scanned in module-builder definition methods or a lambda passed directly to `DefineModule`/`ExportModule`. Calls in unrelated helpers are ignored so the typed API cannot advertise resources the selected definition never materializes. Invalid declarations, unsupported names, generated-member collisions, and custom resource types that are less accessible than the generated module API are reported as build diagnostics.
-
-The generator supports .NET SDK 10.0.100 and later. Pin at least that version in `global.json`; patch releases and later .NET 10 feature bands are supported.
-
-Use the untyped API for dynamic contracts. Generated `AddProject` properties use `IResourceWithEndpoints` because configuration can select a `ProjectResource` or `ContainerResource` at run time:
-
-```csharp
-builder.DefineModule(OrdersModule.Name, "1", OrdersModule.Define);
-var orders = builder.ImportModule("orders");
-var api = orders.GetResource<ProjectResource>("orders-api");
-```
-
-Unlike the generated `builder.ImportOrdersModule()` extension, the raw untyped import does not register the definition for you; call `DefineModule` or `ExportModule` first.
+For dynamic contracts, use `DefineModule` or `ExportModule` and the untyped `AddModule`/`ImportModule` APIs. The raw import does not register a definition for you.
 
 ### Reference another module
 
-Generated contracts expose `Reference`, which resolves another module by its generated name and contract version and returns its strongly typed resource API. Request dependencies in `Define` and use them exactly as an AppHost would:
+Add or import a dependency before the module that references it:
+
+```csharp
+var catalog = builder.AddCatalogModule();
+var orders = builder.AddOrdersModule();
+```
+
+The dependent definition resolves the generated contract and uses its resources normally:
 
 ```csharp
 public static void Define(IDistributedApplicationModuleBuilder module)
@@ -180,18 +157,11 @@ public static void Define(IDistributedApplicationModuleBuilder module)
 }
 ```
 
-Add or import dependencies before the dependent module so their definitions and resources are available:
+A missing dependency or incompatible contract version fails while the dependent module is defined. Typed references preserve import aliases and prefixes.
 
-```csharp
-var catalog = builder.AddCatalogModule();
-var orders = builder.AddOrdersModule();
-```
+## Configure a module
 
-A missing definition or incompatible contract version fails while the dependent module is defined. The generated reference preserves resource aliases and prefixes because it delegates to the dependency's materialized module.
-
-### Module configuration and options
-
-Definitions receive the AppHost's complete `IConfiguration` through `module.Configuration`. `module.ConfigurationSection` is the conventional `Aspire:ModularAppHosts:Modules:<module-name>` section, and `module.GetOptions<T>()` binds that section to an `IOptions<T>` value while preserving property defaults:
+Definitions receive the AppHost's `IConfiguration` through `module.Configuration`. `module.ConfigurationSection` points to `Aspire:ModularAppHosts:Modules:<module-name>`, and `module.GetOptions<T>()` binds that section while preserving property defaults:
 
 ```csharp
 public sealed class OrdersModuleOptions
@@ -203,50 +173,32 @@ public static void Define(IDistributedApplicationModuleBuilder module)
 {
     var options = module.GetOptions<OrdersModuleOptions>().Value;
     module.AddContainer("orders-api", "example/orders-api")
-        .Configure((_, container) => container.WithEnvironment("REGION", options.Region));
+        .Configure((_, container) =>
+            container.WithEnvironment("REGION", options.Region));
 }
 ```
 
-Configure it through any normal .NET configuration provider:
+Configure the builder before adding or importing the module. Use `GetModuleConfigurationKey(moduleName)` when constructing the section key programmatically.
 
-```json
-{
-  "Aspire": {
-    "ModularAppHosts": {
-      "Modules": {
-        "orders": {
-          "Region": "south-america"
-        }
-      }
-    }
-  }
-}
-```
+## Prefix resource names on import
 
-Use `DistributedApplicationModuleExtensions.GetModuleConfigurationKey(moduleName)` when constructing the same section key programmatically. Options are bound when the module definition is first registered, so configure the builder before adding or importing it.
-
-### Resource prefixes and aliases
-
-An import can adapt contract names without changing typed lookups:
+Imports can adapt resource names without changing typed lookups:
 
 ```csharp
 var import = new ModuleImportOptions { ResourcePrefix = "sales-" };
 import.ResourceAliases[OrdersModule.CacheResourceName] = "shared-cache";
 
 var orders = builder.ImportOrdersModule(import);
-// orders.Api resolves the Aspire resource "sales-orders-api".
-// orders.Cache resolves "shared-cache".
+// orders.Api resolves "sales-orders-api"; orders.Cache resolves "shared-cache".
 ```
 
-Unknown aliases, aliases that map multiple resources to the same name, and collisions with resources already in the AppHost fail before any module resource is added.
+Unknown aliases, duplicate results, and collisions with existing AppHost resources fail before any module resource is added.
 
 ## Resource kinds
 
-### Existing container images
+### Containers
 
-Use `AddContainer` for an image that already exists in a registry or the local container runtime. Its
-`Configure` callback receives the same materialization context as project callbacks, so a declared
-container can resolve resources declared earlier in the same module:
+Use `AddContainer` for an existing image. Its callback can resolve resources declared earlier in the same module:
 
 ```csharp
 module.AddResource<ParameterResource>("cache-password", context =>
@@ -260,40 +212,9 @@ module.AddContainer("orders-cache", "redis", "8-alpine")
         .WithEndpoint(targetPort: 6379, name: "tcp"));
 ```
 
-### Projects and repository-aware factories
+### Projects
 
-Use `AddResource<TResource>` when a resource should run directly from the local or imported repository. Call `RequiresRepository()` once on the module and build paths from `context.RepositoryPath`, as in the module contract above. This makes imports request or discover repository content even when the module has no specialized `AddProject` declaration; synchronization occurs only through `initialize` or an explicit run-time refresh.
-
-```csharp
-module.RequiresRepository();
-module.AddResource<ProjectResource>("orders-api", context =>
-    context.ApplicationBuilder.AddProject(
-        context.ResourceName,
-        Path.Combine(context.RepositoryPath, "src", "Orders.Api", "Orders.Api.csproj")));
-```
-
-Repository-backed generic factories run while Aspire constructs the application model. They may compose paths from `context.RepositoryPath`, but they must not read repository content at declaration time. Missing checkout and file validation is deferred to normal-run preflight so `aspire do initialize` can construct the pipeline before the checkout exists.
-
-Use the specialized `AddProject` API when the project must also have a portable container image. The simple overload delegates build and push behavior to Aspire:
-
-```csharp
-module.AddContainer("orders-cache", "redis");
-module.AddProject<Projects.Orders_Api>("orders-api")
-    .ConfigureProject((context, project) => project
-        .WaitFor(context.GetResource<ContainerResource>("orders-cache"))
-        .WithHttpHealthCheck("/health"))
-    .ExportAsContainer("orders-api");
-```
-
-`ConfigureProject` applies when the project runs or when Aspire derives its container representation. The
-`ExportAsContainer` callback applies additional container-only configuration. Those callbacks and declared
-containers' `Configure` callbacks receive the materialization context, so they can call
-`GetResource<TResource>` for resources declared earlier in the same module. The context also reports the
-effective resource name, repository path, import state, and resolved image identity. This keeps resource
-configuration aligned without mutable variables in the contract. A callback that asks for a later
-resource fails during materialization; move that dependency before the consumer.
-
-Contracts distributed as packages should declare the project relative to the module repository so the receiving AppHost does not need the same source-tree layout:
+For a packaged contract, resolve project paths from the producer repository so consumers do not need the same source-tree layout:
 
 ```csharp
 module.AddProject(
@@ -303,123 +224,50 @@ module.AddProject(
     .ExportAsContainer("orders-api");
 ```
 
-Repository-relative paths are resolved only after the local source tree or imported checkout is selected. The two-argument `AddProject(name, projectPath)` overload remains relative to the defining AppHost, and generated `AddProject<TProject>` metadata follows that existing behavior.
+The two-argument `AddProject(name, projectPath)` and generated `AddProject<TProject>` metadata remain relative to the defining AppHost. `ConfigureProject` applies project-mode configuration, while the optional `ExportAsContainer` callback applies container-only configuration.
 
-### Any Aspire resource
+Use a generic factory when the project does not need a portable container representation:
 
-`AddResource<TResource>` accepts a lazy factory for first-party integrations, community integrations, and custom resource types:
+```csharp
+module.RequiresRepository();
+module.AddResource<ProjectResource>("orders-api", context =>
+    context.ApplicationBuilder.AddProject(
+        context.ResourceName,
+        Path.Combine(context.RepositoryPath, "src", "Orders.Api", "Orders.Api.csproj")));
+```
+
+Factories may compose paths during AppHost model construction but should not read repository content. Preflight validates the checkout and files after initialization can construct the pipeline.
+
+### Other Aspire resources
+
+`AddResource<TResource>` supports first-party integrations, community integrations, and custom resource types. For example, after referencing the `Aspire.Hosting.PostgreSQL` integration:
 
 ```csharp
 module.AddResource<PostgresServerResource>("postgres", context =>
     context.ApplicationBuilder.AddPostgres(context.ResourceName));
 ```
 
-Omit `RequiresRepository()` when every generic factory is independent of source files. A `WithImagePublishCommand` declaration marks its module as repository-backed automatically when the command uses the module repository. A publisher with an explicit `BuildRepository` can keep the module definition repository-independent.
+Factories run in declaration order and must return a resource named `context.ResourceName`. Use `context.GetResource<TResource>()` only for earlier resources. Prefixes and aliases do not rewrite literal configuration or fixed host ports, so derive related names from the context and prefer dynamically allocated ports.
 
-Container-backed integrations can use the three-argument overload to publish a custom image while keeping their specialized resource type:
+See [Module images](module-images.md) for native project and Dockerfile publishing, advanced image commands, pull mappings, and separate image-build repositories.
 
-```csharp
-module.AddResource<PostgresServerResource>(
-    "postgres",
-    context => context.ApplicationBuilder.AddPostgres(context.ResourceName),
-    new ModuleImageCommandOptions(
-        imageName: "example/orders-postgres",
-        publishCommand: "docker",
-        publishArguments:
-        [
-            "build",
-            "--tag",
-            ModuleImageCommandOptions.ImageReferencePlaceholder,
-            "."
-        ])
-    {
-        ImageRegistry = "ghcr.io"
-    });
-```
-
-The overload is constrained to `ContainerResource`; integration server resources derived from it retain their typed APIs. Before the factory runs, `context.Image` contains the resolved registry, name, tag, optional digest, repository, and full effective reference. When a digest is configured, the reference uses the immutable `repository@sha256:...` form. After the factory returns, the library replaces any integration-default image and registry, applies configured `ImageSHA256` and `ImagePullPolicy` values from the module's `Containers` section, and attaches the same just-in-time image preparation callback used by declared containers.
-
-Factory-created containers remain in the module's complete `Resources` collection, where `ResourceType` identifies the declared `ContainerResource` subtype. The narrower `Containers` collection contains only resources declared through `AddContainer` because a lazy integration factory does not have an image identity until materialization.
-
-Factories run in declaration order when the module is materialized. The context provides the receiving builder, effective resource name, repository path, import state, and `GetResource<TResource>` for earlier resources in the same module. The returned resource must use `context.ResourceName`. That name already includes the import prefix or alias, so runtime container names can follow it when a fixed name is unavoidable:
-
-```csharp
-module.AddResource<ContainerResource>("cache", context =>
-    context.ApplicationBuilder
-        .AddContainer(context.ResourceName, "redis")
-        .WithContainerName(context.ResourceName));
-```
-
-Prefixes and aliases do not rewrite arbitrary string configuration or fixed host ports. Prefer resource references and dynamically allocated host ports; when an integration requires literal values, derive every related name from `context.ResourceName` and make host ports configurable by the receiving AppHost.
-
-Modules containing only repository-independent resources, such as existing images or parameters, can be imported without `WithRepository`.
-
-## Module image workflows
-
-Projects use Aspire's native container publisher through `ExportAsContainer(imageName)`. Module-owned
-`AddDockerfile` resources also keep Aspire's standard Dockerfile build and push behavior. Use
-`ExportAsContainerWithCommand` or `WithImagePublishCommand` only when an image requires an arbitrary
-publisher command.
-
-The [module image workflow guide](module-images.md) covers lazy run preparation, native and advanced
-publishers, canonical identities, build/push/pull steps, read-only descriptions, workflow documents,
-external-image overrides, and independent build repositories.
 ## AppHost configuration
 
-Materialization policy is bound from `Aspire:ModularAppHosts` and registered as `IOptions<ModularAppHostsOptions>`. Every key is optional. Resource-specific values override module values, which override global defaults:
+Options bind from `Aspire:ModularAppHosts`. Resource values override module values, which override global defaults:
 
 ```json
 {
   "Aspire": {
     "ModularAppHosts": {
-      "GitHubCliPath": "gh",
-      "GitExecutablePath": "git",
-      "RepositoryCommandTimeout": "00:02:00",
-      "ImageBuildTimeout": "00:15:00",
-      "ImageTransferTimeout": "00:10:00",
-      "UpdateRepositoriesOnInitialize": true,
-      "RefreshBuildRepositoriesOnRun": false,
       "ProjectMode": "Auto",
+      "UpdateRepositoriesOnInitialize": true,
       "Modules": {
         "orders": {
           "Repository": "https://github.com/example/orders.git",
-          "CheckoutDirectoryName": "orders-source",
-          "UpdateRepositoryOnInitialize": false,
           "ProjectMode": "Container",
           "Projects": {
             "orders-api": {
-              "ProjectMode": "Project",
-              "LaunchProfileName": "https",
-              "ExcludeLaunchProfile": false,
-              "ExcludeKestrelEndpoints": false,
-              "ImageRegistry": "ghcr.io",
-              "ImageName": "example/orders-api",
-              "ImageTag": "debug",
-              "ProducedImageReference": "orders-api:build-output",
-              "PullBeforeBuild": true,
-              "PublishImage": true,
-              "PublishCommand": "dotnet",
-              "PublishArguments": [
-                "publish",
-                "Orders.Api.csproj",
-                "-t:PublishContainer",
-                "-p:ContainerRepository={image-name}",
-                "-p:ContainerImageTag={image-tag}"
-              ],
-              "PublishWorkingDirectory": "src/Orders.Api",
-              "BuildRepository": "https://github.com/example/orders-api-images.git",
-              "CheckoutDirectoryName": "orders-api-images",
-              "RefreshBuildRepositoryOnRun": true,
-              "ImagePullPolicy": "Never"
-            }
-          },
-          "Containers": {
-            "orders-cache": {
-              "ImageRegistry": "docker.io",
-              "ImageName": "redis",
-              "ImageTag": "8-alpine",
-              "PublishImage": false,
-              "ImagePullPolicy": "Missing"
+              "ProjectMode": "Project"
             }
           }
         }
@@ -429,64 +277,35 @@ Materialization policy is bound from `Aspire:ModularAppHosts` and registered as 
 }
 ```
 
-`ProjectMode` is honored only in Aspire run mode. Its `Auto` default runs modules added from local source as projects and imported modules as containers; publish mode always uses the declared container representation. Image, command, build-repository, build-revision, and checkout-directory settings can override an already-declared publisher, but configuration cannot introduce a publisher that is absent from the module contract. `CheckoutDirectoryName` is valid only for an unpinned remote: remove it before setting `RepositoryRevision` or `BuildRepositoryRevision`.
+- Global options include `GitExecutablePath`, `GitHubCliPath`, `RepositoryCommandTimeout`, `ImageBuildTimeout`, `ImageTransferTimeout`, `UpdateRepositoriesOnInitialize`, `RefreshBuildRepositoriesOnRun`, and `ProjectMode`.
+- Module options include `Repository`, `RepositoryRevision`, `CheckoutDirectoryName`, `UpdateRepositoryOnInitialize`, `ProjectMode`, `Projects`, and `Containers`.
+- Project and container options control image identity and publishing; project options also control launch-profile and endpoint behavior. See [Module images](module-images.md) for exact publisher settings and constraints.
 
-### Developer-local mode switching
+`ProjectMode.Auto` runs specialized exported projects from local modules as projects and those from imported modules as containers. Generic resource factories are unchanged. Publish mode always uses the declared container representation. A complete external image identity with publishing disabled can remove an image resource's source dependency.
 
-Every specialized module project contributes pipeline steps for changing its next run without editing
-AppHost code or configuration. Enable .NET user secrets on the AppHost once:
-
-```bash
-dotnet user-secrets init --project src/MyApp.AppHost/MyApp.AppHost.csproj
-```
-
-Then select a mode from any directory by supplying the AppHost explicitly:
-
-```bash
-aspire do use-containers --apphost src/MyApp.AppHost --non-interactive
-aspire do use-project-orders-api --apphost src/MyApp.AppHost --non-interactive
-aspire do use-configured-orders-api --apphost src/MyApp.AppHost --non-interactive
-aspire do use-configured-modes --apphost src/MyApp.AppHost --non-interactive
-```
-
-`use-projects` and `use-containers` force every exported module project and clear prior resource
-exceptions. Each project also exposes `use-project-<resource>`, `use-container-<resource>`, and
-`use-configured-<resource>` using its effective Aspire name after import prefixes and aliases. A
-resource's `use-configured` step bypasses a temporary global choice and restores the ordinary
-project → module → global → `Auto` configuration hierarchy for that resource.
-
-Selections are stored as one versioned value named `Aspire:ModularAppHosts:ModeSwitch` in the
-AppHost's user-secrets file. They affect only run mode and never change publish output. Because the
-resource type is chosen while the AppHost model is constructed, stop and restart the AppHost after
-running a switch step. The step does not stop running resources. For native `ExportAsContainer(...)`
-projects, run `aspire do build-<resource>` first when the selected image is not already available to
-the configured Docker or Podman runtime.
-
-A complete external image identity—registry, repository name, and exactly one tag or digest with `PublishImage: false`—removes that resource's source dependency. When every source-backed publisher is overridden and the module has no project or repository-backed factory, the imported module remains checkout-free. `images apply` configures this mode for workflow images.
-
-Configured module, project, and container names are validated against exported definitions. A typo fails synchronously with the missing name and available names. Missing initialized repositories, initialization state records, project files, and build directories are aggregated by normal-run preflight into one actionable error.
-
-The same options can be changed in code before materializing a module:
-
-```csharp
-builder.UseLocalModuleProjects();
-builder.UseModuleContainers();
-```
-
-Use `ConfigureModularAppHosts` when several policies should be set together or computed in code:
+The same options can be configured in code before any module is defined or materialized:
 
 ```csharp
 builder.ConfigureModularAppHosts(options =>
 {
-    options.UpdateRepositoriesOnInitialize = true;
-    options.RefreshBuildRepositoriesOnRun = false;
     options.Modules[OrdersModule.Name] = new DistributedApplicationModuleOptions
     {
         Repository = "https://github.com/example/orders.git",
-        RepositoryRevision = "v2.0.0",
-        UpdateRepositoryOnInitialize = false
+        RepositoryRevision = "v2.0.0"
     };
 });
 ```
 
-Repository inspection and synchronization are bounded by `RepositoryCommandTimeout`; image builds use `ImageBuildTimeout`; image pulls, pushes, and tags use `ImageTransferTimeout`. `GitExecutablePath` and `GitHubCliPath` configure the repository tools without changing module contracts. Every remote is cloned through Git; GitHub HTTPS repositories use the configured `gh` only as a process-scoped credential provider. Lifecycle logs are structured, and raw command output stays with the relevant operation or resource. The library does not transform command output; configure secret masking in the execution environment.
+### Developer-local mode switching
+
+Specialized module projects add pipeline steps that persist a developer's next run mode in the AppHost's user secrets. Initialize user secrets once, then choose a global or resource-specific mode:
+
+```bash
+dotnet user-secrets init --project src/MyApp.AppHost/MyApp.AppHost.csproj
+aspire do use-containers --apphost src/MyApp.AppHost --non-interactive
+aspire do use-project-orders-api --apphost src/MyApp.AppHost --non-interactive
+```
+
+Stop and restart the AppHost after changing a mode; the step does not restart resources. Use `use-configured-<resource>` to remove one resource override or `use-configured-modes` to clear all temporary overrides. Native `ExportAsContainer(...)` projects need their image built before selecting container mode when it is not already available to Docker or Podman.
+
+For checked-in, AppHost-wide intent, configure `ProjectMode` or call `UseLocalModuleProjects()` / `UseModuleContainers()` before materializing modules.
