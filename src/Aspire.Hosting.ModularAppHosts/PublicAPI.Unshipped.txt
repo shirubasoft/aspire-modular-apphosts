@@ -1,4 +1,21 @@
 #nullable enable
+Aspire.Hosting.RequiredToolInstallOptions
+Aspire.Hosting.RequiredToolInstallOptions.Arguments.get -> System.Collections.Generic.IReadOnlyList<string!>!
+Aspire.Hosting.RequiredToolInstallOptions.Command.get -> string!
+Aspire.Hosting.RequiredToolInstallOptions.RequiredToolInstallOptions(string! command, params string![]! arguments) -> void
+Aspire.Hosting.RequiredToolInstallOptions.Timeout.get -> System.TimeSpan
+Aspire.Hosting.RequiredToolInstallOptions.Timeout.set -> void
+Aspire.Hosting.RequiredToolInstallOptions.WorkingDirectory.get -> string?
+Aspire.Hosting.RequiredToolInstallOptions.WorkingDirectory.set -> void
+Aspire.Hosting.RequiredToolResource
+Aspire.Hosting.RequiredToolResource.Command.get -> string!
+Aspire.Hosting.RequiredToolResource.RequiredToolResource(string! name, string! command) -> void
+Aspire.Hosting.RequiredToolResourceExtensions
+static Aspire.Hosting.RequiredToolResourceExtensions.AddRequiredTool(this Aspire.Hosting.IDistributedApplicationBuilder! builder, string! name, string! command) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>!
+static Aspire.Hosting.RequiredToolResourceExtensions.WithInstallCommand(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>! builder, Aspire.Hosting.RequiredToolInstallOptions! options) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>!
+static Aspire.Hosting.RequiredToolResourceExtensions.WithInstallCommand(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>! builder, string! command, params string![]! arguments) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>!
+static Aspire.Hosting.RequiredToolResourceExtensions.WithWebsite(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>! builder, string! website) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>!
+static Aspire.Hosting.RequiredToolResourceExtensions.WithWebsite(this Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>! builder, System.Uri! website) -> Aspire.Hosting.ApplicationModel.IResourceBuilder<Aspire.Hosting.RequiredToolResource!>!
 Aspire.Hosting.ModuleRepositoryOptions
 Aspire.Hosting.ModuleRepositoryOptions.ModuleRepositoryOptions() -> void
 Aspire.Hosting.ModuleRepositoryOptions.CheckoutDirectoryName.get -> string?

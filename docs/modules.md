@@ -84,6 +84,23 @@ aspire do initialize --apphost . --non-interactive
 aspire run
 ```
 
+AppHosts can declare host commands needed by initialization as required-tool resources. The resource
+is healthy only while its command resolves on the AppHost machine, and its installer becomes a
+prerequisite of the same aggregate `initialize` step:
+
+```csharp
+var git = builder.AddRequiredTool("git-cli", "git")
+    .WithWebsite("https://git-scm.com/downloads")
+    .WithInstallCommand("brew", "install", "git");
+
+var orders = builder.ImportOrdersModule();
+orders.Api.WaitFor(git);
+```
+
+`WithWebsite` and `WithInstallCommand` also add dashboard commands. Use explicit executable and
+argument values because installer commands do not run through a shell. Required-tool resources are
+local-only and do not appear in deployment manifests.
+
 Initialization locates the AppHost Git root without executing Git and assigns managed checkouts as direct siblings of that root:
 
 ```text

@@ -430,6 +430,13 @@ jobs:
           --timeout 120
           --non-interactive
 
+      - name: Verify the required tool resource
+        run: >-
+          dotnet tool run aspire -- wait git-cli
+          --apphost samples/RemoteInitialization
+          --timeout 30
+          --non-interactive
+
       - name: Stop the sample
         if: always()
         run: >-
