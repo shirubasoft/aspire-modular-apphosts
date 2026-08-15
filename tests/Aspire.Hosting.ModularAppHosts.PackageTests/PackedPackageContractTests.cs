@@ -211,8 +211,8 @@ public sealed class PackedPackageContractTests
 
         var readme = ReadTextEntry(packages.ToolPackagePath, "README.md");
 
-        Assert.Contains("## Repo B: publish images", readme, StringComparison.Ordinal);
-        Assert.Contains("## Repo A: apply images", readme, StringComparison.Ordinal);
+        Assert.Contains("## Producer: publish images", readme, StringComparison.Ordinal);
+        Assert.Contains("## Consumer: apply images", readme, StringComparison.Ordinal);
         Assert.Contains("workflow dispatch", readme, StringComparison.Ordinal);
         Assert.Contains("## Module image workflow document contract", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("Define an Aspire resource graph once", readme, StringComparison.Ordinal);

@@ -20,5 +20,5 @@ using Spire.ModuleContract;
 var spire = builder.ImportSpireModule();
 ```
 
-The runnable AppHosts live in `samples/MultiRepoE2E`; their lifecycle harness and assertions live in
-`tests/Spire.MultiRepo.E2E.Tests`.
+See the [runnable AppHosts](../README.md), the [module guide](../../../docs/modules.md), and the
+[lifecycle test harness](../../../tests/Spire.MultiRepo.E2E.Tests/README.md).

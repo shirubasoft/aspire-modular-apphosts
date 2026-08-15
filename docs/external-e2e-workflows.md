@@ -1,27 +1,29 @@
 # Cross-repository E2E image workflows
 
-This workflow lets a branch in Repo B build and push only the module images it owns, then run Repo
-A's existing E2E AppHost against those images. Repo A receives a strict module image workflow document and ordinary .NET
-configuration; it does not clone Repo B or rebuild Repo B's resources.
+A producer repository can build the module images it owns and run a consumer repository's existing E2E AppHost against those exact images. The consumer receives a strict workflow document and ordinary .NET configuration; it does not clone or rebuild the producer's resources.
 
-The checked-in examples contain no custom orchestration scripts:
+The checked-in workflows keep orchestration in the tool:
 
-- [Repo A receiver](workflows/repo-a-e2e.yml) accepts both `workflow_call` and
-  `workflow_dispatch`.
-- [Repo B reusable call](workflows/repo-b-workflow-call.yml) hands the compact workflow document directly to
-  Repo A.
-- [Repo B dispatch](workflows/repo-b-dispatch.yml) uses the tool to dispatch, wait, and propagate
-  Repo A's status.
+- [Consumer receiver](workflows/repo-a-e2e.yml) supports both `workflow_call` and `workflow_dispatch`.
+- [Reusable producer call](workflows/repo-b-workflow-call.yml) passes compact document JSON directly.
+- [Producer dispatch](workflows/repo-b-dispatch.yml) starts a separate consumer run, waits for it, and returns its status.
 
-## Contract between the repos
+## Choose a handoff
 
-Repo B's AppHost must expose pushable module images. Each selected project/container needs a
-resolved registry, repository, tag, and build/push plan; see the
-[module image workflow guide](module-images.md).
-Repo A must import the same module contract identities. A module image workflow document entry is keyed by the declared
-`module/resource`, never by Repo A's effective Aspire alias.
+| Handoff | Use it when | Behavior |
+| --- | --- | --- |
+| Reusable `workflow_call` | GitHub permits the producer to call the consumer's workflow directly. | The consumer workflow runs in the caller context and explicitly checks out the consumer repository. |
+| `workflow_dispatch` | The consumer needs a separate workflow run, permission boundary, and UI history. | The tool dispatches the exact run, streams it, and returns its result. |
 
-Pin the same release of the runtime package and tool in both repositories. In each repo:
+For a reusable call, copy the receiver and reusable producer examples. The `uses:` revision chooses the consumer workflow definition; the `repo-a-ref` input chooses the consumer source revision.
+
+For a separate run, copy the receiver and dispatch examples. The dispatch command is shown below.
+
+## Set up both repositories
+
+The producer AppHost must expose pushable module images with a registry, repository, tag, and build/push plan. The consumer AppHost must import the same module contract identities. Workflow entries use declared `module/resource` names, not aliases assigned by the consumer.
+
+Pin the same runtime package and workflow tool release in both repositories:
 
 ```bash
 dotnet new tool-manifest
@@ -29,190 +31,78 @@ dotnet tool install Shirubasoft.Aspire.ModularAppHosts.Tool --version <VERSION>
 git add .config/dotnet-tools.json
 ```
 
-The workflows restore that committed manifest with `dotnet tool restore`. Repo B also needs Aspire
-CLI 13.4.6 or later. Dispatch additionally needs GitHub CLI 2.87.0 or later; GitHub-hosted runners
-already include `gh`, but verify the version on self-hosted runners.
+Restore the manifest with `dotnet tool restore`. Publishing also needs Aspire CLI 13.4.6 or later; dispatch needs GitHub CLI 2.87.0 or later.
 
-## Module image workflow document contract
+See the [tool reference](../src/Aspire.Hosting.ModularAppHosts.Tool/README.md) for command behavior, the strict workflow-document schema, tag precedence, limits, and exit codes. Use each command's `--help` output for its complete option list.
 
-Repo B publishes a [versioned module image workflow document](module-image-workflow.schema.json). This
-tool-specific contract is not an Aspire application manifest; it carries module/source identities
-needed for cross-repository handoff. A complete example
-is checked in at [examples/module-image-workflow.json](examples/module-image-workflow.json):
+## Publish producer images
 
-```json
-{
-  "schemaVersion": 1,
-  "images": [
-    {
-      "module": "orders",
-      "resource": "api",
-      "resourceKind": "project",
-      "registry": "ghcr.io",
-      "repository": "your-org/orders-api",
-      "tag": "0123456789abcdef",
-      "digest": null
-    }
-  ]
-}
-```
-
-Unknown properties, duplicate case-insensitive identities, incomplete registry references, invalid
-tags/digests, and reserved configuration separators are rejected. Each image has exactly one tag
-or SHA-256 digest. The workflow document and the complete dispatch input payload are each limited to 65,535
-characters.
-
-`images publish` records the pushed tag. It does not query the registry for a post-push digest.
-Use a unique immutable-by-convention tag such as the commit SHA, or supply a digest workflow document from a
-trusted system when registry-level immutability is required.
-
-## Publish in Repo B
-
-Authenticate the container runtime first, then publish an explicit selection:
+Authenticate the selected container runtime, then publish an explicit module/resource selection:
 
 ```bash
 dotnet tool run modular-apphosts -- images publish \
-  --apphost src/RepoB.AppHost \
+  --apphost src/Producer.AppHost \
   --module orders \
   --resource api \
   --tag "$GITHUB_SHA" \
-  --resource-tags '{"orders/worker":"worker-candidate"}' \
   --output module-image-workflow.json
 ```
 
-Repeat `--module` and `--resource` to select module-owned publishers by their declared identities.
-Use `--all` only when every publishable module image should be pushed. The command runs Aspire's
-`workflow-images` pipeline once; the selected dependency graph prepares and pushes every selected
-image exactly once and writes the module image workflow document from those resolved push targets.
-Run `aspire do describe-images` separately when a read-only inventory is needed.
+Repeat `--module` and `--resource` as needed, or use `--all`. On GitHub Actions, the command emits `workflow-document` for a reusable workflow and `workflow-document-path` for dispatch. Use `aspire do describe-images` when only a read-only inventory is needed.
 
-On GitHub Actions it automatically emits step outputs:
+## Apply images in the consumer
 
-| Output | Use |
-| --- | --- |
-| `workflow-document` | Compact JSON passed to a reusable workflow. |
-| `workflow-document-path` | Saved file passed to `workflow dispatch`. |
-
-## Apply in Repo A
-
-Pass the workflow document through an environment variable and run the E2E command through `apply`:
+Run the consumer's normal E2E command through `images apply`:
 
 ```bash
 dotnet tool run modular-apphosts -- images apply \
   --json "$IMAGE_WORKFLOW" \
-  --tag "$REPO_A_IMAGE_TAG" \
-  --resource-tags "$REPO_A_RESOURCE_TAGS" \
   -- \
-  dotnet test tests/RepoA.E2E.Tests/RepoA.E2E.Tests.csproj --configuration Release
+  dotnet test tests/Consumer.E2E.Tests/Consumer.E2E.Tests.csproj --configuration Release
 ```
 
-`apply` projects the workflow document into the standard `Aspire:ModularAppHosts:Modules` option hierarchy and
-launches the command after `--` with that configuration. It does not invoke a shell or modify the
-parent process, so the exact invocation works locally and in CI. Projects run in container mode,
-listed resources do not publish locally, and `ImagePullPolicy.Always` prevents a stale local tag.
-When every source-backed image publisher is covered and the module does not explicitly require
-repository content, even a repository declared by the module contract is not discovered, prepared,
-or cloned; the receiving AppHost uses the contract assembly for its resource model and the workflow document
-for images.
-Normal `IConfiguration` precedence still applies; later code configuration can intentionally replace
-a workflow override. Standard input and output are streamed, and the child exit code is returned.
+Use exactly one of `--json` or `--file`. `apply` starts the command after `--` directly, with the workflow document projected into `Aspire:ModularAppHosts:Modules` configuration. Listed projects use container mode, local publishing is disabled, and `ImagePullPolicy.Always` prevents stale local tags. Standard input/output and the child exit code pass through unchanged.
 
-The tag precedence is the same for both handoff styles:
+When every source-backed image is covered and the module has no other repository-dependent resources, the consumer does not need the producer checkout. Consumer-side `--tag` or `--resource-tags` can select other existing registry tags; they do not create or retag images.
 
-| Order | Source | Scope |
-| --- | --- | --- |
-| 1 | AppHost-resolved image tag/digest | Each Repo B resource. |
-| 2 | Repo B `images publish --tag` | Every selected resource. |
-| 3 | Repo B `images publish --resource-tags` | Named Repo B resources. |
-| 4 | Repo A `images apply --tag` | Every received resource. |
-| 5 | Repo A `images apply --resource-tags` | Named Repo A resources. |
+## Dispatch a separate consumer run
 
-Repo A's tag options only select existing images. They do not create or retag registry content.
-
-## Choose a handoff
-
-| Handoff | Use it when | Behavior |
-| --- | --- | --- |
-| Reusable `workflow_call` | GitHub permits Repo B to call Repo A's workflow directly. | Repo A's workflow runs in the caller context; it must explicitly check out Repo A. |
-| `workflow_dispatch` | Repo A should have a separate workflow run, permissions, and UI history. | The tool dispatches the exact run, streams it, and returns its status to Repo B. |
-
-For a reusable call, copy [repo-b-workflow-call.yml](workflows/repo-b-workflow-call.yml) into Repo B
-and [repo-a-e2e.yml](workflows/repo-a-e2e.yml) into Repo A. The `uses:` revision chooses the Repo A
-workflow definition; the `repo-a-ref` input chooses the Repo A source revision checked out by it.
-
-For a separate run, copy [repo-b-dispatch.yml](workflows/repo-b-dispatch.yml). Its orchestration is
-one command:
+The producer can create and wait for a specific consumer workflow run with one command:
 
 ```bash
 dotnet tool run modular-apphosts -- workflow dispatch \
-  --repository your-org/repo-a \
+  --repository your-org/consumer \
   --workflow external-e2e.yml \
   --ref main \
   --workflow-document module-image-workflow.json \
-  --input repo-a-ref=main \
-  --input image-tag="$REPO_A_IMAGE_TAG" \
-  --input resource-tags="$REPO_A_RESOURCE_TAGS"
+  --input repo-a-ref=main
 ```
 
-The tool sends JSON to `gh workflow run`, takes the exact returned run URL, and calls
-`gh run watch --compact --exit-status`. It writes `run-id` and `run-url` as step outputs. The
-calling job's `timeout-minutes` bounds the wait; cancellation reaches `gh` through the tool.
+The tool passes JSON to `gh workflow run`, reads the created run URL, and streams `gh run watch --compact --exit-status`. It emits `run-id` and `run-url` as GitHub step outputs. Bound the wait with the calling job's `timeout-minutes`.
 
-## Authentication and registry access
+## Permissions and trust
 
-| Operation | Minimum workflow concern |
+| Operation | Requirement |
 | --- | --- |
-| Checkout Repo B | `contents: read`. |
-| Push Repo B images | Registry write access; for GHCR this is commonly `packages: write`. |
-| Dispatch Repo A | `GH_TOKEN` must be able to access Repo A and trigger Actions there. Repo B's built-in token normally cannot dispatch a different repository. |
-| Watch Repo A | The same `gh` authentication must read the run and checks. Fine-grained PATs cannot currently grant the Checks permission required by `gh run watch`. |
-| Pull in Repo A | Registry read access; for GHCR this is commonly `packages: read`. |
-| Checkout private Repo A from a reusable call | A token that can read Repo A, passed as `REPO_A_CHECKOUT_TOKEN`. |
+| Producer checkout | `contents: read`. |
+| Push images | Registry write access; commonly `packages: write` for GHCR. |
+| Dispatch consumer | `GH_TOKEN` that can access the consumer and trigger Actions. The producer's built-in token normally cannot dispatch another repository. |
+| Watch consumer | Authentication that can read the run and checks. Fine-grained PATs cannot grant the Checks permission needed by `gh run watch`. |
+| Pull images | Registry read access; commonly `packages: read` for GHCR. |
+| Reusable call to a private consumer | A checkout token that can read that repository. |
 
-For a private GHCR package, grant Repo A Actions access in the package settings or supply registry
-credentials that can read Repo B's package. Repository permissions alone do not automatically make
-every separately scoped package readable.
+For private GHCR packages, grant the consumer repository Actions access in the package settings or provide suitable registry credentials. Keep tokens in `GH_TOKEN` or action inputs, not command arguments or workflow documents.
 
-Do not run the image-publishing job for an untrusted fork with privileged secrets. Fork pull
-requests normally receive a read-only built-in token and no protected secrets. Use an explicit
-trusted maintainer workflow or another isolated policy before building and executing fork-provided
-container inputs.
+Do not publish images from untrusted fork pull requests with privileged credentials. Use a trusted maintainer workflow or another isolated policy before building and executing fork-provided container inputs.
 
-Workflow values are assigned through `env` and passed as quoted command arguments in the examples;
-they are not interpolated directly into shell programs. Tokens stay in `GH_TOKEN` or action inputs,
-not command lines or workflow documents.
+## Troubleshooting
 
-## Exit status and troubleshooting
+- **No run URL:** upgrade `gh` to 2.87.0 or later. Do not select the latest run; concurrent dispatches make that ambiguous.
+- **Apply has no effect:** keep the E2E command after `--` in the same `images apply` invocation.
+- **An image cannot be pulled:** confirm the selected tag was pushed and the consumer runtime can authenticate to its registry.
+- **A resource is unknown:** use its declared `module/resource` identity, not the consumer's alias or effective Aspire name.
+- **Private GHCR returns unauthorized:** grant the consumer repository package access and verify the login token can read it.
+- **`gh run watch` rejects authentication:** use a compatible GitHub App installation token or classic token instead of a fine-grained PAT.
+- **Dispatch exceeds the payload limit:** publish fewer resources or shorten input values; the tool validates the complete payload before contacting GitHub.
 
-Image workflow commands return `0` on success, `1` for operational failures, `2` for invalid inputs, and
-`130` when interrupted. Dispatch returns `gh run watch --exit-status` so Repo A failure makes Repo
-B fail without a second status-mapping layer.
-
-- **No run URL is returned:** upgrade `gh` to 2.87.0 or newer. Never guess by selecting the latest
-  run; concurrent dispatches make that unsafe.
-- **Apply has no effect:** ensure the E2E command follows `--` in the same `images apply`
-  invocation; configuration cannot escape into a parent shell or a later step.
-- **A tag cannot be pulled:** ensure it was pushed and that Repo A's container runtime is logged in.
-- **A resource is unknown:** use the declared `module/resource`, not an imported alias or effective
-  Aspire name.
-- **A private GHCR image returns unauthorized:** grant Repo A access in the package's Actions
-  settings and confirm the login token can read the package.
-- **`gh run watch` rejects authentication:** replace a fine-grained PAT with a compatible GitHub
-  App installation token or classic token.
-- **Dispatch exceeds the payload limit:** publish fewer resources or shorten repository/tag/input
-  values; the tool validates the total JSON payload before calling GitHub.
-
-## Adoption checklist
-
-1. Pin matching runtime and tool versions in both repositories.
-2. Confirm Repo B's AppHost publishes every selected resource to a registry Repo A can reach.
-3. Copy the Repo A receiver and replace repository/test paths.
-4. Choose and copy one Repo B handoff; replace `your-org/repo-a`, workflow name, refs, and AppHost
-   path.
-5. Configure registry write/read permissions and, for dispatch, `GH_TOKEN`.
-6. Configure Repo A package access and private checkout secrets where needed.
-7. Test from a trusted branch with a unique tag, then verify Repo B receives Repo A's failure code.
-
-The [MultiRepoE2E sample](../samples/MultiRepoE2E/README.md) is the runnable local-registry version.
-CI validates its real producer-to-consumer publish/apply handoff while tool tests validate dispatch
-against deterministic `gh` process responses.
+The [MultiRepoE2E sample](../samples/MultiRepoE2E/README.md) runs the same producer-to-consumer handoff against a local registry. CI validates publish/apply behavior; tool tests cover deterministic dispatch responses.

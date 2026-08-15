@@ -21,6 +21,12 @@ built fixture assembly. The support components are separated by responsibility:
 - `ProcessExecutor` uses CliWrap with bounded cancellation and process-tree termination.
 - `FailureBundle` and cleanup/assertion components retain complete diagnostics.
 
+The suite packs the module contract, creates isolated consumer and producer repositories, and then
+verifies managed checkout ownership, pinned-revision isolation, fail-fast recovery commands,
+read-only normal-run Git access, opt-in clean refresh, dirty-worktree protection, selected container
+runtime behavior, and tagged-image fallback without a build checkout. A separate CI job validates
+the producer-to-consumer `images publish` / `images apply` handoff against a local registry.
+
 Run the full Docker-backed suite from the repository root:
 
 ```bash

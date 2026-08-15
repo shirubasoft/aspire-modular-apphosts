@@ -9,12 +9,13 @@ explicit start, allowing the AppHost model to run against local fixtures:
 
 ```bash
 cd samples/ImagePushE2E/ImagePush.E2E.AppHost
-aspire
+aspire run
 ```
 
-The pipeline scripts exercise the same AppHost through Aspire's real deployment steps:
+For maintainer validation, stop the AppHost and run the pipeline scripts from the repository root. Restore the pinned Aspire CLI first:
 
 ```bash
+dotnet tool restore
 bash samples/ImagePushE2E/test-image-describe.sh
 bash samples/ImagePushE2E/test-image-push.sh
 bash samples/ImagePushE2E/test-image-pull.sh

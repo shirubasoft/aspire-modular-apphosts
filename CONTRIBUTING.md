@@ -2,87 +2,51 @@
 
 ## Prerequisites
 
-- .NET 10 SDK, pinned by [`global.json`](global.json).
-- Aspire CLI restored from the repository's local tool manifest for sample and deployment E2E tests.
-- Docker or Podman for container-backed samples and Compose E2E tests.
+- .NET 10 SDK pinned by [`global.json`](global.json).
+- Aspire CLI restored from the local tool manifest.
+- Docker or Podman for container-backed samples and deployment tests.
 
 ## Validate the repository
 
-From the repository root, one command restores pinned tools and dependencies, verifies formatting, builds, runs all non-container tests, and packs all four public packages:
+The build entry point restores pinned tools and dependencies, verifies formatting, builds, runs non-container tests, and packs all public packages.
 
-```bash
-./build.sh
-# Windows:
-./build.ps1
-```
+| Task | Linux/macOS | Windows |
+| --- | --- | --- |
+| Standard validation | `./build.sh` | `./build.ps1` |
+| Include container tests | `./build.sh --containers` | `./build.ps1 -Containers` |
+| Validate a release version | `./build.sh --package-version 1.2.3` | `./build.ps1 -PackageVersion 1.2.3` |
 
-Release automation runs the same validation path with an explicit package version:
+The package contract suite inspects the core library, testing library, workflow tool, and template packages, then builds temporary consumers from those packages.
 
-```bash
-./build.sh --package-version 1.2.3
-# Windows:
-./build.ps1 -PackageVersion 1.2.3
-```
-
-Include the real Docker Compose deployment lifecycle when Docker or Podman is running:
-
-```bash
-./build.sh --containers
-# Windows:
-./build.ps1 -Containers
-```
-
-The package contract suite packs the core library, testing library, workflow tool, and template projects; inspects their package contracts; and builds temporary consumers against the resulting packages.
+For the full Docker-backed multi-repository scenario, use the command and runtime guidance in the [test harness README](tests/Spire.MultiRepo.E2E.Tests/README.md).
 
 ## Repository layout
 
-- `src/Aspire.Hosting.ModularAppHosts`: core module APIs.
-- `src/Aspire.Hosting.ModularAppHosts.Generators`: source generator packaged with the core library.
-- `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose testing support.
-- `src/Aspire.Hosting.ModularAppHosts.Tool`: module image workflow document publication/application and cross-repository dispatch CLI.
-- `tests`: unit, lifecycle, generator, and package contract tests.
-- `tests/Spire.MultiRepo.E2E.Tests`: xUnit lifecycle tests and the isolated multi-repository scenario.
-- `tests/Spire.MultiRepo.E2E.Support`: tracked-fixture, process, Git, runtime, cleanup, and diagnostic support.
-- `samples`: runnable modular AppHosts and focused usage examples.
-- `templates`: the packaged `dotnet new` item template for the first module contract.
-- `docs`: user guides that are too detailed for the package README.
-
-Run the Docker-backed multi-repository suite with the same command as CI:
-
-```bash
-dotnet tool restore
-MULTI_REPO_E2E=true ASPIRE_CONTAINER_RUNTIME=docker \
-  dotnet test tests/Spire.MultiRepo.E2E.Tests/Spire.MultiRepo.E2E.Tests.csproj \
-  --configuration Release
-```
-
-Podman is supported through Aspire's selected runtime and can be exercised by changing the runtime
-value to `podman`; the hosted CI suite currently validates Docker end to end.
+- `src/Aspire.Hosting.ModularAppHosts`: core module APIs and packaged source generator.
+- `src/Aspire.Hosting.ModularAppHosts.Testing`: optional Docker Compose test support.
+- `src/Aspire.Hosting.ModularAppHosts.Tool`: workflow-document and cross-repository dispatch CLI.
+- `tests/Spire.MultiRepo.E2E.*`: isolated repository lifecycle and handoff coverage.
+- `samples`: runnable AppHosts and focused usage examples.
+- `templates`: packaged `dotnet new aspire-module` item template.
+- `docs`: user guides too detailed for package READMEs.
 
 ## Commits and pull requests
 
-Keep changes focused and include tests or documentation for user-visible behavior. Use [Conventional Commits](https://www.conventionalcommits.org/) because releases are calculated from commit history:
+Keep changes focused and document user-visible behavior. Releases are calculated from [Conventional Commits](https://www.conventionalcommits.org/):
 
 - `fix:` and `perf:` produce a patch release.
 - `feat:` produces a minor release.
-- A `!` after the type or scope, or a `BREAKING CHANGE:` footer, produces a major release.
+- `!` after the type or scope, or a `BREAKING CHANGE:` footer, produces a major release.
 - Documentation, tests, refactoring, and build-only changes do not release on their own.
 
-When squash-merging, ensure the resulting commit message still follows this convention.
+When squash-merging, ensure the resulting commit still follows this convention.
 
 ## Documentation
 
-Describe the current supported workflow and lead with the task a reader can perform. Keep prerequisites,
-security boundaries, and option constraints beside the command or API they govern. Breaking-change
-history belongs in Conventional Commit messages and generated release notes, leaving reference guides
-focused on the current contract. Avoid comparisons with unrelated or unsupported concepts in reference
-guides.
+Lead with the task a reader can perform. Keep prerequisites, security boundaries, and option constraints beside the command or API they govern. Breaking-change history belongs in commit messages and generated release notes; reference guides describe the current contract.
 
 ## Releases
 
-After the complete CI workflow succeeds on `main`, the release workflow calculates the next version, publishes the core, testing, and template NuGet packages plus symbol packages, and creates the corresponding GitHub release. Versions are derived from semantic commit history rather than edited manually. The .NET SDK, AppHost SDK, NuGet dependencies, and local Aspire CLI are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
+After complete CI succeeds on `main`, release automation derives the next version, promotes the exact packages produced by that CI run, publishes them to NuGet, and creates the GitHub release. Set the repository variable `NUGET_PUBLISH_ENABLED` to `true` to enable publishing from successful `main` builds.
 
-For publish-enabled pushes to `main`, CI calculates that version before its Linux build and stores the resulting NuGet packages as a workflow artifact. The release workflow promotes the packages from that exact successful CI run rather than rebuilding or rerunning tests.
-
-Set the repository variable `NUGET_PUBLISH_ENABLED` to `true` to enable publishing from successful
-`main` builds.
+SDK, AppHost SDK, dependency, and local Aspire CLI versions are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
