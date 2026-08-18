@@ -1,0 +1,46 @@
+name: Generate prerelease packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: NuGet SemVer prerelease version (for example, 14.0.0-preview.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Set up minimum supported .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.102
+
+      - name: Validate, test, and pack
+        shell: bash
+        env:
+          PRERELEASE_VERSION: ${{ inputs.version }}
+        run: ./build.sh --package-version "$PRERELEASE_VERSION"
+
+      - name: Upload prerelease packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-prerelease-packages
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+          if-no-files-found: error

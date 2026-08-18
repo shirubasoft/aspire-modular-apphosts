@@ -24,6 +24,7 @@ jobs:
           args: >-
             -color
             .github/workflows/ci.yml
+            .github/workflows/prerelease-packages.yml
             .github/workflows/publish.yml
             docs/workflows/repo-a-e2e.yml
             docs/workflows/repo-b-dispatch.yml

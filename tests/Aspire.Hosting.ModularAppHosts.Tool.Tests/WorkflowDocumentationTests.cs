@@ -7,6 +7,30 @@ namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
 public sealed class WorkflowDocumentationTests
 {
     [Fact]
+    public async Task Prerelease_workflow_uses_the_repository_build_entry_point_without_publishing()
+    {
+        var workflowPath = Path.Combine(
+            FindRepositoryRoot(),
+            ".github",
+            "workflows",
+            "prerelease-packages.yml");
+        var workflow = await File.ReadAllTextAsync(
+            workflowPath,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
+        Assert.Contains("PRERELEASE_VERSION: ${{ inputs.version }}", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "./build.sh --package-version \"$PRERELEASE_VERSION\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("artifacts/*.nupkg", workflow, StringComparison.Ordinal);
+        Assert.Contains("artifacts/*.snupkg", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("nuget push", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secrets.", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Checked_in_workflow_document_example_matches_the_current_contract()
     {
         var repositoryRoot = FindRepositoryRoot();

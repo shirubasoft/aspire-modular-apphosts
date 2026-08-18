@@ -49,4 +49,14 @@ Lead with the task a reader can perform. Keep prerequisites, security boundaries
 
 After complete CI succeeds on `main`, release automation derives the next version, promotes the exact packages produced by that CI run, publishes them to NuGet, and creates the GitHub release. Set the repository variable `NUGET_PUBLISH_ENABLED` to `true` to enable publishing from successful `main` builds.
 
+To generate installable prerelease packages without publishing them, run the **Generate prerelease packages** workflow from the Actions tab and enter an explicit SemVer prerelease such as `14.0.0-preview.1`. Download the `nuget-prerelease-packages` artifact when the run completes. The input must include a prerelease label; stable versions remain the responsibility of release automation.
+
+The same workflow can be started from a checkout with GitHub CLI:
+
+```bash
+gh workflow run prerelease-packages.yml -f version=14.0.0-preview.1
+```
+
+The workflow runs the same `./build.sh --package-version <version>` entry point used locally and by CI. It validates, tests, and packs the repository, but never pushes packages to NuGet and requires no publishing secrets.
+
 SDK, AppHost SDK, dependency, and local Aspire CLI versions are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.
