@@ -1,4 +1,4 @@
-name: Generate prerelease packages
+name: Publish prerelease NuGet packages
 
 on:
   workflow_dispatch:
@@ -7,12 +7,25 @@ on:
         description: NuGet SemVer prerelease version (for example, 14.0.0-preview.1)
         required: true
         type: string
+      confirm_publish:
+        description: Publish the generated packages to NuGet.org
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  build-test-pack:
+  build-test-pack-publish:
+    if: >-
+      vars.NUGET_PUBLISH_ENABLED == 'true' &&
+      inputs.confirm_publish &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -30,6 +43,19 @@ jobs:
         with:
           dotnet-version: 10.0.102
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install locked release tooling
+        run: npm ci --prefix .github/release
+
+      - name: Validate prerelease version
+        env:
+          PRERELEASE_VERSION: ${{ inputs.version }}
+        run: node .github/release/validate-prerelease-version.mjs "$PRERELEASE_VERSION"
+
       - name: Validate, test, and pack
         shell: bash
         env:
@@ -44,3 +70,14 @@ jobs:
             artifacts/*.nupkg
             artifacts/*.snupkg
           if-no-files-found: error
+
+      - name: Publish prerelease packages to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push artifacts/*.nupkg
+          --source https://api.nuget.org/v3/index.json
+          --api-key "$NUGET_API_KEY"
+          --symbol-source https://api.nuget.org/v3/index.json
+          --symbol-api-key "$NUGET_API_KEY"
+          --skip-duplicate
