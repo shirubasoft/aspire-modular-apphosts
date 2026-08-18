@@ -12,7 +12,6 @@ public static partial class SpireModule
 
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        module.RequiresRepository();
         module.AddContainer(ApiResourceName, ImageName)
             .WithImagePublishCommand(new ModuleImageCommandOptions(
                 imageName: ImageName,
