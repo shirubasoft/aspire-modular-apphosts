@@ -82,6 +82,122 @@ public sealed class SynchronousModuleMaterializationTests
         Assert.Equal(["git-must-not-run-during-materialization"], requiredCommands);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Repository_preflight_does_not_block_an_unrelated_module_resource(
+        bool brokenModuleImportedFirst)
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.Configuration["DcpPublisher:CliPath"] = Environment.ProcessPath;
+        builder.Configuration["DcpPublisher:DashboardPath"] = Environment.ProcessPath;
+
+        var broken = builder.ExportModule("broken", definition =>
+        {
+            definition.WithRepository(
+                "https://example.test/acme/broken.git",
+                new ModuleRepositoryOptions
+                {
+                    CheckoutDirectoryName = $"missing-{Path.GetFileName(appHost.Path)}"
+                });
+            definition.RequiresRepository();
+            definition.AddContainer("broken-api", "busybox");
+        });
+        var independent = builder.ExportModule("independent", definition =>
+            definition.AddContainer("independent-api", "busybox"));
+
+        if (brokenModuleImportedFirst)
+        {
+            builder.ImportModule(broken.Name);
+            builder.ImportModule(independent.Name);
+        }
+        else
+        {
+            builder.ImportModule(independent.Name);
+            builder.ImportModule(broken.Name);
+        }
+
+        var independentResource = builder.Resources
+            .OfType<ContainerResource>()
+            .Single(resource => resource.Name == "independent-api");
+        var brokenResource = builder.Resources
+            .OfType<ContainerResource>()
+            .Single(resource => resource.Name == "broken-api");
+        Assert.Empty(independentResource.Annotations.OfType<RequiredCommandAnnotation>());
+        Assert.Single(brokenResource.Annotations.OfType<RequiredCommandAnnotation>());
+
+        await using var application = builder.Build();
+        await builder.Eventing.PublishAsync(
+            new BeforeResourceStartedEvent(independentResource, application.Services),
+            TestContext.Current.CancellationToken);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.Eventing.PublishAsync(
+                new BeforeResourceStartedEvent(brokenResource, application.Services),
+                TestContext.Current.CancellationToken));
+        Assert.Contains("modules 'broken' require repository", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repository_preflight_validates_a_local_checkout_required_by_the_started_resource()
+    {
+        using var appHost = CreateGitAppHost();
+        var missingCheckout = Path.Combine(appHost.Path, "missing-orders");
+        var builder = CreateBuilder(appHost.Path);
+        builder.Configuration["DcpPublisher:CliPath"] = Environment.ProcessPath;
+        builder.Configuration["DcpPublisher:DashboardPath"] = Environment.ProcessPath;
+        builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(missingCheckout);
+            definition.RequiresRepository();
+            definition.AddContainer("orders-api", "busybox");
+        });
+        builder.ImportModule("orders");
+        var resource = Assert.Single(builder.Resources.OfType<ContainerResource>());
+
+        await using var application = builder.Build();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.Eventing.PublishAsync(
+                new BeforeResourceStartedEvent(resource, application.Services),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("requires repository checkout", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(missingCheckout, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repository_preflight_does_not_block_a_sibling_resource_with_no_build_repository()
+    {
+        using var appHost = CreateGitAppHost();
+        var builder = CreateBuilder(appHost.Path);
+        builder.Configuration["DcpPublisher:CliPath"] = Environment.ProcessPath;
+        builder.Configuration["DcpPublisher:DashboardPath"] = Environment.ProcessPath;
+        var module = builder.ExportModule("orders", definition =>
+        {
+            definition.WithRepository(appHost.Path);
+            definition.AddContainer("orders-publisher", "orders-publisher")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "orders-publisher",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = "https://example.test/acme/orders-images.git"
+                });
+            definition.AddContainer("orders-independent", "busybox");
+        });
+        builder.AddModule(module);
+        var independentResource = builder.Resources
+            .OfType<ContainerResource>()
+            .Single(resource => resource.Name == "orders-independent");
+
+        Assert.Empty(independentResource.Annotations.OfType<RequiredCommandAnnotation>());
+        await using var application = builder.Build();
+        await builder.Eventing.PublishAsync(
+            new BeforeResourceStartedEvent(independentResource, application.Services),
+            TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public void Module_configuration_changes_the_canonical_checkout_directory_name()
     {

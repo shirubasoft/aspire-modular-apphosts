@@ -157,7 +157,8 @@ internal static class ModuleMaterializationPlanning
                 module.Name,
                 $"build repository for resource '{resourceName}'",
                 normalizedRepository,
-                requiredOnRun: !allowMissingBuildRepository);
+                requiredOnRun: !allowMissingBuildRepository,
+                resourceName: resourceName);
             return new ModuleRepositoryContext(
                 normalizedRepository,
                 normalizedRepository,
@@ -170,13 +171,15 @@ internal static class ModuleMaterializationPlanning
             registry.Options.UpdateRepositoriesOnInitialize;
         var requirement = registry.RegisterRepository(
             builder,
-            $"{module.Name}/{resourceName} image",
+            module.Name,
             normalizedRepository,
             requestedRevision,
             updateRepository,
             requiredOnRun: !allowMissingBuildRepository,
             checkoutDirectoryName: checkoutDirectoryName,
-            checkoutDirectoryNameConfigurationKey: checkoutDirectoryNameConfigurationKey);
+            checkoutDirectoryNameConfigurationKey: checkoutDirectoryNameConfigurationKey,
+            resourceName: resourceName,
+            requirementName: $"{module.Name}/{resourceName} image");
         return new ModuleRepositoryContext(
             requirement.RepositoryPath,
             requirement.Repository,
