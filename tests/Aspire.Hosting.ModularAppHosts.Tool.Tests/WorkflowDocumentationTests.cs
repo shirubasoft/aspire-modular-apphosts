@@ -17,6 +17,7 @@ public sealed class WorkflowDocumentationTests
         var workflow = await File.ReadAllTextAsync(
             workflowPath,
             TestContext.Current.CancellationToken);
+        workflow = workflow.ReplaceLineEndings("\n");
 
         Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
         Assert.Contains("confirm_publish:", workflow, StringComparison.Ordinal);
