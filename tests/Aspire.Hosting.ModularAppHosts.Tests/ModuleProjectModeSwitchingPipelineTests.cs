@@ -52,6 +52,39 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
     }
 
     [Fact]
+    public void Pipeline_does_not_report_repository_as_skipped_when_a_build_repository_plans_it()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var builder = new TestBuilder(
+            CreateBuilder(appHostPath, ["--publisher", "manifest"]),
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        const string repository = "https://example.test/acme/notifications.git";
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository(repository);
+            module.AddContainer("notifications-api", "notifications-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "notifications-api",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = repository
+                });
+        });
+
+        builder.ImportModule("notifications");
+
+        Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.RepositoryStepTag));
+        Assert.DoesNotContain(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+    }
+
+    [Fact]
     public async Task Skipped_repository_step_reports_declaration_and_reason_when_executed()
     {
         using var workspace = TemporaryDirectory.Create();
@@ -131,6 +164,8 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
         var runRequirement = Assert.Single(runRegistry.RepositoryPlans!.Requirements);
         Assert.True(runRequirement.RequiredOnRun);
         Assert.Equal(pipelineRequirement.RepositoryPath, runRequirement.RepositoryPath);
+        var runScope = runRegistry.GetRepositoryPreflightScope("orders", "orders-worker");
+        Assert.Contains(runRequirement, runScope.Repositories);
 
         await runRegistry.ValidateRepositoryPreflightAsync(
             stateStore,

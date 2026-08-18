@@ -177,7 +177,16 @@ public static partial class DistributedApplicationModuleExtensions
         if (imported &&
             !repositoryUsage.ShouldPlan &&
             definitionRepository.Repository is { } omittedRepository &&
-            RepositoryIdentity.IsRemoteRepository(omittedRepository, builder.AppHostDirectory))
+            RepositoryIdentity.IsRemoteRepository(omittedRepository, builder.AppHostDirectory) &&
+            !(registry.RepositoryPlans?.Requirements.Any(requirement =>
+                RepositoryIdentity.AreEquivalent(
+                    omittedRepository,
+                    requirement.Repository,
+                    builder.AppHostDirectory) &&
+                string.Equals(
+                    definitionRepository.Revision,
+                    requirement.Revision,
+                    StringComparison.Ordinal)) ?? false))
         {
             ModuleRepositoryInitializationPipeline.AddSkippedRepositoryStep(
                 builder,

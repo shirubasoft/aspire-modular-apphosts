@@ -5,7 +5,8 @@ internal sealed record ModuleRepositoryContext(
     string? Repository,
     string? Revision,
     bool InitializerOwned,
-    bool UsesModuleRepository);
+    bool UsesModuleRepository,
+    bool IsResolved = true);
 
 internal static class ModuleMaterializationPlanning
 {
@@ -53,7 +54,8 @@ internal static class ModuleMaterializationPlanning
                 repository,
                 revision,
                 InitializerOwned: false,
-                UsesModuleRepository: true);
+                UsesModuleRepository: true,
+                IsResolved: false);
         }
 
         if (repository is null)
@@ -142,7 +144,8 @@ internal static class ModuleMaterializationPlanning
                 definitionRepository.Repository ?? definitionRepository.RepositoryPath,
                 builder.AppHostDirectory) &&
             string.Equals(requestedRevision, definitionRepository.Revision, StringComparison.Ordinal) &&
-            checkoutDirectoryName is null)
+            checkoutDirectoryName is null &&
+            definitionRepository.IsResolved)
         {
             return definitionRepository;
         }
