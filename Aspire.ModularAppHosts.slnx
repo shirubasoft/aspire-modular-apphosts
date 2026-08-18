@@ -26,6 +26,7 @@
     <Project Path="src/Aspire.Hosting.ModularAppHosts.Generators/Aspire.Hosting.ModularAppHosts.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CrapScore.Tests/CrapScore.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.PackageTests/Aspire.Hosting.ModularAppHosts.PackageTests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Tool.Tests/Aspire.Hosting.ModularAppHosts.Tool.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj" />
@@ -35,6 +36,9 @@
   </Folder>
   <Folder Name="/templates/">
     <Project Path="templates/Aspire.Hosting.ModularAppHosts.Templates.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/CrapScore/CrapScore.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/ModularSamples.Tests/ModularSamples.Tests.csproj" />
