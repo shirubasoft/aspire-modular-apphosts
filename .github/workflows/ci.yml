@@ -135,8 +135,8 @@ jobs:
           dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj
           --configuration Release --no-build --no-restore
           -p:CollectCoverage=true
-          -p:CoverletOutput=../../artifacts/coverage/core.cobertura.xml
-          -p:CoverletOutputFormat=cobertura
+          -p:CoverletOutput=../../artifacts/coverage/core.opencover.xml
+          -p:CoverletOutputFormat=opencover
           '-p:Include=[Shirubasoft.Aspire.ModularAppHosts*]*'
           -p:Threshold=90
           -p:ThresholdType=line
@@ -148,19 +148,92 @@ jobs:
           dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj
           --configuration Release --no-build --no-restore
           -p:CollectCoverage=true
-          -p:CoverletOutput=../../artifacts/coverage/testing.cobertura.xml
-          -p:CoverletOutputFormat=cobertura
+          -p:CoverletOutput=../../artifacts/coverage/testing.opencover.xml
+          -p:CoverletOutputFormat=opencover
           '-p:Include=[Shirubasoft.Aspire.ModularAppHosts.Testing]*'
           -p:Threshold=70
           -p:ThresholdType=line
           -p:ThresholdStat=total
+
+      - name: Calculate method CRAP scores
+        if: runner.os != 'Windows'
+        run: >-
+          dotnet run --project tools/CrapScore/CrapScore.csproj
+          --configuration Release --no-build --no-restore --
+          artifacts/coverage
+          --output artifacts/coverage/crap-score.md
+
+      - name: Check out pull request target
+        if: runner.os != 'Windows' && github.event_name == 'pull_request'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: artifacts/crap-target
+
+      - name: Set up target-branch .NET
+        if: >-
+          runner.os != 'Windows' &&
+          github.event_name == 'pull_request' &&
+          hashFiles('artifacts/crap-target/tools/CrapScore/CrapScore.csproj') != ''
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: artifacts/crap-target/global.json
+
+      - name: Build pull request target
+        if: >-
+          runner.os != 'Windows' &&
+          github.event_name == 'pull_request' &&
+          hashFiles('artifacts/crap-target/tools/CrapScore/CrapScore.csproj') != ''
+        working-directory: artifacts/crap-target
+        run: dotnet build Aspire.ModularAppHosts.slnx --configuration Release
+
+      - name: Measure target core library CRAP inputs
+        if: >-
+          runner.os != 'Windows' &&
+          github.event_name == 'pull_request' &&
+          hashFiles('artifacts/crap-target/tools/CrapScore/CrapScore.csproj') != ''
+        working-directory: artifacts/crap-target
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Tests/Aspire.Hosting.ModularAppHosts.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/core.opencover.xml
+          -p:CoverletOutputFormat=opencover
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts*]*'
+
+      - name: Measure target testing library CRAP inputs
+        if: >-
+          runner.os != 'Windows' &&
+          github.event_name == 'pull_request' &&
+          hashFiles('artifacts/crap-target/tools/CrapScore/CrapScore.csproj') != ''
+        working-directory: artifacts/crap-target
+        run: >-
+          dotnet test tests/Aspire.Hosting.ModularAppHosts.Testing.Tests/Aspire.Hosting.ModularAppHosts.Testing.Tests.csproj
+          --configuration Release --no-build --no-restore
+          -p:CollectCoverage=true
+          -p:CoverletOutput=../../artifacts/coverage/testing.opencover.xml
+          -p:CoverletOutputFormat=opencover
+          '-p:Include=[Shirubasoft.Aspire.ModularAppHosts.Testing]*'
+
+      - name: Require CRAP reduction
+        if: >-
+          runner.os != 'Windows' &&
+          github.event_name == 'pull_request' &&
+          hashFiles('artifacts/crap-target/tools/CrapScore/CrapScore.csproj') != ''
+        run: >-
+          dotnet run --project tools/CrapScore/CrapScore.csproj
+          --configuration Release --no-build --no-restore --
+          artifacts/coverage
+          --base-reports artifacts/crap-target/artifacts/coverage
 
       - name: Upload coverage reports
         if: always() && runner.os != 'Windows'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-reports
-          path: artifacts/coverage/*.cobertura.xml
+          path: |
+            artifacts/coverage/*.opencover.xml
+            artifacts/coverage/crap-score.md
           if-no-files-found: error
 
       - name: Validate, test, and pack on Windows

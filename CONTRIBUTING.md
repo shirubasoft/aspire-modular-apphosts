@@ -20,6 +20,19 @@ The package contract suite inspects the core library, testing library, workflow 
 
 For the full Docker-backed multi-repository scenario, use the command and runtime guidance in the [test harness README](tests/Spire.MultiRepo.E2E.Tests/README.md).
 
+CI writes method-level OpenCover reports and a CRAP report to the `coverage-reports` artifact. After generating the same `*.opencover.xml` files under `artifacts/coverage`, reproduce the report locally with:
+
+```bash
+dotnet run --project tools/CrapScore/CrapScore.csproj \
+  --configuration Release --no-build --no-restore -- \
+  artifacts/coverage \
+  --output artifacts/coverage/crap-score.md
+```
+
+The report shows the maximum method score and the number of methods above the conventional threshold of 30. CRAP combines cyclomatic complexity with per-method sequence coverage; it is not averaged into a repository-wide score.
+
+Every pull request must reduce the maximum method score by a strict positive amount. CI checks out the pull request's target commit, runs the same coverage measurements there, and compares the two calculated scores. No committed baseline or manual update is required. Once the target-branch score is 5 or lower, the reduction gate disables itself.
+
 ## Repository layout
 
 - `src/Aspire.Hosting.ModularAppHosts`: core module APIs and packaged source generator.
@@ -28,6 +41,7 @@ For the full Docker-backed multi-repository scenario, use the command and runtim
 - `tests/Spire.MultiRepo.E2E.*`: isolated repository lifecycle and handoff coverage.
 - `samples`: runnable AppHosts and focused usage examples.
 - `templates`: packaged `dotnet new aspire-module` item template.
+- `tools/CrapScore`: CI and local method-risk reporting from OpenCover data.
 - `docs`: user guides too detailed for package READMEs.
 
 ## Commits and pull requests
