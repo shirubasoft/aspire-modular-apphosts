@@ -111,7 +111,7 @@ public static partial class DistributedApplicationModuleExtensions
             imported,
             resourceNames);
 
-        var requiresRepository = RequiresRepositoryForSynchronousMaterialization(
+        var repositoryUsage = ResolveRepositoryUsageForSynchronousMaterialization(
             builder,
             module,
             registry,
@@ -125,7 +125,8 @@ public static partial class DistributedApplicationModuleExtensions
             registry,
             moduleOptions,
             imported,
-            requiresRepository);
+            repositoryUsage.ShouldPlan,
+            repositoryUsage.RequiredOnRun);
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -1118,7 +1119,9 @@ public static partial class DistributedApplicationModuleExtensions
             IResourceBuilder<ContainerResource>>? ConfigureContainer,
         bool ModuleAnnotationAlreadyApplied);
 
-    private static bool RequiresRepositoryForSynchronousMaterialization(
+    private readonly record struct ModuleRepositoryUsage(bool ShouldPlan, bool RequiredOnRun);
+
+    private static ModuleRepositoryUsage ResolveRepositoryUsageForSynchronousMaterialization(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
@@ -1129,11 +1132,14 @@ public static partial class DistributedApplicationModuleExtensions
     {
         if (module.ExplicitlyRequiresRepositoryContent)
         {
-            return true;
+            return new ModuleRepositoryUsage(ShouldPlan: true, RequiredOnRun: true);
         }
 
+        var shouldPlan = false;
+        var requiredOnRun = false;
         foreach (var project in module.ProjectDefinitions)
         {
+            shouldPlan = true;
             var configured = moduleOptions?.FindProject(project.Name);
             var runAsProject = builder.ExecutionContext.IsRunMode &&
                 ResolveProjectMode(
@@ -1143,13 +1149,11 @@ public static partial class DistributedApplicationModuleExtensions
                     imported,
                     resourceNames[project.Name],
                     registry.ProjectModeSwitching) == ModuleProjectMode.Project;
-            if (runAsProject ||
-                (!UsesExternalImage(configured) &&
-                 GetConfiguredValue(configured?.BuildRepository) is null &&
-                 GetConfiguredValue(project.Export.CommandOptions?.BuildRepository) is null))
-            {
-                return true;
-            }
+            var publishesFromModuleRepository =
+                !UsesExternalImage(configured) &&
+                GetConfiguredValue(configured?.BuildRepository) is null &&
+                GetConfiguredValue(project.Export.CommandOptions?.BuildRepository) is null;
+            requiredOnRun |= runAsProject || publishesFromModuleRepository;
         }
 
         foreach (var publisher in GetContainerPublishers(module))
@@ -1159,11 +1163,12 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(configured?.BuildRepository) is null &&
                 GetConfiguredValue(publisher.Options.BuildRepository) is null)
             {
-                return true;
+                shouldPlan = true;
+                requiredOnRun = true;
             }
         }
 
-        return false;
+        return new ModuleRepositoryUsage(shouldPlan, requiredOnRun);
     }
 
     private static void ValidateSynchronousResourceNames(

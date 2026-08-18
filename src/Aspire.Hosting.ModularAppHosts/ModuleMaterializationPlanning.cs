@@ -15,7 +15,8 @@ internal static class ModuleMaterializationPlanning
         ModuleApplicationRegistry registry,
         DistributedApplicationModuleOptions? moduleOptions,
         bool imported,
-        bool requiresRepository)
+        bool shouldPlan,
+        bool requiredOnRun)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(module);
@@ -41,7 +42,7 @@ internal static class ModuleMaterializationPlanning
                 UsesModuleRepository: true);
         }
 
-        if (!requiresRepository)
+        if (!shouldPlan || repository is null && !requiredOnRun)
         {
             var optionalLocalPath = repository is not null &&
                 !RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory)
@@ -84,6 +85,7 @@ internal static class ModuleMaterializationPlanning
             isRemote ? repository : Path.GetFullPath(repository, builder.AppHostDirectory),
             revision,
             updateRepository,
+            requiredOnRun,
             checkoutDirectoryName: checkoutDirectoryName,
             checkoutDirectoryNameConfigurationKey: GetCheckoutDirectoryNameConfigurationKey(module.Name));
         return new ModuleRepositoryContext(
