@@ -6,11 +6,29 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args is ["download-artifact", var repository, var commit, var artifactOutputDirectory])
+        {
+            try
+            {
+                using var downloader = GitHubArtifactDownloader.CreateFromConfiguration();
+                await downloader.DownloadAsync(repository, commit, artifactOutputDirectory);
+                Console.WriteLine($"Downloaded CRAP score artifact for {commit} to {artifactOutputDirectory}.");
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(exception.Message);
+                return 3;
+            }
+        }
+
         if (!TryParseArguments(args, out var options))
         {
             Console.Error.WriteLine(
                 "Usage: dotnet run --project tools/CrapScore -- <report-directory> "
-                + "[--output <markdown-file>] [--base-reports <target-report-directory>]");
+                + "[--output <markdown-file>] [--base-reports <target-report-directory>]\n"
+                + "       dotnet run --project tools/CrapScore -- download-artifact "
+                + "<owner/repository> <commit> <output-directory>");
             return 2;
         }
 

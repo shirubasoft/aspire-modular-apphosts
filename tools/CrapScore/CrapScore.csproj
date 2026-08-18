@@ -6,4 +6,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="CrapScore.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+  </ItemGroup>
 </Project>
