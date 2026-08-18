@@ -30,6 +30,8 @@ internal sealed class ModuleApplicationRegistry(
 
     private readonly List<ModuleRequiredPath> _requiredPaths = [];
     private readonly Dictionary<string, int> _requiredPathIndices = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ModuleRepositoryPreflightScopeBuilder> _preflightScopes =
+        new(StringComparer.OrdinalIgnoreCase);
     private ModuleRepositoryPlanRegistry? _repositoryPlans = repositoryPlans;
 
     internal ModularAppHostsOptions Options { get; } = options ?? new ModularAppHostsOptions();
@@ -84,7 +86,9 @@ internal sealed class ModuleApplicationRegistry(
         bool updateRepository,
         bool requiredOnRun = true,
         string? checkoutDirectoryName = null,
-        string? checkoutDirectoryNameConfigurationKey = null)
+        string? checkoutDirectoryNameConfigurationKey = null,
+        string? resourceName = null,
+        string? requirementName = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         if (_repositoryPlans is null)
@@ -95,13 +99,19 @@ internal sealed class ModuleApplicationRegistry(
 
         var plans = _repositoryPlans;
         var registration = plans.Register(
-            moduleName,
+            requirementName ?? moduleName,
             repository,
             revision,
             updateRepository,
             requiredOnRun,
             checkoutDirectoryName,
             checkoutDirectoryNameConfigurationKey);
+        if (requiredOnRun)
+        {
+            GetOrCreatePreflightScope(moduleName, resourceName)
+                .Repositories.Add(registration.Requirement);
+        }
+
         if (registration.IsNew)
         {
             var settings = new ModuleRepositoryInitializationSettings(
@@ -121,15 +131,44 @@ internal sealed class ModuleApplicationRegistry(
         string moduleName,
         string description,
         string path,
-        bool requiredOnRun = true) =>
-        RequirePath(moduleName, description, path, ModuleRequiredPathKind.File, requiredOnRun);
+        bool requiredOnRun = true,
+        string? resourceName = null) =>
+        RequirePath(
+            moduleName,
+            description,
+            path,
+            ModuleRequiredPathKind.File,
+            requiredOnRun,
+            resourceName);
 
     internal void RequireDirectory(
         string moduleName,
         string description,
         string path,
-        bool requiredOnRun = true) =>
-        RequirePath(moduleName, description, path, ModuleRequiredPathKind.Directory, requiredOnRun);
+        bool requiredOnRun = true,
+        string? resourceName = null) =>
+        RequirePath(
+            moduleName,
+            description,
+            path,
+            ModuleRequiredPathKind.Directory,
+            requiredOnRun,
+            resourceName);
+
+    internal ModuleRepositoryPreflightScope GetRepositoryPreflightScope(
+        string moduleName,
+        string resourceName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        var repositories = new HashSet<ModuleRepositoryRequirement>();
+        var requiredPaths = new HashSet<ModuleRequiredPath>();
+        AddScope(moduleName, resourceName: null, repositories, requiredPaths);
+        AddScope(moduleName, resourceName, repositories, requiredPaths);
+        return new ModuleRepositoryPreflightScope(
+            repositories.ToArray(),
+            requiredPaths.ToArray());
+    }
 
     internal Task ValidateRepositoryPreflightAsync(
         IModuleRepositoryStateStore stateStore,
@@ -141,6 +180,25 @@ internal sealed class ModuleApplicationRegistry(
         return ModuleRepositoryPreflight.ValidateAsync(
             RepositoryPlans?.Requirements ?? [],
             _requiredPaths,
+            stateStore,
+            settings,
+            appHostPath,
+            logger,
+            cancellationToken);
+    }
+
+    internal static Task ValidateRepositoryPreflightAsync(
+        ModuleRepositoryPreflightScope scope,
+        IModuleRepositoryStateStore stateStore,
+        ModuleRepositoryInitializationSettings settings,
+        string appHostPath,
+        Microsoft.Extensions.Logging.ILogger? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return ModuleRepositoryPreflight.ValidateAsync(
+            scope.Repositories,
+            scope.RequiredPaths,
             stateStore,
             settings,
             appHostPath,
@@ -171,7 +229,8 @@ internal sealed class ModuleApplicationRegistry(
         string description,
         string path,
         ModuleRequiredPathKind kind,
-        bool requiredOnRun)
+        bool requiredOnRun,
+        string? resourceName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
         ArgumentException.ThrowIfNullOrWhiteSpace(description);
@@ -185,18 +244,73 @@ internal sealed class ModuleApplicationRegistry(
                 _requiredPaths[index] = _requiredPaths[index] with { RequiredOnRun = true };
             }
 
+            if (requiredOnRun)
+            {
+                GetOrCreatePreflightScope(moduleName, resourceName)
+                    .RequiredPaths.Add(_requiredPaths[index]);
+            }
+
             return;
         }
 
         _requiredPathIndices.Add(key, _requiredPaths.Count);
-        _requiredPaths.Add(new ModuleRequiredPath(
+        var requiredPath = new ModuleRequiredPath(
             moduleName,
             description,
             fullPath,
             kind,
-            requiredOnRun));
+            requiredOnRun);
+        _requiredPaths.Add(requiredPath);
+        if (requiredOnRun)
+        {
+            GetOrCreatePreflightScope(moduleName, resourceName)
+                .RequiredPaths.Add(requiredPath);
+        }
     }
+
+    private ModuleRepositoryPreflightScopeBuilder GetOrCreatePreflightScope(
+        string moduleName,
+        string? resourceName)
+    {
+        var key = GetPreflightScopeKey(moduleName, resourceName);
+        if (!_preflightScopes.TryGetValue(key, out var scope))
+        {
+            scope = new ModuleRepositoryPreflightScopeBuilder();
+            _preflightScopes.Add(key, scope);
+        }
+
+        return scope;
+    }
+
+    private void AddScope(
+        string moduleName,
+        string? resourceName,
+        HashSet<ModuleRepositoryRequirement> repositories,
+        HashSet<ModuleRequiredPath> requiredPaths)
+    {
+        if (!_preflightScopes.TryGetValue(GetPreflightScopeKey(moduleName, resourceName), out var scope))
+        {
+            return;
+        }
+
+        repositories.UnionWith(scope.Repositories);
+        requiredPaths.UnionWith(scope.RequiredPaths);
+    }
+
+    private static string GetPreflightScopeKey(string moduleName, string? resourceName) =>
+        $"{moduleName}\n{resourceName ?? string.Empty}";
 
     private static string? GetConfiguredValue(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+internal sealed record ModuleRepositoryPreflightScope(
+    IReadOnlyCollection<ModuleRepositoryRequirement> Repositories,
+    IReadOnlyCollection<ModuleRequiredPath> RequiredPaths);
+
+internal sealed class ModuleRepositoryPreflightScopeBuilder
+{
+    public HashSet<ModuleRepositoryRequirement> Repositories { get; } = [];
+
+    public HashSet<ModuleRequiredPath> RequiredPaths { get; } = [];
 }

@@ -8,16 +8,200 @@ using System.Text.Json.Nodes;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
+using CliWrap.Buffered;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using CliCommand = global::CliWrap.Cli;
 
 namespace Aspire.Hosting.ModularAppHosts.Tests;
 
 public sealed class ModuleProjectModeSwitchingPipelineTests
 {
+    [Fact]
+    public void Pipeline_reports_declared_remote_repository_that_no_resource_can_use()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var builder = new TestBuilder(
+            CreateBuilder(appHostPath, ["--publisher", "manifest"]),
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository("https://example.test/acme/notifications.git");
+            module.AddContainer("notifications-api", "busybox", "1.37");
+        });
+
+        builder.ImportModule("notifications");
+
+        var diagnostic = Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+        Assert.Contains("notifications", diagnostic.Name, StringComparison.Ordinal);
+        Assert.Contains("notifications", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains("example.test/acme/notifications", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains("do not require repository content", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains(
+            ModuleRepositoryInitializationPipeline.RepositoryContentNotRequiredTag,
+            diagnostic.Tags);
+        Assert.Contains(ModuleRepositoryInitializationPipeline.StepName, diagnostic.RequiredBySteps);
+    }
+
+    [Fact]
+    public void Pipeline_does_not_report_repository_as_skipped_when_a_build_repository_plans_it()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var builder = new TestBuilder(
+            CreateBuilder(appHostPath, ["--publisher", "manifest"]),
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        const string repository = "https://example.test/acme/notifications.git";
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository(repository);
+            module.AddContainer("notifications-api", "notifications-api")
+                .WithImagePublishCommand(new ModuleImageCommandOptions(
+                    "notifications-api",
+                    "publisher",
+                    "build")
+                {
+                    BuildRepository = repository
+                });
+        });
+
+        builder.ImportModule("notifications");
+
+        Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.RepositoryStepTag));
+        Assert.DoesNotContain(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+    }
+
+    [Fact]
+    public async Task Skipped_repository_step_reports_declaration_and_reason_when_executed()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var inner = CreateBuilder(appHostPath, ["--publisher", "manifest"]);
+        var builder = new TestBuilder(
+            inner,
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository("https://example.test/acme/notifications.git");
+            module.AddContainer("notifications-api", "busybox", "1.37");
+        });
+        builder.ImportModule("notifications");
+        await using var application = inner.Build();
+        var logger = new CapturingLogger();
+        var diagnostic = Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+
+        await ExecuteAsync(application, diagnostic, logger);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal("notifications", entry.State["Module"]);
+        Assert.Equal("example.test/acme/notifications", entry.State["Repository"]);
+        Assert.Equal(
+            "the module's resources do not require repository content",
+            entry.State["Reason"]);
+    }
+
+    [Fact]
+    public async Task Pipeline_initialize_satisfies_repository_needed_by_run_project_override()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var secrets = new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json"));
+        new ModuleProjectModeSwitchStore(secrets).Write(new ModuleProjectModeSwitchState
+        {
+            Mode = ModuleProjectModeSwitchValue.Project
+        });
+
+        var pipeline = new CapturingPipeline();
+        var pipelineBuilder = new TestBuilder(
+            CreateBuilder(appHostPath, ["--publisher", "manifest"]),
+            pipeline,
+            secrets);
+        ConfigureExternalProjectModule(pipelineBuilder);
+
+        var pipelineRequirement = Assert.Single(
+            GetRegistry(pipelineBuilder).RepositoryPlans!.Requirements);
+        Assert.False(pipelineRequirement.RequiredOnRun);
+        Assert.Contains(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.RepositoryStepTag));
+        Assert.DoesNotContain(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+
+        var stateStore = new InMemoryModuleRepositoryStateStore();
+        await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
+            pipelineRequirement,
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            NullLogger.Instance,
+            NullLogger.Instance,
+            stateStore,
+            reportingStep: null,
+            TestContext.Current.CancellationToken,
+            InitializeCheckoutAsync);
+
+        var runBuilder = new TestBuilder(
+            CreateBuilder(appHostPath),
+            new CapturingPipeline(),
+            secrets);
+        ConfigureExternalProjectModule(runBuilder);
+        var runRegistry = GetRegistry(runBuilder);
+        var runRequirement = Assert.Single(runRegistry.RepositoryPlans!.Requirements);
+        Assert.True(runRequirement.RequiredOnRun);
+        Assert.Equal(pipelineRequirement.RepositoryPath, runRequirement.RepositoryPath);
+        var runScope = runRegistry.GetRepositoryPreflightScope("orders", "orders-worker");
+        Assert.Contains(runRequirement, runScope.Repositories);
+
+        await runRegistry.ValidateRepositoryPreflightAsync(
+            stateStore,
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            appHostPath,
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Container_override_does_not_require_selectable_project_repository_on_run()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var secrets = new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json"));
+        new ModuleProjectModeSwitchStore(secrets).Write(new ModuleProjectModeSwitchState
+        {
+            Mode = ModuleProjectModeSwitchValue.Container
+        });
+        var builder = new TestBuilder(
+            CreateBuilder(appHostPath),
+            new CapturingPipeline(),
+            secrets);
+        ConfigureExternalProjectModule(builder);
+
+        var registry = GetRegistry(builder);
+        var requirement = Assert.Single(registry.RepositoryPlans!.Requirements);
+        Assert.False(requirement.RequiredOnRun);
+        Assert.False(Directory.Exists(requirement.RepositoryPath));
+        await registry.ValidateRepositoryPreflightAsync(
+            new InMemoryModuleRepositoryStateStore(),
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            appHostPath,
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public void Global_and_resource_steps_use_effective_resource_names()
     {
@@ -171,21 +355,102 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
         Assert.Null(secrets.Get(ModuleProjectModeSwitchStore.SecretName));
     }
 
-    private static IDistributedApplicationBuilder CreateBuilder(string projectDirectory) =>
+    private static void ConfigureExternalProjectModule(IDistributedApplicationBuilder builder)
+    {
+        builder.ConfigureModularAppHosts(options =>
+            options.Modules["orders"] = new DistributedApplicationModuleOptions
+            {
+                Projects =
+                {
+                    ["orders-worker"] = new DistributedApplicationModuleProjectOptions
+                    {
+                        PublishImage = false,
+                        ImageRegistry = "docker.io/library",
+                        ImageName = "busybox",
+                        ImageTag = "1.37"
+                    }
+                }
+            });
+        builder.ExportModule("orders", module =>
+        {
+            module.WithRepository("https://example.test/acme/orders.git");
+            module.AddProject(
+                    "orders-worker",
+                    "src/Orders.Worker/Orders.Worker.csproj",
+                    ModuleProjectPathBase.Repository)
+                .ExportAsContainerWithCommand(new ModuleImageCommandOptions(
+                    "orders-worker",
+                    ModuleImageCommandOptions.ContainerRuntimePlaceholder,
+                    "build",
+                    "-t",
+                    "orders-worker:test",
+                    "."));
+        });
+        builder.ImportModule("orders");
+    }
+
+    private static async Task InitializeCheckoutAsync(
+        ModuleRepositoryRequirement requirement,
+        ModuleRepositoryInitializationSettings _,
+        Action<string> __,
+        Action<RepositorySyncLifecycleEvent> ___,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(requirement.RepositoryPath);
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "init");
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "config", "user.name", "Modular AppHosts Tests");
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "config", "user.email", "tests@example.test");
+        await File.WriteAllTextAsync(
+            Path.Combine(requirement.RepositoryPath, "content.txt"),
+            "initialized",
+            cancellationToken);
+        var projectDirectory = Path.Combine(requirement.RepositoryPath, "src", "Orders.Worker");
+        Directory.CreateDirectory(projectDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(projectDirectory, "Orders.Worker.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+            cancellationToken);
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "add", "--", ".");
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "commit", "-m", "initialized");
+        await RunGitAsync(requirement.RepositoryPath, cancellationToken, "remote", "add", "origin", requirement.Repository);
+    }
+
+    private static async Task RunGitAsync(
+        string workingDirectory,
+        CancellationToken cancellationToken,
+        params string[] arguments)
+    {
+        await CliCommand.Wrap("git")
+            .WithArguments(arguments)
+            .WithWorkingDirectory(workingDirectory)
+            .ExecuteBufferedAsync(cancellationToken);
+    }
+
+    private static ModuleApplicationRegistry GetRegistry(IDistributedApplicationBuilder builder) =>
+        Assert.IsType<ModuleApplicationRegistry>(builder.Services
+            .Last(descriptor => descriptor.ServiceType == typeof(IDistributedApplicationModuleCatalog))
+            .ImplementationInstance);
+
+    private static IDistributedApplicationBuilder CreateBuilder(
+        string projectDirectory,
+        string[]? args = null) =>
         DistributedApplication.CreateBuilder(new DistributedApplicationOptions
         {
-            Args = [],
+            Args = args ?? [],
             DisableDashboard = true,
             ProjectDirectory = projectDirectory
         });
 
-    private static async Task ExecuteAsync(DistributedApplication application, PipelineStep step)
+    private static async Task ExecuteAsync(
+        DistributedApplication application,
+        PipelineStep step,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         var pipelineContext = new PipelineContext(
             application.Services.GetRequiredService<DistributedApplicationModel>(),
             application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             application.Services,
-            NullLogger.Instance,
+            logger ?? NullLogger.Instance,
             TestContext.Current.CancellationToken);
         await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
             step.Name,
@@ -195,6 +460,27 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
             PipelineContext = pipelineContext,
             ReportingStep = reportingStep
         });
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.EventId EventId, Dictionary<string, object?> State)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var values = state as IEnumerable<KeyValuePair<string, object?>> ?? [];
+            Entries.Add((eventId, values.ToDictionary(pair => pair.Key, pair => pair.Value)));
+        }
     }
 
     private sealed class CapturingPipeline : IDistributedApplicationPipeline

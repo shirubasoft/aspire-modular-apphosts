@@ -49,4 +49,17 @@ Lead with the task a reader can perform. Keep prerequisites, security boundaries
 
 After complete CI succeeds on `main`, release automation derives the next version, promotes the exact packages produced by that CI run, publishes them to NuGet, and creates the GitHub release. Set the repository variable `NUGET_PUBLISH_ENABLED` to `true` to enable publishing from successful `main` builds.
 
+To build and publish prerelease packages on demand, set the repository variable `NUGET_PUBLISH_ENABLED` to `true` and configure the `NUGET_API_KEY` repository secret with permission to publish the four packages. Run the **Publish prerelease NuGet packages** workflow from the Actions tab on the `main` branch, enter an exact SemVer prerelease without build metadata such as `14.0.0-preview.1`, and select **Publish the generated packages to NuGet.org**. The trusted-branch restriction keeps the publishing credential out of code that has not passed branch protection. Stable versions are rejected by this workflow and remain the responsibility of release automation.
+
+The same workflow can be started from a checkout with GitHub CLI:
+
+```bash
+gh workflow run prerelease-packages.yml \
+  --ref main \
+  -f version=14.0.0-preview.1 \
+  -f confirm_publish=true
+```
+
+The workflow runs the same `./build.sh --package-version <version>` entry point used locally and by CI, uploads the generated packages in the `nuget-prerelease-packages` artifact for audit or recovery, and then publishes the packages and symbols to NuGet.org. NuGet package versions are immutable: rerunning the same version cannot replace a published package. Publishing uses `--skip-duplicate`, so retrying a partially completed run skips packages that already exist and publishes any that remain.
+
 SDK, AppHost SDK, dependency, and local Aspire CLI versions are pinned centrally by `global.json`, `Directory.Packages.props`, and `.config/dotnet-tools.json`.

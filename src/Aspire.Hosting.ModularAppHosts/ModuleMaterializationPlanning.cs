@@ -5,7 +5,8 @@ internal sealed record ModuleRepositoryContext(
     string? Repository,
     string? Revision,
     bool InitializerOwned,
-    bool UsesModuleRepository);
+    bool UsesModuleRepository,
+    bool IsResolved = true);
 
 internal static class ModuleMaterializationPlanning
 {
@@ -15,7 +16,8 @@ internal static class ModuleMaterializationPlanning
         ModuleApplicationRegistry registry,
         DistributedApplicationModuleOptions? moduleOptions,
         bool imported,
-        bool requiresRepository)
+        bool shouldPlan,
+        bool requiredOnRun)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(module);
@@ -41,7 +43,7 @@ internal static class ModuleMaterializationPlanning
                 UsesModuleRepository: true);
         }
 
-        if (!requiresRepository)
+        if (!shouldPlan || repository is null && !requiredOnRun)
         {
             var optionalLocalPath = repository is not null &&
                 !RepositoryIdentity.IsRemoteRepository(repository, builder.AppHostDirectory)
@@ -52,7 +54,8 @@ internal static class ModuleMaterializationPlanning
                 repository,
                 revision,
                 InitializerOwned: false,
-                UsesModuleRepository: true);
+                UsesModuleRepository: true,
+                IsResolved: false);
         }
 
         if (repository is null)
@@ -84,6 +87,7 @@ internal static class ModuleMaterializationPlanning
             isRemote ? repository : Path.GetFullPath(repository, builder.AppHostDirectory),
             revision,
             updateRepository,
+            requiredOnRun,
             checkoutDirectoryName: checkoutDirectoryName,
             checkoutDirectoryNameConfigurationKey: GetCheckoutDirectoryNameConfigurationKey(module.Name));
         return new ModuleRepositoryContext(
@@ -140,7 +144,8 @@ internal static class ModuleMaterializationPlanning
                 definitionRepository.Repository ?? definitionRepository.RepositoryPath,
                 builder.AppHostDirectory) &&
             string.Equals(requestedRevision, definitionRepository.Revision, StringComparison.Ordinal) &&
-            checkoutDirectoryName is null)
+            checkoutDirectoryName is null &&
+            definitionRepository.IsResolved)
         {
             return definitionRepository;
         }
@@ -157,7 +162,8 @@ internal static class ModuleMaterializationPlanning
                 module.Name,
                 $"build repository for resource '{resourceName}'",
                 normalizedRepository,
-                requiredOnRun: !allowMissingBuildRepository);
+                requiredOnRun: !allowMissingBuildRepository,
+                resourceName: resourceName);
             return new ModuleRepositoryContext(
                 normalizedRepository,
                 normalizedRepository,
@@ -170,13 +176,15 @@ internal static class ModuleMaterializationPlanning
             registry.Options.UpdateRepositoriesOnInitialize;
         var requirement = registry.RegisterRepository(
             builder,
-            $"{module.Name}/{resourceName} image",
+            module.Name,
             normalizedRepository,
             requestedRevision,
             updateRepository,
             requiredOnRun: !allowMissingBuildRepository,
             checkoutDirectoryName: checkoutDirectoryName,
-            checkoutDirectoryNameConfigurationKey: checkoutDirectoryNameConfigurationKey);
+            checkoutDirectoryNameConfigurationKey: checkoutDirectoryNameConfigurationKey,
+            resourceName: resourceName,
+            requirementName: $"{module.Name}/{resourceName} image");
         return new ModuleRepositoryContext(
             requirement.RepositoryPath,
             requirement.Repository,

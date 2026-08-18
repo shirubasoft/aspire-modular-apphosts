@@ -111,7 +111,7 @@ public static partial class DistributedApplicationModuleExtensions
             imported,
             resourceNames);
 
-        var requiresRepository = RequiresRepositoryForSynchronousMaterialization(
+        var repositoryUsage = ResolveRepositoryUsageForSynchronousMaterialization(
             builder,
             module,
             registry,
@@ -125,7 +125,8 @@ public static partial class DistributedApplicationModuleExtensions
             registry,
             moduleOptions,
             imported,
-            requiresRepository);
+            repositoryUsage.ShouldPlan,
+            repositoryUsage.RequiredOnRun);
 
         foreach (var definition in module.ResourceDefinitions)
         {
@@ -171,6 +172,26 @@ public static partial class DistributedApplicationModuleExtensions
                     throw new InvalidOperationException(
                         $"Module resource definition '{definition.Name}' has an unsupported implementation type.");
             }
+        }
+
+        if (imported &&
+            !repositoryUsage.ShouldPlan &&
+            definitionRepository.Repository is { } omittedRepository &&
+            RepositoryIdentity.IsRemoteRepository(omittedRepository, builder.AppHostDirectory) &&
+            !(registry.RepositoryPlans?.Requirements.Any(requirement =>
+                RepositoryIdentity.AreEquivalent(
+                    omittedRepository,
+                    requirement.Repository,
+                    builder.AppHostDirectory) &&
+                string.Equals(
+                    definitionRepository.Revision,
+                    requirement.Revision,
+                    StringComparison.Ordinal)) ?? false))
+        {
+            ModuleRepositoryInitializationPipeline.AddSkippedRepositoryStep(
+                builder,
+                module.Name,
+                omittedRepository);
         }
 
         registry.MarkMaterialized(module.Name, materializationKey);
@@ -620,7 +641,8 @@ public static partial class DistributedApplicationModuleExtensions
             module.Name,
             $"image build directory for resource '{declaredResourceName}'",
             workingDirectory,
-            requiredOnRun: !allowsUnavailableSource);
+            requiredOnRun: !allowsUnavailableSource,
+            resourceName: declaredResourceName);
         if (requiredProjectRelativePath is not null)
         {
             registry.RequireFile(
@@ -629,7 +651,8 @@ public static partial class DistributedApplicationModuleExtensions
                 PathSafety.GetContainedPath(
                     definitionRepository.RepositoryPath,
                     requiredProjectRelativePath,
-                    nameof(IDistributedApplicationModuleProject.ProjectPath)));
+                    nameof(IDistributedApplicationModuleProject.ProjectPath)),
+                resourceName: declaredResourceName);
         }
 
         var refresh = configured?.RefreshBuildRepositoryOnRun ??
@@ -757,17 +780,23 @@ public static partial class DistributedApplicationModuleExtensions
         ModuleApplicationRegistry registry)
         where TResource : IResource
     {
-        var requirements = registry.RepositoryPlans?.Requirements;
-        if (requirements is null || requirements.Count == 0)
+        var module = resource.Resource.Annotations
+            .OfType<DistributedApplicationModuleResourceAnnotation>()
+            .Last();
+        var scope = registry.GetRepositoryPreflightScope(module.ModuleName, module.ResourceName);
+        if (scope.Repositories.Count == 0 && scope.RequiredPaths.Count == 0)
         {
             return;
         }
 
-        resource.WithRequiredCommand(registry.Options.GitExecutablePath);
-        if (requirements.Any(requirement =>
-                GitHubGitAuthentication.UsesCredentialProvider(requirement.Repository)))
+        if (scope.Repositories.Count > 0)
         {
-            resource.WithRequiredCommand(registry.Options.GitHubCliPath);
+            resource.WithRequiredCommand(registry.Options.GitExecutablePath);
+            if (scope.Repositories.Any(requirement =>
+                    GitHubGitAuthentication.UsesCredentialProvider(requirement.Repository)))
+            {
+                resource.WithRequiredCommand(registry.Options.GitHubCliPath);
+            }
         }
 
         if (!builder.ExecutionContext.IsRunMode)
@@ -780,7 +809,8 @@ public static partial class DistributedApplicationModuleExtensions
             var logger = @event.Services
                 .GetRequiredService<ResourceLoggerService>()
                 .GetLogger(startedResource);
-            await registry.ValidateRepositoryPreflightAsync(
+            await ModuleApplicationRegistry.ValidateRepositoryPreflightAsync(
+                scope,
                 @event.Services.GetRequiredService<IModuleRepositoryStateStore>(),
                 new ModuleRepositoryInitializationSettings(
                     registry.Options.GitExecutablePath,
@@ -806,7 +836,11 @@ public static partial class DistributedApplicationModuleExtensions
             repositoryPath,
             project.GetRepositoryRelativeProjectPath(),
             nameof(project.ProjectPath));
-        registry.RequireFile(module.Name, $"project '{project.Name}'", projectPath);
+        registry.RequireFile(
+            module.Name,
+            $"project '{project.Name}'",
+            projectPath,
+            resourceName: project.Name);
         var resource = builder
             .AddProject(resourceName, projectPath, projectOptions =>
             {
@@ -857,7 +891,11 @@ public static partial class DistributedApplicationModuleExtensions
             repositoryPath,
             project.GetRepositoryRelativeProjectPath(),
             nameof(project.ProjectPath));
-        registry.RequireFile(module.Name, $"project '{project.Name}'", projectPath);
+        registry.RequireFile(
+            module.Name,
+            $"project '{project.Name}'",
+            projectPath,
+            resourceName: project.Name);
         var workflow = ModuleImageWorkflowConfiguration.Read(builder.Configuration);
         var imageName = GetConfiguredValue(options?.ImageName) ?? project.Export.ImageName;
         var imageTag = workflow.ResolveTag(module.Name, project.Name) ??
@@ -1101,7 +1139,9 @@ public static partial class DistributedApplicationModuleExtensions
             IResourceBuilder<ContainerResource>>? ConfigureContainer,
         bool ModuleAnnotationAlreadyApplied);
 
-    private static bool RequiresRepositoryForSynchronousMaterialization(
+    private readonly record struct ModuleRepositoryUsage(bool ShouldPlan, bool RequiredOnRun);
+
+    private static ModuleRepositoryUsage ResolveRepositoryUsageForSynchronousMaterialization(
         IDistributedApplicationBuilder builder,
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
@@ -1112,11 +1152,14 @@ public static partial class DistributedApplicationModuleExtensions
     {
         if (module.ExplicitlyRequiresRepositoryContent)
         {
-            return true;
+            return new ModuleRepositoryUsage(ShouldPlan: true, RequiredOnRun: true);
         }
 
+        var shouldPlan = false;
+        var requiredOnRun = false;
         foreach (var project in module.ProjectDefinitions)
         {
+            shouldPlan = true;
             var configured = moduleOptions?.FindProject(project.Name);
             var runAsProject = builder.ExecutionContext.IsRunMode &&
                 ResolveProjectMode(
@@ -1126,13 +1169,11 @@ public static partial class DistributedApplicationModuleExtensions
                     imported,
                     resourceNames[project.Name],
                     registry.ProjectModeSwitching) == ModuleProjectMode.Project;
-            if (runAsProject ||
-                (!UsesExternalImage(configured) &&
-                 GetConfiguredValue(configured?.BuildRepository) is null &&
-                 GetConfiguredValue(project.Export.CommandOptions?.BuildRepository) is null))
-            {
-                return true;
-            }
+            var publishesFromModuleRepository =
+                !UsesExternalImage(configured) &&
+                GetConfiguredValue(configured?.BuildRepository) is null &&
+                GetConfiguredValue(project.Export.CommandOptions?.BuildRepository) is null;
+            requiredOnRun |= runAsProject || publishesFromModuleRepository;
         }
 
         foreach (var publisher in GetContainerPublishers(module))
@@ -1142,11 +1183,12 @@ public static partial class DistributedApplicationModuleExtensions
                 GetConfiguredValue(configured?.BuildRepository) is null &&
                 GetConfiguredValue(publisher.Options.BuildRepository) is null)
             {
-                return true;
+                shouldPlan = true;
+                requiredOnRun = true;
             }
         }
 
-        return false;
+        return new ModuleRepositoryUsage(shouldPlan, requiredOnRun);
     }
 
     private static void ValidateSynchronousResourceNames(

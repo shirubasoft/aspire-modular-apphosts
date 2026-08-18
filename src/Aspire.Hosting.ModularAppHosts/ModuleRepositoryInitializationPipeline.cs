@@ -42,6 +42,8 @@ internal static class ModuleRepositoryInitializationPipeline
 {
     internal const string StepName = "initialize";
     internal const string RepositoryStepTag = "initialize-module-repository";
+    internal const string SkippedRepositoryStepTag = "initialize-module-repository-skipped";
+    internal const string RepositoryContentNotRequiredTag = "repository-content-not-required";
 
     private sealed class InitializationPipelineRegistration;
 
@@ -76,6 +78,13 @@ internal static class ModuleRepositoryInitializationPipeline
             new EventId(5, nameof(LogRepositoryOperationSkipped)),
             "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
 
+    private static readonly Action<ILogger, string, string, string, Exception?> LogRepositoryInitializationSkipped =
+        LoggerMessage.Define<string, string, string>(
+            LogLevel.Information,
+            new EventId(6, nameof(LogRepositoryInitializationSkipped)),
+            "Module {Module} declares repository {Repository}, but no repository initialization step was planned: " +
+            "{Reason}.");
+
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -96,6 +105,21 @@ internal static class ModuleRepositoryInitializationPipeline
     {
         ArgumentNullException.ThrowIfNull(builder);
         builder.Pipeline.AddStep(CreateRepositoryStep(requirement, settingsFactory));
+    }
+
+    public static void AddSkippedRepositoryStep(
+        IDistributedApplicationBuilder builder,
+        string moduleName,
+        string repository)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        Configure(builder);
+        builder.Pipeline.AddStep(CreateSkippedRepositoryStep(
+            moduleName.Trim(),
+            repository.Trim(),
+            builder.AppHostDirectory));
     }
 
     internal static PipelineStep CreateAggregateStep() => new()
@@ -147,6 +171,46 @@ internal static class ModuleRepositoryInitializationPipeline
             },
             RequiredBySteps = [StepName],
             Tags = [RepositoryStepTag]
+        };
+    }
+
+    internal static PipelineStep CreateSkippedRepositoryStep(
+        string moduleName,
+        string repository,
+        string appHostDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(moduleName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        ArgumentException.ThrowIfNullOrWhiteSpace(appHostDirectory);
+        var normalizedRepository = RepositoryIdentity.NormalizeRepositoryIdentity(
+            repository,
+            appHostDirectory);
+        var repositorySlug = RepositoryIdentity.GetCanonicalCheckoutSlug(
+            repository,
+            appHostDirectory);
+        var stepKey = RepositoryIdentity.GetStepKey(
+            normalizedRepository,
+            revision: moduleName,
+            $"{moduleName}-{repositorySlug}");
+        const string reason = "the module's resources do not require repository content";
+        return new PipelineStep
+        {
+            Name = $"skip-initialize-{stepKey}",
+            Description =
+                $"Module '{moduleName}' declares repository '{normalizedRepository}', but no repository " +
+                $"initialization step was planned because {reason}.",
+            Action = context =>
+            {
+                LogRepositoryInitializationSkipped(
+                    context.Logger,
+                    moduleName,
+                    normalizedRepository,
+                    reason,
+                    null);
+                return Task.CompletedTask;
+            },
+            RequiredBySteps = [StepName],
+            Tags = [SkippedRepositoryStepTag, RepositoryContentNotRequiredTag]
         };
     }
 

@@ -7,6 +7,55 @@ namespace Aspire.Hosting.ModularAppHosts.Tool.Tests;
 public sealed class WorkflowDocumentationTests
 {
     [Fact]
+    public async Task Prerelease_workflow_uses_the_guarded_repository_build_and_publish_contract()
+    {
+        var workflowPath = Path.Combine(
+            FindRepositoryRoot(),
+            ".github",
+            "workflows",
+            "prerelease-packages.yml");
+        var workflow = await File.ReadAllTextAsync(
+            workflowPath,
+            TestContext.Current.CancellationToken);
+        workflow = workflow.ReplaceLineEndings("\n");
+
+        Assert.Contains("workflow_dispatch:", workflow, StringComparison.Ordinal);
+        Assert.Contains("confirm_publish:", workflow, StringComparison.Ordinal);
+        Assert.Contains("type: boolean", workflow, StringComparison.Ordinal);
+        Assert.Contains("group: publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("cancel-in-progress: false", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "vars.NUGET_PUBLISH_ENABLED == 'true'",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("inputs.confirm_publish", workflow, StringComparison.Ordinal);
+        Assert.Contains("github.ref == 'refs/heads/main'", workflow, StringComparison.Ordinal);
+        Assert.Contains("permissions:\n  contents: read", workflow, StringComparison.Ordinal);
+        Assert.Contains("PRERELEASE_VERSION: ${{ inputs.version }}", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "node .github/release/validate-prerelease-version.mjs \"$PRERELEASE_VERSION\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "./build.sh --package-version \"$PRERELEASE_VERSION\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("artifacts/*.nupkg", workflow, StringComparison.Ordinal);
+        Assert.Contains("artifacts/*.snupkg", workflow, StringComparison.Ordinal);
+        Assert.Contains("NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}", workflow, StringComparison.Ordinal);
+        Assert.Contains("dotnet nuget push artifacts/*.nupkg", workflow, StringComparison.Ordinal);
+        Assert.Contains("--source https://api.nuget.org/v3/index.json", workflow, StringComparison.Ordinal);
+        Assert.Contains("--symbol-source https://api.nuget.org/v3/index.json", workflow, StringComparison.Ordinal);
+        Assert.Contains("--skip-duplicate", workflow, StringComparison.Ordinal);
+        Assert.True(
+            workflow.IndexOf("actions/upload-artifact", StringComparison.Ordinal) <
+            workflow.IndexOf("dotnet nuget push", StringComparison.Ordinal));
+        Assert.DoesNotContain("contents: write", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("gh release", workflow, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("git tag", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Checked_in_workflow_document_example_matches_the_current_contract()
     {
         var repositoryRoot = FindRepositoryRoot();
