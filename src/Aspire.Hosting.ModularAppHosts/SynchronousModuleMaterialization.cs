@@ -174,6 +174,17 @@ public static partial class DistributedApplicationModuleExtensions
             }
         }
 
+        if (imported &&
+            !repositoryUsage.ShouldPlan &&
+            definitionRepository.Repository is { } omittedRepository &&
+            RepositoryIdentity.IsRemoteRepository(omittedRepository, builder.AppHostDirectory))
+        {
+            ModuleRepositoryInitializationPipeline.AddSkippedRepositoryStep(
+                builder,
+                module.Name,
+                omittedRepository);
+        }
+
         registry.MarkMaterialized(module.Name, materializationKey);
     }
 

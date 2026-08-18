@@ -21,6 +21,70 @@ namespace Aspire.Hosting.ModularAppHosts.Tests;
 public sealed class ModuleProjectModeSwitchingPipelineTests
 {
     [Fact]
+    public void Pipeline_reports_declared_remote_repository_that_no_resource_can_use()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var builder = new TestBuilder(
+            CreateBuilder(appHostPath, ["--publisher", "manifest"]),
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository("https://example.test/acme/notifications.git");
+            module.AddContainer("notifications-api", "busybox", "1.37");
+        });
+
+        builder.ImportModule("notifications");
+
+        var diagnostic = Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+        Assert.Contains("notifications", diagnostic.Name, StringComparison.Ordinal);
+        Assert.Contains("notifications", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains("example.test/acme/notifications", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains("do not require repository content", diagnostic.Description, StringComparison.Ordinal);
+        Assert.Contains(
+            ModuleRepositoryInitializationPipeline.RepositoryContentNotRequiredTag,
+            diagnostic.Tags);
+        Assert.Contains(ModuleRepositoryInitializationPipeline.StepName, diagnostic.RequiredBySteps);
+    }
+
+    [Fact]
+    public async Task Skipped_repository_step_reports_declaration_and_reason_when_executed()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var appHostPath = Path.Combine(workspace.Path, "consumer");
+        Directory.CreateDirectory(Path.Combine(appHostPath, ".git"));
+        var pipeline = new CapturingPipeline();
+        var inner = CreateBuilder(appHostPath, ["--publisher", "manifest"]);
+        var builder = new TestBuilder(
+            inner,
+            pipeline,
+            new TestUserSecretsManager(Path.Combine(appHostPath, "secrets.json")));
+        builder.ExportModule("notifications", module =>
+        {
+            module.WithRepository("https://example.test/acme/notifications.git");
+            module.AddContainer("notifications-api", "busybox", "1.37");
+        });
+        builder.ImportModule("notifications");
+        await using var application = inner.Build();
+        var logger = new CapturingLogger();
+        var diagnostic = Assert.Single(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
+
+        await ExecuteAsync(application, diagnostic, logger);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal("notifications", entry.State["Module"]);
+        Assert.Equal("example.test/acme/notifications", entry.State["Repository"]);
+        Assert.Equal(
+            "the module's resources do not require repository content",
+            entry.State["Reason"]);
+    }
+
+    [Fact]
     public async Task Pipeline_initialize_satisfies_repository_needed_by_run_project_override()
     {
         using var workspace = TemporaryDirectory.Create();
@@ -44,6 +108,8 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
         Assert.False(pipelineRequirement.RequiredOnRun);
         Assert.Contains(pipeline.Steps, step =>
             step.Tags.Contains(ModuleRepositoryInitializationPipeline.RepositoryStepTag));
+        Assert.DoesNotContain(pipeline.Steps, step =>
+            step.Tags.Contains(ModuleRepositoryInitializationPipeline.SkippedRepositoryStepTag));
 
         var stateStore = new InMemoryModuleRepositoryStateStore();
         await ModuleRepositoryInitializationPipeline.InitializeAndRecordAsync(
@@ -340,13 +406,16 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
             ProjectDirectory = projectDirectory
         });
 
-    private static async Task ExecuteAsync(DistributedApplication application, PipelineStep step)
+    private static async Task ExecuteAsync(
+        DistributedApplication application,
+        PipelineStep step,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         var pipelineContext = new PipelineContext(
             application.Services.GetRequiredService<DistributedApplicationModel>(),
             application.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             application.Services,
-            NullLogger.Instance,
+            logger ?? NullLogger.Instance,
             TestContext.Current.CancellationToken);
         await using var reportingStep = await new NullPublishingActivityReporter().CreateStepAsync(
             step.Name,
@@ -356,6 +425,27 @@ public sealed class ModuleProjectModeSwitchingPipelineTests
             PipelineContext = pipelineContext,
             ReportingStep = reportingStep
         });
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.EventId EventId, Dictionary<string, object?> State)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var values = state as IEnumerable<KeyValuePair<string, object?>> ?? [];
+            Entries.Add((eventId, values.ToDictionary(pair => pair.Key, pair => pair.Value)));
+        }
     }
 
     private sealed class CapturingPipeline : IDistributedApplicationPipeline
