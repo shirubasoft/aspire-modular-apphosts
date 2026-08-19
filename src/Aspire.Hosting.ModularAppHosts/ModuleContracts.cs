@@ -66,6 +66,39 @@ public interface IDistributedApplicationModuleBuilder
     /// <summary>Gets a previously defined module with the required contract version.</summary>
     IDistributedApplicationModule GetRequiredModule(string name, string version);
 
+    /// <summary>Adds a previously defined module from its local source checkout when this module is materialized.</summary>
+    IDistributedApplicationModule AddModule(IDistributedApplicationModule dependency);
+
+    /// <summary>Defines and adds another module from its local source checkout when this module is materialized.</summary>
+    IDistributedApplicationModule AddModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder);
+
+    /// <summary>Imports a previously defined module with default resource names when this module is materialized.</summary>
+    IDistributedApplicationModule ImportModule(IDistributedApplicationModule dependency);
+
+    /// <summary>Imports a previously defined module with resource naming options when this module is materialized.</summary>
+    IDistributedApplicationModule ImportModule(
+        IDistributedApplicationModule dependency,
+        ModuleImportOptions importOptions);
+
+    /// <summary>Defines and imports another module with default resource names when this module is materialized.</summary>
+    IDistributedApplicationModule ImportModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder);
+
+    /// <summary>Defines and imports another module with resource naming options when this module is materialized.</summary>
+    IDistributedApplicationModule ImportModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        ModuleImportOptions importOptions);
+
     /// <summary>
     /// Adds any Aspire resource type through a factory that runs when the module is materialized.
     /// </summary>

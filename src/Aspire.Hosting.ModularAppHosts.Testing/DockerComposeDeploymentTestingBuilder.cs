@@ -484,7 +484,7 @@ public sealed class DockerComposeDeploymentTestingBuilder : IDistributedApplicat
             : absolutePath;
     }
 
-    private static string ResolveAppHostPath(Assembly appHostAssembly)
+    internal static string ResolveAppHostPath(Assembly appHostAssembly)
     {
         var metadata = appHostAssembly.GetCustomAttributes<AssemblyMetadataAttribute>().ToArray();
         var projectPath = metadata

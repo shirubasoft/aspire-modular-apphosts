@@ -28,6 +28,8 @@ internal sealed class ModuleApplicationRegistry(
     private readonly Dictionary<string, string> _materializedModules =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly List<string> _definitionPath = [];
+
     private readonly List<ModuleRequiredPath> _requiredPaths = [];
     private readonly Dictionary<string, int> _requiredPathIndices = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ModuleRepositoryPreflightScopeBuilder> _preflightScopes =
@@ -57,6 +59,31 @@ internal sealed class ModuleApplicationRegistry(
     internal void AddModule(DistributedApplicationModule module)
     {
         _modules.Add(module.Name, module);
+    }
+
+    internal void BeginDefinition(string moduleName)
+    {
+        var cycleStart = _definitionPath.FindIndex(name =>
+            string.Equals(name, moduleName, StringComparison.OrdinalIgnoreCase));
+        if (cycleStart >= 0)
+        {
+            var cycle = _definitionPath.Skip(cycleStart).Append(moduleName);
+            throw new InvalidOperationException(
+                $"Module definition cycle detected: {string.Join(" -> ", cycle.Select(name => $"'{name}'"))}.");
+        }
+
+        _definitionPath.Add(moduleName);
+    }
+
+    internal void EndDefinition(string moduleName)
+    {
+        if (_definitionPath.Count == 0 ||
+            !string.Equals(_definitionPath[^1], moduleName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Module definition tracking for '{moduleName}' is inconsistent.");
+        }
+
+        _definitionPath.RemoveAt(_definitionPath.Count - 1);
     }
 
     internal bool TryGetMaterialization(string moduleName, out string? materializationKey) =>

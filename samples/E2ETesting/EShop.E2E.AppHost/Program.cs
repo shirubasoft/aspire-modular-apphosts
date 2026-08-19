@@ -15,9 +15,8 @@ var compose = builder.AddDockerComposeEnvironment("e2e")
     .WithDashboard(false);
 var ordersApiKey = builder.AddParameter("orders-api-key", secret: true);
 
-var catalog = builder.AddCatalogModule();
-
 var orders = builder.AddOrdersModule();
+var catalog = builder.AddCatalogModule();
 
 orders.Api
     .WithEnvironment("Orders__ApiKey", ordersApiKey);

@@ -608,6 +608,37 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
                 .AppendLine("(builder, module);");
             source.AppendLine("    }");
             source.AppendLine();
+
+            AppendSummary(
+                source,
+                "    ",
+                $"Defines and adds module '{module.ModuleName}' version '{module.ModuleVersion}' as part of another module.");
+            AppendParameter(source, "    ", "moduleBuilder", "The module definition that composes this module.");
+            AppendReturns(source, "    ", $"The composed '{module.ModuleName}' module.");
+            AppendException(source, "    ", "global::System.ArgumentNullException", "moduleBuilder is null.");
+            AppendException(
+                source,
+                "    ",
+                "global::System.InvalidOperationException",
+                "The definition or synchronous resource materialization is invalid.");
+            source.Append("    public static Module ")
+                .Append(module.AddExtensionMethodName)
+                .AppendLine("(");
+            source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder)");
+            source.AppendLine("    {");
+            source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(moduleBuilder);");
+            source.Append("        var module = moduleBuilder.AddModule(")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+                .Append(", ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .Append(", ")
+                .Append(module.PackageId is null
+                    ? "null"
+                    : SymbolDisplay.FormatLiteral(module.PackageId, quote: true))
+                .AppendLine(", Define);");
+            source.AppendLine("        return new Module(module);");
+            source.AppendLine("    }");
+            source.AppendLine();
         }
 
         AppendSummary(
@@ -664,6 +695,71 @@ public sealed class DistributedApplicationModuleGenerator : IIncrementalGenerato
         source.AppendLine("        return new Module(module);");
         source.AppendLine("    }");
         source.AppendLine();
+        if (module.HasConventionalDefineMethod)
+        {
+            AppendSummary(
+                source,
+                "    ",
+                $"Defines and imports module '{module.ModuleName}' version '{module.ModuleVersion}' as part of another module with default resource names.");
+            AppendParameter(source, "    ", "moduleBuilder", "The module definition that composes this module.");
+            AppendReturns(source, "    ", $"The composed '{module.ModuleName}' module.");
+            AppendException(source, "    ", "global::System.ArgumentNullException", "moduleBuilder is null.");
+            AppendException(
+                source,
+                "    ",
+                "global::System.InvalidOperationException",
+                "The definition, repository preflight requirements, or synchronous resource materialization is invalid.");
+            source.Append("    public static Module ")
+                .Append(module.ImportExtensionMethodName)
+                .AppendLine("(");
+            source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder)");
+            source.AppendLine("    {");
+            source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(moduleBuilder);");
+            source.Append("        return ")
+                .Append(module.ImportExtensionMethodName)
+                .AppendLine("(moduleBuilder, new global::Aspire.Hosting.ModuleImportOptions());");
+            source.AppendLine("    }");
+            source.AppendLine();
+
+            AppendSummary(
+                source,
+                "    ",
+                $"Defines and imports module '{module.ModuleName}' version '{module.ModuleVersion}' as part of another module with resource naming options.");
+            AppendParameter(source, "    ", "moduleBuilder", "The module definition that composes this module.");
+            AppendParameter(source, "    ", "options", "Resource prefixes and aliases for this import.");
+            AppendReturns(source, "    ", $"The composed '{module.ModuleName}' module.");
+            AppendException(
+                source,
+                "    ",
+                "global::System.ArgumentNullException",
+                "moduleBuilder or options is null.");
+            AppendException(
+                source,
+                "    ",
+                "global::System.InvalidOperationException",
+                "The definition, import naming, repository preflight requirements, or synchronous resource materialization is invalid.");
+            source.Append("    public static Module ")
+                .Append(module.ImportExtensionMethodName)
+                .AppendLine("(");
+            source.AppendLine("        this global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder,");
+            source.AppendLine("        global::Aspire.Hosting.ModuleImportOptions options)");
+            source.AppendLine("    {");
+            source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(moduleBuilder);");
+            source.AppendLine("        global::System.ArgumentNullException.ThrowIfNull(options);");
+            source.Append("        var module = moduleBuilder.ImportModule(")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleName, quote: true))
+                .Append(", ")
+                .Append(SymbolDisplay.FormatLiteral(module.ModuleVersion, quote: true))
+                .Append(", ")
+                .Append(module.PackageId is null
+                    ? "null"
+                    : SymbolDisplay.FormatLiteral(module.PackageId, quote: true))
+                .AppendLine(", Define, options);");
+            source.AppendLine("        return new Module(module);");
+            source.AppendLine("    }");
+            source.AppendLine();
+        }
+
         AppendSummary(
             source,
             "    ",

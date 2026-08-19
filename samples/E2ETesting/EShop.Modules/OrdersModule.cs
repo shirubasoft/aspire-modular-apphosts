@@ -10,7 +10,7 @@ public static partial class OrdersModule
     public const string ApiResourceName = "orders-api";
     public static void Define(IDistributedApplicationModuleBuilder module)
     {
-        var catalog = CatalogModule.Reference(module);
+        var catalog = module.AddCatalogModule();
 
         module.RequiresRepository();
         module.AddResource<ProjectResource>(ApiResourceName, context =>

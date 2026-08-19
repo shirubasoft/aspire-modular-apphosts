@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Text;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
@@ -284,6 +286,42 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
     }
 
     [Fact]
+    public void ResolveAppHostPath_supports_project_file_and_directory_metadata()
+    {
+        var projectFile = Path.Combine(Path.GetTempPath(), "Sample.AppHost.csproj");
+        var projectAssembly = CreateAssembly(("AppHostProjectPath", projectFile));
+        Assert.Equal(projectFile, DockerComposeDeploymentTestingBuilder.ResolveAppHostPath(projectAssembly));
+
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "sample-apphost");
+        var directoryAssembly = CreateAssembly(
+            ("AppHostProjectPath", projectDirectory),
+            ("AppHostProjectName", "Sample.AppHost"));
+        Assert.Equal(
+            Path.Combine(projectDirectory, "Sample.AppHost.csproj"),
+            DockerComposeDeploymentTestingBuilder.ResolveAppHostPath(directoryAssembly));
+
+        var explicitNameAssembly = CreateAssembly(
+            ("AppHostProjectPath", projectDirectory),
+            ("AppHostProjectName", "Explicit.AppHost.csproj"));
+        Assert.Equal(
+            Path.Combine(projectDirectory, "Explicit.AppHost.csproj"),
+            DockerComposeDeploymentTestingBuilder.ResolveAppHostPath(explicitNameAssembly));
+    }
+
+    [Fact]
+    public void ResolveAppHostPath_reports_missing_project_metadata()
+    {
+        var missingPath = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder.ResolveAppHostPath(CreateAssembly()));
+        Assert.Contains("does not identify an Aspire AppHost project path", missingPath.Message, StringComparison.Ordinal);
+
+        var missingName = Assert.Throws<InvalidOperationException>(() =>
+            DockerComposeDeploymentTestingBuilder.ResolveAppHostPath(CreateAssembly(
+                ("AppHostProjectPath", Path.GetTempPath()))));
+        Assert.Contains("does not identify an Aspire AppHost project name", missingName.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DeployAsync_owns_a_temporary_deployment_until_idempotent_disposal()
     {
         var runner = new RecordingAspireCommandRunner(WriteConfigurationOnDeploy);
@@ -563,6 +601,20 @@ public sealed class DockerComposeDeploymentTestingBuilderTests
             GetAppHostPath(),
             runner,
             cancellationToken);
+
+    private static Assembly CreateAssembly(params (string Key, string Value)[] metadata)
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName($"TestAppHost{Guid.NewGuid():N}"),
+            AssemblyBuilderAccess.Run);
+        var constructor = typeof(AssemblyMetadataAttribute).GetConstructor([typeof(string), typeof(string)])!;
+        foreach (var (key, value) in metadata)
+        {
+            assembly.SetCustomAttribute(new CustomAttributeBuilder(constructor, [key, value]));
+        }
+
+        return assembly;
+    }
 
     private static DockerComposeDeploymentOptions CreateOptions() => new()
     {
