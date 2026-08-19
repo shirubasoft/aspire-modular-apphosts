@@ -78,7 +78,8 @@ public static partial class DistributedApplicationModuleExtensions
         DistributedApplicationModule module,
         ModuleApplicationRegistry registry,
         bool imported,
-        ModuleImportOptions? importOptions = null)
+        ModuleImportOptions? importOptions = null,
+        string[]? materializationPath = null)
     {
         ValidateOptions(registry.Options);
         var materializationKey = GetMaterializationKey(imported, importOptions);
@@ -91,6 +92,36 @@ public static partial class DistributedApplicationModuleExtensions
 
             throw new InvalidOperationException(
                 $"Module '{module.Name}' is already materialized with different local/import or resource naming options.");
+        }
+
+        materializationPath ??= [];
+        var cycleStart = -1;
+        for (var index = 0; index < materializationPath.Length; index++)
+        {
+            if (string.Equals(materializationPath[index], module.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                cycleStart = index;
+                break;
+            }
+        }
+
+        if (cycleStart >= 0)
+        {
+            var cycle = materializationPath.Skip(cycleStart).Append(module.Name);
+            throw new InvalidOperationException(
+                $"Module materialization cycle detected: {string.Join(" -> ", cycle.Select(name => $"'{name}'"))}.");
+        }
+
+        var currentPath = materializationPath.Append(module.Name).ToArray();
+        foreach (var composition in module.Compositions)
+        {
+            MaterializeModule(
+                builder,
+                composition.Module,
+                registry,
+                composition.Imported,
+                composition.ImportOptions,
+                currentPath);
         }
 
         var options = registry.Options;

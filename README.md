@@ -61,7 +61,7 @@ builder.AddContainer("storefront", "nginx", "alpine")
 await builder.Build().RunAsync();
 ```
 
-From the AppHost directory, run `aspire run` and open the dashboard URL. Use `ImportCatalogModule()` instead when repository configuration should supply the module's source tree.
+From the AppHost directory, run `aspire run` and open the dashboard URL. Use `ImportCatalogModule()` instead when repository configuration should supply the module's source tree. Generated add/import methods also work inside module definitions, so a parent module can own and materialize its local or imported dependencies.
 
 ## Next steps
 

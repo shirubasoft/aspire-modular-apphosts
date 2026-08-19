@@ -123,7 +123,7 @@ See the [remote initialization sample](../samples/RemoteInitialization/README.md
 | Contract declaration | Generated API |
 | --- | --- |
 | `[GenerateDistributedApplicationModule("orders")]` on `OrdersModule` | Typed `OrdersModule.Module` wrapper and identity validation. |
-| Conventional `Define(IDistributedApplicationModuleBuilder)` | `AddOrdersModule()` and `ImportOrdersModule(...)`. |
+| Conventional `Define(IDistributedApplicationModuleBuilder)` | `AddOrdersModule()` and `ImportOrdersModule(...)` overloads for AppHosts and module builders. |
 | `ApiResourceName` used in a supported resource call | `OrdersModule.Module.Api` with the declared Aspire resource type. |
 | `OrdersModule.Reference(module)` | Version-checked typed reference from another module definition. |
 
@@ -133,21 +133,14 @@ The annotated type must be a top-level, non-generic, static partial class. Resou
 
 For dynamic contracts, use `DefineModule` or `ExportModule` and the untyped `AddModule`/`ImportModule` APIs. The raw import does not register a definition for you.
 
-### Reference another module
+### Compose modules
 
-Add or import a dependency before the module that references it:
-
-```csharp
-var catalog = builder.AddCatalogModule();
-var orders = builder.AddOrdersModule();
-```
-
-The dependent definition resolves the generated contract and uses its resources normally:
+Add a dependency from the dependent module definition:
 
 ```csharp
 public static void Define(IDistributedApplicationModuleBuilder module)
 {
-    var catalog = CatalogModule.Reference(module);
+    var catalog = module.AddCatalogModule();
 
     module.AddResource<ProjectResource>(ApiResourceName, context =>
         context.ApplicationBuilder
@@ -157,7 +150,15 @@ public static void Define(IDistributedApplicationModuleBuilder module)
 }
 ```
 
-A missing dependency or incompatible contract version fails while the dependent module is defined. Typed references preserve import aliases and prefixes.
+The AppHost only needs to add the parent. Dependencies are materialized before its own resources, so callbacks can use their typed resources normally:
+
+```csharp
+var orders = builder.AddOrdersModule();
+```
+
+Use `module.ImportCatalogModule()` to materialize the dependency as an import, or pass `ModuleImportOptions` to prefix or alias its resources. Import options are captured when the parent is defined. Composition-only modules are valid, and transitive dependencies are materialized once in dependency order. Adding or importing the same dependency elsewhere with conflicting local/import or naming options fails explicitly.
+
+Dynamic definitions can compose an existing definition with `module.AddModule(dependency)` or `module.ImportModule(dependency, options)`. They can also define and compose a dependency in one call by supplying its name, version, package ID, and definition callback. `CatalogModule.Reference(module)` remains available for version-checked access when the AppHost materializes the dependency separately.
 
 ## Configure a module
 

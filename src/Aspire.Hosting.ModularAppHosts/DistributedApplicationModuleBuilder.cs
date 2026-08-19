@@ -44,6 +44,60 @@ internal sealed class DistributedApplicationModuleBuilder(
         return referencedModule;
     }
 
+    public IDistributedApplicationModule AddModule(IDistributedApplicationModule dependency)
+    {
+        return AddModuleCore(dependency, imported: false, importOptions: null);
+    }
+
+    public IDistributedApplicationModule AddModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        var dependency = applicationBuilder.DefineModule(name, version, packageId, moduleBuilder);
+        return AddModule(dependency);
+    }
+
+    public IDistributedApplicationModule ImportModule(IDistributedApplicationModule dependency)
+    {
+        return AddModuleCore(dependency, imported: true, new ModuleImportOptions());
+    }
+
+    public IDistributedApplicationModule ImportModule(
+        IDistributedApplicationModule dependency,
+        ModuleImportOptions importOptions)
+    {
+        ArgumentNullException.ThrowIfNull(importOptions);
+        return AddModuleCore(dependency, imported: true, importOptions);
+    }
+
+    public IDistributedApplicationModule ImportModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder)
+    {
+        return ImportModule(
+            name,
+            version,
+            packageId,
+            moduleBuilder,
+            new ModuleImportOptions());
+    }
+
+    public IDistributedApplicationModule ImportModule(
+        string name,
+        string version,
+        string? packageId,
+        Action<IDistributedApplicationModuleBuilder> moduleBuilder,
+        ModuleImportOptions importOptions)
+    {
+        ArgumentNullException.ThrowIfNull(importOptions);
+        var dependency = applicationBuilder.DefineModule(name, version, packageId, moduleBuilder);
+        return ImportModule(dependency, importOptions);
+    }
+
     public IDistributedApplicationModuleBuilder AddResource<TResource>(
         string name,
         Func<IDistributedApplicationModuleResourceContext, IResourceBuilder<TResource>> resourceFactory)
@@ -79,6 +133,60 @@ internal sealed class DistributedApplicationModuleBuilder(
             resourceFactory,
             imagePublishOptions));
         return this;
+    }
+
+    private IDistributedApplicationModule AddModuleCore(
+        IDistributedApplicationModule dependency,
+        bool imported,
+        ModuleImportOptions? importOptions)
+    {
+        ArgumentNullException.ThrowIfNull(dependency);
+        var definition = GetModuleDefinition(dependency);
+        if (!ReferenceEquals(definition.DefinitionApplicationBuilder, applicationBuilder))
+        {
+            throw new ArgumentException(
+                "The composed module definition belongs to a different distributed application builder. " +
+                "Define both modules on the same AppHost builder.",
+                nameof(dependency));
+        }
+
+        if (!registry.TryGetDefinition(definition.Name, out var registered) ||
+            !ReferenceEquals(definition, registered))
+        {
+            throw new ArgumentException(
+                "The composed module must have been created by DefineModule or ExportModule on this AppHost builder.",
+                nameof(dependency));
+        }
+
+        module.AddComposition(new DistributedApplicationModuleComposition(
+            definition,
+            imported,
+            importOptions is null ? null : CopyImportOptions(importOptions)));
+        return dependency;
+    }
+
+    private static DistributedApplicationModule GetModuleDefinition(IDistributedApplicationModule dependency)
+    {
+        while (dependency is DistributedApplicationModuleReference reference)
+        {
+            dependency = reference.Module;
+        }
+
+        return dependency as DistributedApplicationModule
+            ?? throw new ArgumentException(
+                "The composed module must have been created by DefineModule or ExportModule on this extension.",
+                nameof(dependency));
+    }
+
+    private static ModuleImportOptions CopyImportOptions(ModuleImportOptions importOptions)
+    {
+        var copy = new ModuleImportOptions { ResourcePrefix = importOptions.ResourcePrefix };
+        foreach (var alias in importOptions.ResourceAliases)
+        {
+            copy.ResourceAliases.Add(alias);
+        }
+
+        return copy;
     }
 
     public IDistributedApplicationModuleProjectBuilder AddProject<TProject>(string name)

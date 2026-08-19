@@ -456,10 +456,16 @@ Aspire.Hosting.IDistributedApplicationModule.Projects.get -> System.Collections.
 Aspire.Hosting.IDistributedApplicationModule.Resources.get -> System.Collections.Generic.IReadOnlyList<Aspire.Hosting.IDistributedApplicationModuleResource!>!
 Aspire.Hosting.IDistributedApplicationModule.Version.get -> string!
 Aspire.Hosting.IDistributedApplicationModuleBuilder
+Aspire.Hosting.IDistributedApplicationModuleBuilder.AddModule(Aspire.Hosting.IDistributedApplicationModule! dependency) -> Aspire.Hosting.IDistributedApplicationModule!
+Aspire.Hosting.IDistributedApplicationModuleBuilder.AddModule(string! name, string! version, string? packageId, System.Action<Aspire.Hosting.IDistributedApplicationModuleBuilder!>! moduleBuilder) -> Aspire.Hosting.IDistributedApplicationModule!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.AddContainer(string! name, string! image, string! tag = "latest") -> Aspire.Hosting.IDistributedApplicationModuleContainerBuilder!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.AddProject(string! name, string! projectPath) -> Aspire.Hosting.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.AddProject<TProject>(string! name) -> Aspire.Hosting.IDistributedApplicationModuleProjectBuilder!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.AddResource<TResource>(string! name, System.Func<Aspire.Hosting.IDistributedApplicationModuleResourceContext!, Aspire.Hosting.ApplicationModel.IResourceBuilder<TResource>!>! resourceFactory) -> Aspire.Hosting.IDistributedApplicationModuleBuilder!
+Aspire.Hosting.IDistributedApplicationModuleBuilder.ImportModule(Aspire.Hosting.IDistributedApplicationModule! dependency) -> Aspire.Hosting.IDistributedApplicationModule!
+Aspire.Hosting.IDistributedApplicationModuleBuilder.ImportModule(Aspire.Hosting.IDistributedApplicationModule! dependency, Aspire.Hosting.ModuleImportOptions! importOptions) -> Aspire.Hosting.IDistributedApplicationModule!
+Aspire.Hosting.IDistributedApplicationModuleBuilder.ImportModule(string! name, string! version, string? packageId, System.Action<Aspire.Hosting.IDistributedApplicationModuleBuilder!>! moduleBuilder) -> Aspire.Hosting.IDistributedApplicationModule!
+Aspire.Hosting.IDistributedApplicationModuleBuilder.ImportModule(string! name, string! version, string? packageId, System.Action<Aspire.Hosting.IDistributedApplicationModuleBuilder!>! moduleBuilder, Aspire.Hosting.ModuleImportOptions! importOptions) -> Aspire.Hosting.IDistributedApplicationModule!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.RequiresRepository() -> Aspire.Hosting.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.WithRepository(string! repository) -> Aspire.Hosting.IDistributedApplicationModuleBuilder!
 Aspire.Hosting.IDistributedApplicationModuleBuilder.WithRepository(string! repository, string! revision) -> Aspire.Hosting.IDistributedApplicationModuleBuilder!

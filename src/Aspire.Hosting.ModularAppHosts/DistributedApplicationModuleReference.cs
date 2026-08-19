@@ -17,6 +17,8 @@ public abstract class DistributedApplicationModuleReference : IDistributedApplic
         _module = module;
     }
 
+    internal IDistributedApplicationModule Module => _module;
+
     /// <inheritdoc />
     public string Name => _module.Name;
 

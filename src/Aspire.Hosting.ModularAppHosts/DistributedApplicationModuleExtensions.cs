@@ -64,12 +64,20 @@ public static partial class DistributedApplicationModuleExtensions
             return existingModule;
         }
 
-        var module = new DistributedApplicationModule(builder, name, version, packageId);
-        moduleBuilder(new DistributedApplicationModuleBuilder(builder, module, registry));
-        module.Validate();
-        ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
-        registry.AddModule(module);
-        return module;
+        registry.BeginDefinition(name);
+        try
+        {
+            var module = new DistributedApplicationModule(builder, name, version, packageId);
+            moduleBuilder(new DistributedApplicationModuleBuilder(builder, module, registry));
+            module.Validate();
+            ValidateModuleConfiguration(module, registry.Options.FindModule(module.Name));
+            registry.AddModule(module);
+            return module;
+        }
+        finally
+        {
+            registry.EndDefinition(name);
+        }
     }
 
     /// <summary>Configures module materialization options after applying AppHost configuration.</summary>

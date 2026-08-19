@@ -141,7 +141,10 @@ public sealed class DistributedApplicationModuleGeneratorTests
         var generated = Assert.Single(result.GeneratedSources);
         Assert.Contains("Module AddOrdersModule(", generated);
         Assert.Contains("this global::Aspire.Hosting.IDistributedApplicationBuilder builder", generated);
+        Assert.Contains("this global::Aspire.Hosting.IDistributedApplicationModuleBuilder moduleBuilder", generated);
         Assert.Contains("DefineModule(builder, \"orders\", \"2\", null, Define)", generated);
+        Assert.Contains("moduleBuilder.AddModule(\"orders\", \"2\", null, Define)", generated);
+        Assert.Contains("moduleBuilder.ImportModule(\"orders\", \"2\", null, Define, options)", generated);
         Assert.Contains("return AddOrdersModule(builder, module)", generated);
         Assert.Contains("Module ImportOrdersModule(", generated);
         Assert.Contains("ModuleImportOptions options", generated);
@@ -181,7 +184,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
     }
 
     [Fact]
-    public void Generator_creates_a_strongly_typed_reference_for_use_in_other_module_definitions()
+    public void Generator_creates_strongly_typed_composition_apis_for_use_in_other_module_definitions()
     {
         const string source = """
             using Aspire.Hosting;
@@ -202,7 +205,7 @@ public sealed class DistributedApplicationModuleGeneratorTests
             {
                 public static void Define(IDistributedApplicationModuleBuilder module)
                 {
-                    var catalog = CatalogModule.Reference(module);
+                    var catalog = module.AddCatalogModule();
                     _ = catalog.Api;
                     module.AddContainer("api", "orders");
                 }
@@ -215,7 +218,9 @@ public sealed class DistributedApplicationModuleGeneratorTests
         Assert.Empty(result.CompilationDiagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
         Assert.Contains(result.GeneratedSources, generated =>
             generated.Contains("public static Module Reference(", StringComparison.Ordinal) &&
-            generated.Contains("GetRequiredModule(\"catalog\", \"2\")", StringComparison.Ordinal));
+            generated.Contains("GetRequiredModule(\"catalog\", \"2\")", StringComparison.Ordinal) &&
+            generated.Contains("moduleBuilder.AddModule(\"catalog\", \"2\", null, Define)", StringComparison.Ordinal) &&
+            generated.Contains("moduleBuilder.ImportModule(\"catalog\", \"2\", null, Define, options)", StringComparison.Ordinal));
     }
 
     [Fact]

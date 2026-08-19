@@ -11,6 +11,7 @@ internal sealed class DistributedApplicationModule(
     private readonly List<IDistributedApplicationModuleResource> _resources = [];
     private readonly List<DistributedApplicationModuleProject> _projects = [];
     private readonly List<DistributedApplicationModuleContainer> _containers = [];
+    private readonly List<DistributedApplicationModuleComposition> _compositions = [];
     private readonly Dictionary<string, IResource> _materializedResources =
         new(StringComparer.OrdinalIgnoreCase);
     private IDistributedApplicationBuilder? _materializedApplicationBuilder;
@@ -32,6 +33,8 @@ internal sealed class DistributedApplicationModule(
     internal IReadOnlyList<DistributedApplicationModuleContainer> ContainerDefinitions => _containers;
 
     internal IReadOnlyList<IDistributedApplicationModuleResource> ResourceDefinitions => _resources;
+
+    internal IReadOnlyList<DistributedApplicationModuleComposition> Compositions => _compositions;
 
     internal string? Repository { get; set; }
 
@@ -64,6 +67,11 @@ internal sealed class DistributedApplicationModule(
     {
         ThrowIfNameIsAlreadyUsed(resource.Name);
         _resources.Add(resource);
+    }
+
+    internal void AddComposition(DistributedApplicationModuleComposition composition)
+    {
+        _compositions.Add(composition);
     }
 
     public IResourceBuilder<TResource> GetResource<TResource>(string name)
@@ -167,9 +175,9 @@ internal sealed class DistributedApplicationModule(
 
     private void ValidateResourceDefinitions()
     {
-        if (_resources.Count == 0)
+        if (_resources.Count == 0 && _compositions.Count == 0)
         {
-            throw new InvalidOperationException($"Module '{Name}' does not contain any resources.");
+            throw new InvalidOperationException($"Module '{Name}' does not contain any resources or modules.");
         }
 
         var notExported = _projects.FirstOrDefault(project => !project.IsExportedAsContainer);
@@ -241,6 +249,11 @@ internal sealed class DistributedApplicationModule(
         }
     }
 }
+
+internal sealed record DistributedApplicationModuleComposition(
+    DistributedApplicationModule Module,
+    bool Imported,
+    ModuleImportOptions? ImportOptions);
 
 internal sealed class DistributedApplicationModuleProject(
     string name,
