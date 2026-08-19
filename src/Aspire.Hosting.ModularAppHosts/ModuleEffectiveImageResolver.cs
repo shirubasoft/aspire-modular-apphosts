@@ -164,7 +164,8 @@ internal sealed class ModuleImagePublisherAnnotation(
                 lifecycleLogger,
                 resourceLogger,
                 new ModuleImageRecipeOperations(
-                    services.GetRequiredService<IContainerRuntimeResolver>()),
+                    services.GetRequiredService<IContainerRuntimeResolver>(),
+                    services.GetRequiredService<ModuleRepositoryRefreshCoordinator>()),
                 cancellationToken).ConfigureAwait(false);
         lock (_preparationLock)
         {

@@ -800,9 +800,14 @@ internal static class ModuleImageRecipeEvaluator
     }
 }
 
-internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? runtimeResolver = null)
+internal sealed class ModuleImageRecipeOperations(
+    IContainerRuntimeResolver? runtimeResolver = null,
+    ModuleRepositoryRefreshCoordinator? refreshCoordinator = null)
     : IModuleImageRecipeOperations
 {
+    private readonly ModuleRepositoryRefreshCoordinator _refreshCoordinator =
+        refreshCoordinator ?? new ModuleRepositoryRefreshCoordinator();
+
     internal static ModuleImageRecipeOperations Instance { get; } = new();
 
     public async Task<string> ResolveContainerRuntimeAsync(CancellationToken cancellationToken) =>
@@ -892,16 +897,19 @@ internal sealed class ModuleImageRecipeOperations(IContainerRuntimeResolver? run
         ModuleImageBuildRecipe recipe,
         Action<string> progress,
         CancellationToken cancellationToken) =>
-        RepositorySynchronizer.SynchronizeAsync(
+        _refreshCoordinator.RefreshAsync(
             recipe.RepositoryPath,
-            recipe.Repository,
-            updateRepository: true,
-            cancellationToken,
-            revision: null,
-            recipe.GitExecutablePath,
-            recipe.GitHubCliPath,
-            recipe.RepositoryCommandTimeout,
-            progress);
+            token => RepositorySynchronizer.SynchronizeAsync(
+                recipe.RepositoryPath,
+                recipe.Repository,
+                updateRepository: true,
+                token,
+                revision: null,
+                recipe.GitExecutablePath,
+                recipe.GitHubCliPath,
+                recipe.RepositoryCommandTimeout,
+                progress),
+            cancellationToken);
 
     public Task<bool> ImageExistsAsync(
         string containerRuntime,

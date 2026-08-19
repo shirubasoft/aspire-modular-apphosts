@@ -222,6 +222,7 @@ public static partial class DistributedApplicationModuleExtensions
         var registry = new ModuleApplicationRegistry(
             options,
             projectModeSwitching: new ModuleProjectModeSwitchingPipeline(builder));
+        builder.Services.AddSingleton<ModuleRepositoryRefreshCoordinator>();
         builder.Services.AddSingleton<IModuleRepositoryStateStore>(_ =>
             new FileModuleRepositoryStateStore(
                 FileModuleRepositoryStateStore.ResolveStateFilePath(
