@@ -14,4 +14,6 @@ Tool commands must have the same invocation and behavior locally and in CI.
 
 Keep tool-backed CI workflows script-free; put orchestration in the tool instead of inline shell or jq.
 
+Always monitor pull requests after opening or updating them until all required checks complete. If a check fails, inspect the failure, fix in-scope issues, push the correction, and continue monitoring until all checks pass or a genuine external blocker is identified.
+
 Run local container-backed tests with Docker or Podman; check which runtime is installed and available before choosing.
