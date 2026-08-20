@@ -298,6 +298,16 @@ internal sealed record RepositorySyncLifecycleEvent(
 
 internal static class RepositorySynchronizer
 {
+    private static readonly Dictionary<string, string> OperationTitles =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["clone"] = "Clone",
+            ["fetch"] = "Fetch",
+            ["checkout"] = "Checkout",
+            ["fast-forward"] = "Fast-forward",
+            ["submodule-update"] = "Update submodules"
+        };
+
     public static async Task<RepositorySyncCommand?> CreateCommandAsync(
         string repositoryPath,
         string? repository,
@@ -582,15 +592,8 @@ internal static class RepositorySynchronizer
         progress?.Invoke($"Repository '{repositoryPath}' is synchronized.");
     }
 
-    private static string GetOperationTitle(string operation) => operation switch
-    {
-        "clone" => "Clone",
-        "fetch" => "Fetch",
-        "checkout" => "Checkout",
-        "fast-forward" => "Fast-forward",
-        "submodule-update" => "Update submodules",
-        _ => operation
-    };
+    private static string GetOperationTitle(string operation) =>
+        OperationTitles.GetValueOrDefault(operation, operation);
 
     private static void AddRevisionCommands(
         List<RepositorySyncCommand> commands,
