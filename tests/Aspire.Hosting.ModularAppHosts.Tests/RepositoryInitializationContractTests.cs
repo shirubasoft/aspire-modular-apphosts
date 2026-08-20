@@ -449,6 +449,61 @@ public sealed class RepositoryInitializationContractTests
             lifecycle.Select(entry => (entry.Operation, entry.State, entry.Reason)).ToArray());
     }
 
+    [Fact]
+    public async Task Synchronization_warns_and_preserves_a_checkout_when_its_remote_no_longer_exists()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "removed-source");
+        var commit = await InitializeRepositoryAsync(sourcePath, "first");
+        var checkoutPath = Path.Combine(workspace.Path, "preserved-checkout");
+        await SynchronizeAsync(checkoutPath, sourcePath, updateRepository: true);
+        Directory.Move(sourcePath, Path.Combine(workspace.Path, "removed-source-backup"));
+        var lifecycle = new List<RepositorySyncLifecycleEvent>();
+        var progress = new List<string>();
+
+        await RepositorySynchronizer.SynchronizeAsync(
+            checkoutPath,
+            sourcePath,
+            updateRepository: true,
+            TestContext.Current.CancellationToken,
+            commandTimeout: TimeSpan.FromMinutes(1),
+            progress: progress.Add,
+            lifecycle: lifecycle.Add);
+
+        Assert.Equal(commit, await ReadGitAsync(checkoutPath, "rev-parse", "HEAD"));
+        Assert.Contains(progress, message =>
+            message.Contains("Warning:", StringComparison.Ordinal) &&
+            message.Contains("remote no longer exists", StringComparison.Ordinal));
+        Assert.Equal(
+            [
+                ("fast-forward", "started", (string?)null, false),
+                ("fast-forward", "skipped", "remote-missing", true),
+                ("submodule-update", "started", (string?)null, false),
+                ("submodule-update", "completed", (string?)null, false)
+            ],
+            lifecycle.Select(entry =>
+                (entry.Operation, entry.State, entry.Reason, entry.IsWarning)).ToArray());
+    }
+
+    [Fact]
+    public async Task Synchronization_still_fails_when_a_fast_forward_is_not_possible()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var sourcePath = Path.Combine(workspace.Path, "diverged-source");
+        await InitializeRepositoryAsync(sourcePath, "first");
+        var checkoutPath = Path.Combine(workspace.Path, "diverged-checkout");
+        await SynchronizeAsync(checkoutPath, sourcePath, updateRepository: true);
+        await CommitAsync(sourcePath, "remote-change");
+        await RunGitAsync(checkoutPath, "config", "user.name", "Modular AppHosts Tests");
+        await RunGitAsync(checkoutPath, "config", "user.email", "tests@example.test");
+        await CommitAsync(checkoutPath, "local-change");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            SynchronizeAsync(checkoutPath, sourcePath, updateRepository: true));
+
+        Assert.Contains("exit code", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(true, true, "dirty")]
     [InlineData(false, false, "disabled")]
@@ -1024,6 +1079,39 @@ public sealed class RepositoryInitializationContractTests
         Assert.Contains(resourceLogger.Scopes, scope => scope.ContainsKey("OperationId"));
     }
 
+    [Fact]
+    public async Task Initialization_logs_repository_lifecycle_warnings_at_warning_level()
+    {
+        using var workspace = TemporaryDirectory.Create();
+        var plans = new ModuleRepositoryPlanRegistry(CreateAppHostRepository(workspace.Path));
+        var requirement = plans.Register(
+            "payments",
+            "https://example.test/acme/payments.git",
+            revision: null,
+            updateOnInitialize: true).Requirement;
+        var logger = new CapturingLogger();
+
+        await ModuleRepositoryInitializationPipeline.InitializeAsync(
+            requirement,
+            new ModuleRepositoryInitializationSettings("git", "gh", TimeSpan.FromMinutes(1)),
+            logger,
+            (_, _, _, lifecycle, _) =>
+            {
+                lifecycle(new RepositorySyncLifecycleEvent(
+                    "fast-forward",
+                    "skipped",
+                    "remote-missing",
+                    IsWarning: true));
+                return Task.CompletedTask;
+            },
+            TestContext.Current.CancellationToken);
+
+        var warning = Assert.Single(logger.Entries, entry => entry.EventId.Id == 7);
+        Assert.Equal(LogLevel.Warning, warning.Level);
+        Assert.Equal("fast-forward", warning.State["Operation"]);
+        Assert.Equal("remote-missing", warning.State["Reason"]);
+    }
+
     private static string CreateAppHostRepository(string workspacePath)
     {
         var repositoryPath = Path.Combine(workspacePath, "consumer");
@@ -1087,7 +1175,7 @@ public sealed class RepositoryInitializationContractTests
 
     private sealed class CapturingLogger : ILogger
     {
-        public List<(EventId EventId, Dictionary<string, object?> State)> Entries { get; } = [];
+        public List<(LogLevel Level, EventId EventId, Dictionary<string, object?> State)> Entries { get; } = [];
 
         public List<Dictionary<string, object?>> Scopes { get; } = [];
 
@@ -1112,7 +1200,7 @@ public sealed class RepositoryInitializationContractTests
             Func<TState, Exception?, string> formatter)
         {
             var values = state as IEnumerable<KeyValuePair<string, object?>> ?? [];
-            Entries.Add((eventId, values.ToDictionary(pair => pair.Key, pair => pair.Value)));
+            Entries.Add((logLevel, eventId, values.ToDictionary(pair => pair.Key, pair => pair.Value)));
         }
 
         private sealed class NullScope : IDisposable
