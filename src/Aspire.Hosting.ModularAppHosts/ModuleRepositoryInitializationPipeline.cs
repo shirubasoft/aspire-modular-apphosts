@@ -85,6 +85,12 @@ internal static class ModuleRepositoryInitializationPipeline
             "Module {Module} declares repository {Repository}, but no repository initialization step was planned: " +
             "{Reason}.");
 
+    private static readonly Action<ILogger, string, string, string, string, string, Exception?> LogRepositoryOperationWarning =
+        LoggerMessage.Define<string, string, string, string, string>(
+            LogLevel.Warning,
+            new EventId(7, nameof(LogRepositoryOperationWarning)),
+            "Repository operation {Operation} {State} for {Repository} at {RepositoryPath}: {Reason}.");
+
     public static void Configure(IDistributedApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -415,7 +421,18 @@ internal static class ModuleRepositoryInitializationPipeline
                 null),
             lifecycle =>
             {
-                if (string.IsNullOrWhiteSpace(lifecycle.Reason))
+                if (lifecycle.IsWarning)
+                {
+                    LogRepositoryOperationWarning(
+                        lifecycleLogger,
+                        lifecycle.Operation,
+                        lifecycle.State,
+                        requirement.NormalizedRepository,
+                        requirement.RepositoryPath,
+                        lifecycle.Reason ?? "warning",
+                        null);
+                }
+                else if (string.IsNullOrWhiteSpace(lifecycle.Reason))
                 {
                     LogRepositoryOperation(
                         lifecycleLogger,

@@ -293,7 +293,8 @@ internal sealed record RepositorySyncLifecycleEvent(
     string Operation,
     string State,
     string? Reason = null,
-    double ElapsedMilliseconds = 0);
+    double ElapsedMilliseconds = 0,
+    bool IsWarning = false);
 
 internal static class RepositorySynchronizer
 {
@@ -491,6 +492,7 @@ internal static class RepositorySynchronizer
             lifecycle?.Invoke(new RepositorySyncLifecycleEvent(command.Operation, "started"));
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             IReportingTask? reportingTask = null;
+            var skippedMissingRemote = false;
             try
             {
                 if (reportingStep is not null)
@@ -519,15 +521,28 @@ internal static class RepositorySynchronizer
                         error.Trim(),
                         repository,
                         Path.GetDirectoryName(repositoryPath) ?? repositoryPath);
-                    throw new InvalidOperationException(
-                        $"Repository synchronization failed for '{repositoryPath}' with exit code " +
-                        $"{result.ExitCode}: {diagnostic}");
+                    if (command.Operation == "fast-forward" &&
+                        IndicatesMissingRemote(error))
+                    {
+                        skippedMissingRemote = true;
+                        progress?.Invoke(
+                            $"Warning: Automatic fast-forward was skipped for repository '{repositoryPath}' " +
+                            $"because its remote no longer exists. {diagnostic}");
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException(
+                            $"Repository synchronization failed for '{repositoryPath}' with exit code " +
+                            $"{result.ExitCode}: {diagnostic}");
+                    }
                 }
 
                 if (reportingTask is not null)
                 {
                     await reportingTask.SucceedAsync(
-                        $"{GetOperationTitle(command.Operation)} completed",
+                        skippedMissingRemote
+                            ? $"{GetOperationTitle(command.Operation)} skipped: remote no longer exists"
+                            : $"{GetOperationTitle(command.Operation)} completed",
                         cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -551,10 +566,17 @@ internal static class RepositorySynchronizer
             }
 
             stopwatch.Stop();
-            lifecycle?.Invoke(new RepositorySyncLifecycleEvent(
-                command.Operation,
-                "completed",
-                ElapsedMilliseconds: stopwatch.Elapsed.TotalMilliseconds));
+            lifecycle?.Invoke(skippedMissingRemote
+                ? new RepositorySyncLifecycleEvent(
+                    command.Operation,
+                    "skipped",
+                    "remote-missing",
+                    stopwatch.Elapsed.TotalMilliseconds,
+                    IsWarning: true)
+                : new RepositorySyncLifecycleEvent(
+                    command.Operation,
+                    "completed",
+                    ElapsedMilliseconds: stopwatch.Elapsed.TotalMilliseconds));
         }
 
         progress?.Invoke($"Repository '{repositoryPath}' is synchronized.");
@@ -697,6 +719,11 @@ internal static class RepositorySynchronizer
         return $"Git could not synchronize normalized repository identity '{normalizedRepository}'. " +
             "Verify repository access and configured credentials.";
     }
+
+    private static bool IndicatesMissingRemote(string output) =>
+        output.Contains("repository not found", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("does not appear to be a git repository", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("project you were looking for could not be found", StringComparison.OrdinalIgnoreCase);
 
     private static bool LocalRepositoriesMatch(string first, string second, string baseDirectory)
     {
