@@ -494,6 +494,8 @@ public sealed class RepositoryInitializationContractTests
         var checkoutPath = Path.Combine(workspace.Path, "diverged-checkout");
         await SynchronizeAsync(checkoutPath, sourcePath, updateRepository: true);
         await CommitAsync(sourcePath, "remote-change");
+        await RunGitAsync(checkoutPath, "config", "user.name", "Modular AppHosts Tests");
+        await RunGitAsync(checkoutPath, "config", "user.email", "tests@example.test");
         await CommitAsync(checkoutPath, "local-change");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
