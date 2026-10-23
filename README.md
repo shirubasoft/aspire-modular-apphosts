@@ -1,5 +1,12 @@
 # Shirubasoft.Aspire.ModularAppHosts
 
+> [!IMPORTANT]
+> This repository is archived. Its packages continue as the
+> [Multirepo extension](https://github.com/shirubasoft/aspire-extensions/tree/main/extensions/Shirubasoft.Aspire.Extensions.Multirepo)
+> in shirubasoft/aspire-extensions. Replace each `Shirubasoft.Aspire.ModularAppHosts*` package with
+> the matching `Shirubasoft.Aspire.Extensions.Multirepo*` package; the `ModularAppHosts` packages
+> receive no further releases. Open issues and pull requests in shirubasoft/aspire-extensions.
+
 Define an Aspire resource graph once, expose it as a typed C# contract, and reuse it across AppHosts. A consumer references the producer-owned contract package; repository configuration supplies source and build context when the module is imported from another checkout.
 
 ## Packages
